@@ -165,7 +165,9 @@ def main():
     device = torch.device(f"npu:{local_rank}" if torch.npu.is_available() else "cpu")
     main_process = is_main_process()
 
-    use_bf16 = args.use_bf16 and not args.no_bf16 and torch.cuda.is_bf16_supported()
+    use_bf16 = args.use_bf16 and not args.no_bf16 and (
+        hasattr(torch.cuda, 'is_bf16_supported') and torch.cuda.is_bf16_supported()
+    )
     dtype = torch.bfloat16 if use_bf16 else torch.float32
 
     if main_process:
@@ -265,12 +267,12 @@ def main():
         dt = 1.0 / 20
         for i in range(20):
             t_val = torch.tensor([i / 20.], device=device)
-            with torch.amp.autocast('cuda', dtype=torch.float16):
+            with torch.amp.autocast(device_type='npu', dtype=torch.float16):
                 v = model_ema(z, t_val)
             z = (z + v * dt).float()
         # Decode with frozen decoder if available
         if decoder_gld is not None:
-            with torch.amp.autocast('cuda', dtype=torch.float16):
+            with torch.amp.autocast(device_type='npu', dtype=torch.float16):
                 tokens_out = build_sparse_decoder_tokens(z.float(), args.select_levels)
                 result = decoder_gld(tokens_out, images=eval_frames.float().to(device),
                                      patch_start_idx=0, frames_chunk_size=args.seq_len)
