@@ -308,7 +308,7 @@ def main():
             img_size=args.img_size, patch_size=args.patch_size,
             lora_rank=lora_r, lora_alpha=128,
         ).to(device=device)
-        model.load_state_dict(state, strict=has_lora)
+        model.load_state_dict(state, strict=False)
         print(f"  Wan adapter loaded ({sum(p.numel() for p in model.parameters())/1e9:.2f}B params, LoRA={has_lora})")
     else:
         model = VideoDiT(
