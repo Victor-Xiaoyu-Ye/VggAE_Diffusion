@@ -25,8 +25,7 @@ echo "GPU_IDS=${GPU_IDS}"
 ASCEND_RT_VISIBLE_DEVICES=${GPU_IDS} \
   PYTORCH_ALLOC_CONF=expandable_segments:True \
   OMP_NUM_THREADS=4 \
-torchrun \
-torchrun \
+python -m torch.distributed.run \
   --nproc_per_node=${NUM_GPUS} \
   --nnodes=${NNODES} \
   --node_rank=${NODE_RANK} \
