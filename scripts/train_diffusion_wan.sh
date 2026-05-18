@@ -8,7 +8,7 @@ mkdir -p ${PROJECT}/ckpts
 
 NUM_GPUS=2
 GPU_IDS=0,1
-ASCEND_RT_VISIBLE_DEVICES=${GPU_IDS} torchrun --nproc_per_node=${NUM_GPUS} --master_port=29506 \
+ASCEND_RT_VISIBLE_DEVICES=${GPU_IDS} PYTORCH_ALLOC_CONF=expandable_segments:True torchrun --nproc_per_node=${NUM_GPUS} --master_port=29506 \
   ${PROJECT}/train_diffusion_wan.py \
     --csv ${DATASET}/data/train/SpatialVID_HQ_metadata.csv \
     --video_root ${DATASET}/videos/SpatialVid/HQ//videos \
@@ -20,8 +20,8 @@ ASCEND_RT_VISIBLE_DEVICES=${GPU_IDS} torchrun --nproc_per_node=${NUM_GPUS} --mas
     --lora_rank 64 --lora_alpha 128 \
     --text_cond --cfg_dropout 0.1 \
     --decoder_ckpt /cache/yexiaoyu/vggae_ref/decoder_epoch120.pt \
-    --recon_weight 0.05 --recon_every 1 \
-    --recon_num_frames 4 --recon_t_min 0.25 --recon_grad_weight 0.05 \
+    --recon_weight 0.0 --recon_every 0 \
+    --recon_num_frames 1 --recon_t_min 0.25 --recon_grad_weight 0.05 \
     --input_noise 0.005 \
     --batch_size 1 --accum_steps 4 \
     --epochs 50 --lr 1e-4 --wd 1e-2 \
