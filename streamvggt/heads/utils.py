@@ -88,9 +88,9 @@ def create_uv_grid(
     top_y = -span_y * (height - 1) / height
     bottom_y = span_y * (height - 1) / height
 
-    # Generate 1D coordinates
-    x_coords = torch.linspace(left_x, right_x, steps=width, dtype=dtype, device=device)
-    y_coords = torch.linspace(top_y, bottom_y, steps=height, dtype=dtype, device=device)
+    # Generate 1D coordinates on CPU (NPU linspace bug), then move
+    x_coords = torch.linspace(left_x, right_x, steps=width, dtype=dtype, device='cpu').to(device)
+    y_coords = torch.linspace(top_y, bottom_y, steps=height, dtype=dtype, device='cpu').to(device)
 
     # Create 2D meshgrid (width x height) and stack into UV
     uu, vv = torch.meshgrid(x_coords, y_coords, indexing="xy")
