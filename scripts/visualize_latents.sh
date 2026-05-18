@@ -5,7 +5,7 @@ PROJECT=/home/yexiaoyu/work/VggAE-Diffusion
 DATASET=/public2/LiZhen/yexiaoyu/dataset/spatial-vid-hq-oft
 
 cd ${PROJECT}
-CUDA_VISIBLE_DEVICES=0 proxychains python ${PROJECT}/visualize_latent_space.py \
+ASCEND_RT_VISIBLE_DEVICES=0 proxychains python ${PROJECT}/visualize_latent_space.py \
     --csv ${DATASET}/data/train/SpatialVID_HQ_metadata.csv \
     --video_root ${DATASET}/videos/SpatialVID/videos \
     --annotation_index ${PROJECT}/ckpts/annotation_index.json \

@@ -18,9 +18,11 @@ class CLIPTextEncoder(nn.Module):
     @torch.no_grad()
     def forward(self, texts):
         """texts: list of strings. Returns: [B, L, 768] float32."""
+        device = next(self.model.parameters()).device
         inputs = self.tokenizer(
             texts, padding=True, truncation=True,
             max_length=77, return_tensors="pt"
         )
+        inputs = {k: v.to(device) for k, v in inputs.items()}
         outputs = self.model(**inputs)
         return outputs.last_hidden_state.to(torch.float32)  # [B, L, 768]

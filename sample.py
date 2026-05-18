@@ -133,13 +133,13 @@ def parse_args():
 # ---------------------------------------------------------------------------
 def set_seed(seed):
     torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
+    if torch.npu.is_available():
+        torch.npu.manual_seed_all(seed)
     np.random.seed(seed)
 
 
 @torch.no_grad()
-def sample_flow(flow, shape, args, text_emb=None, device="cuda"):
+def sample_flow(flow, shape, args, text_emb=None, device="npu"):
     """Run ODE sampling, with optional classifier-free guidance.
 
     Args:
@@ -263,7 +263,7 @@ def main():
     num_levels = len(levels)
 
     # Device and dtype
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("npu" if torch.npu.is_available() else "cpu")
     dtype_map = {"float32": torch.float32, "bfloat16": torch.bfloat16, "float16": torch.float16}
     dtype = dtype_map[args.dtype]
 

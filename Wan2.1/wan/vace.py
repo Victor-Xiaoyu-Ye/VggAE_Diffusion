@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from functools import partial
 
 import torch
-import torch.cuda.amp as amp
+import torch.npu.amp as amp
 import torch.distributed as dist
 import torch.multiprocessing as mp
 import torch.nn.functional as F
@@ -68,7 +68,7 @@ class WanVace(WanT2V):
             t5_cpu (`bool`, *optional*, defaults to False):
                 Whether to place T5 model on CPU. Only works without t5_fsdp.
         """
-        self.device = torch.device(f"cuda:{device_id}")
+        self.device = torch.device(f"npu:{device_id}")
         self.config = config
         self.rank = rank
         self.t5_cpu = t5_cpu
@@ -460,7 +460,7 @@ class WanVace(WanT2V):
             x0 = latents
             if offload_model:
                 self.model.cpu()
-                torch.cuda.empty_cache()
+                torch.npu.empty_cache()
             if self.rank == 0:
                 videos = self.decode_latent(x0, input_ref_images)
 
@@ -497,7 +497,7 @@ class WanVaceMP(WanVace):
         self.ring_size = ring_size
         self.dynamic_load()
 
-        self.device = 'cpu' if torch.cuda.is_available() else 'cpu'
+        self.device = 'cpu' if torch.npu.is_available() else 'cpu'
         self.vid_proc = VaceVideoProcessor(
             downsample=tuple(
                 [x * y for x, y in zip(config.vae_stride, config.patch_size)]),
@@ -513,7 +513,7 @@ class WanVaceMP(WanVace):
         if hasattr(self, 'inference_pids') and self.inference_pids is not None:
             return
         gpu_infer = os.environ.get(
-            'LOCAL_WORLD_SIZE') or torch.cuda.device_count()
+            'LOCAL_WORLD_SIZE') or torch.npu.device_count()
         pmi_rank = int(os.environ['RANK'])
         pmi_world_size = int(os.environ['WORLD_SIZE'])
         in_q_list = [
@@ -633,7 +633,7 @@ class WanVaceMP(WanVace):
             model = shard_fn(model)
             sample_neg_prompt = self.config.sample_neg_prompt
 
-            torch.cuda.empty_cache()
+            torch.npu.empty_cache()
             event = initialized_events[gpu]
             in_q = in_q_list[gpu]
             event.set()
@@ -748,7 +748,7 @@ class WanVaceMP(WanVace):
                             generator=seed_g)[0]
                         latents = [temp_x0.squeeze(0)]
 
-                    torch.cuda.empty_cache()
+                    torch.npu.empty_cache()
                     x0 = latents
                     if rank == 0:
                         videos = self.decode_latent(

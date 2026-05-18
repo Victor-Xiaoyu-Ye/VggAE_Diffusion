@@ -56,7 +56,7 @@ def main():
     dtype_map = {"fp32": torch.float32, "bf16": torch.bfloat16, "fp16": torch.float16}
     compute_dtype = dtype_map[args.dtype]
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("npu" if torch.npu.is_available() else "cpu")
     print(f"Device: {device}, dtype: {compute_dtype}")
 
     # Load encoder (frozen)
@@ -77,7 +77,7 @@ def main():
         shuffle=True,
         num_workers=args.num_workers,
         collate_fn=collate_fn,
-        pin_memory=(device.type == "cuda"),
+        pin_memory=(device.type in ("cuda", "npu")),
     )
 
     # Welford accumulators per level, per channel (dim 2048)

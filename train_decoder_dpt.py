@@ -238,7 +238,7 @@ def train_one_epoch(
     pbar = tqdm(train_loader, desc=f"Epoch {epoch + 1}", dynamic_ncols=True)
 
     for batch_idx, batch in enumerate(pbar):
-        frames = batch["frames"].to(device, dtype=torch.bfloat16)  # [B, S, 3, H, W]
+        frames = batch["frames"].to(device, dtype=torch.float16)  # [B, S, 3, H, W]
         B, S = frames.shape[:2]
 
         # ---- Encoder forward (frozen, bf16) ----
@@ -260,7 +260,7 @@ def train_one_epoch(
         tokens_list = [t.to(dtype=torch.float32) for t in tokens_list]
 
         # ---- Decoder forward (fp32, with autocast) ----
-        with torch.amp.autocast(device_type="cuda", dtype=dtype):
+        with torch.amp.autocast(device_type="npu", dtype=dtype):
             if output_depth:
                 recon, conf, depth_pred, depth_conf = decoder(
                     tokens_list,
@@ -326,21 +326,19 @@ def train_one_epoch(
         gan_loss = recon.new_zeros(())
         if args.gan and disc is not None and epoch >= 5:
             from models.dino_disc import hinge_d_loss, vanilla_g_loss, diff_augment
-            # Discriminator update on real and fake
-            with torch.amp.autocast(device_type="cuda", dtype=dtype):
-                real_aug = diff_augment((target * 2 - 1).reshape(B*S, 3, *target.shape[-2:]))
-                fake_aug = diff_augment((recon.detach() * 2 - 1).reshape(B*S, 3, *recon.shape[-2:]))
-                logits_real = disc(real_aug)
-                logits_fake = disc(fake_aug)
-                d_loss = hinge_d_loss(logits_real, logits_fake)
+            # DINO discriminator expects float32 input (heads are float32)
+            real_aug = diff_augment((target * 2 - 1).reshape(B*S, 3, *target.shape[-2:])).float()
+            fake_aug = diff_augment((recon.detach() * 2 - 1).reshape(B*S, 3, *recon.shape[-2:])).float()
+            logits_real = disc(real_aug)
+            logits_fake = disc(fake_aug)
+            d_loss = hinge_d_loss(logits_real, logits_fake)
             disc_opt.zero_grad()
             d_loss.backward()
             disc_opt.step()
             # Generator loss
-            with torch.amp.autocast(device_type="cuda", dtype=dtype):
-                fake_for_g = diff_augment((recon * 2 - 1).reshape(B*S, 3, *recon.shape[-2:]))
-                logits_fake_g = disc(fake_for_g)
-                gan_loss = vanilla_g_loss(logits_fake_g) * 0.1  # adaptive weight simplified
+            fake_for_g = diff_augment((recon * 2 - 1).reshape(B*S, 3, *recon.shape[-2:])).float()
+            logits_fake_g = disc(fake_for_g)
+            gan_loss = vanilla_g_loss(logits_fake_g) * 0.1
             loss = loss + gan_loss / args.accum_steps
 
         loss.backward()
@@ -415,7 +413,7 @@ def evaluate(
     num_batches = 0
 
     for batch in tqdm(eval_loader, desc="  Eval", dynamic_ncols=True):
-        frames = batch["frames"].to(device, dtype=torch.bfloat16)
+        frames = batch["frames"].to(device, dtype=torch.float16)
         B, S = frames.shape[:2]
 
         with torch.no_grad():
@@ -425,7 +423,7 @@ def evaluate(
         tokens_list = normalize_tokens(tokens_list, level_stats)
         tokens_list = [t.to(dtype=torch.float32) for t in tokens_list]
 
-        with torch.amp.autocast(device_type="cuda", dtype=dtype):
+        with torch.amp.autocast(device_type="npu", dtype=dtype):
             if args.output_depth:
                 recon, conf, depth_pred, depth_conf = decoder(
                     tokens_list,
@@ -477,7 +475,7 @@ def save_recon_sample(decoder, encoder, lpips_model, frames, level_stats, path, 
     from PIL import Image
 
     decoder.eval()
-    frames = frames.to(device, dtype=torch.bfloat16)
+    frames = frames.to(device, dtype=torch.float16)
     B, S = frames.shape[:2]
     display_S = min(S, 4)
     display_B = min(B, 2)
@@ -542,7 +540,10 @@ def save_recon_sample(decoder, encoder, lpips_model, frames, level_stats, path, 
 def load_checkpoint(path, decoder, optimizer, scheduler, ema):
     """Load decoder checkpoint and restore optimizer, scheduler, EMA states."""
     ckpt = torch.load(path, map_location="cpu")
-    decoder.load_state_dict(ckpt["model_state_dict"])
+    state = ckpt["model_state_dict"]
+    if any(k.startswith("module.") for k in state):
+        state = {k.replace("module.", "", 1): v for k, v in state.items()}
+    decoder.load_state_dict(state)
     optimizer.load_state_dict(ckpt["optimizer_state_dict"])
     scheduler.load_state_dict(ckpt["scheduler_state_dict"])
     ema.load_state_dict(ckpt["ema_state_dict"])
@@ -557,9 +558,9 @@ def main():
     # ---- DDP setup ----
     use_ddp, rank, local_rank, world_size = setup_ddp()
     if use_ddp:
-        device = torch.device(f"cuda:{local_rank}")
+        device = torch.device(f"npu:{local_rank}")
     else:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        device = torch.device("npu" if torch.npu.is_available() else "cpu")
 
     # ---- Precision dtype ----
     if args.dtype == "bf16":
@@ -583,7 +584,7 @@ def main():
         shuffle=(train_sampler is None),
         sampler=train_sampler,
         num_workers=args.num_workers,
-        pin_memory=True,
+        pin_memory=False,
         collate_fn=collate_fn,
         drop_last=True,
     )
@@ -599,7 +600,7 @@ def main():
             shuffle=False,
             sampler=val_sampler,
             num_workers=args.num_workers,
-            pin_memory=True,
+            pin_memory=False,
             collate_fn=collate_fn,
             drop_last=False,
         )
@@ -623,7 +624,7 @@ def main():
     )
     encoder_state = torch.load(args.encoder_ckpt, map_location="cpu")
     encoder.load_state_dict(encoder_state, strict=False)
-    encoder = encoder.to(device=device, dtype=torch.bfloat16)
+    encoder = encoder.to(device=device, dtype=torch.float16)
     encoder.eval()
     for p in encoder.parameters():
         p.requires_grad = False

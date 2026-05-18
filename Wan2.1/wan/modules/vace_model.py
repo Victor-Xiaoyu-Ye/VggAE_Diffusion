@@ -1,6 +1,6 @@
 # Copyright 2024-2025 The Alibaba Wan Team Authors. All rights reserved.
 import torch
-import torch.cuda.amp as amp
+import torch.npu.amp as amp
 import torch.nn as nn
 from diffusers.configuration_utils import register_to_config
 

@@ -106,8 +106,8 @@ def parse_args():
 
 def set_seed(seed):
     torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
+    if torch.npu.is_available():
+        torch.npu.manual_seed_all(seed)
 
 
 def image_gradient_loss(recon, target):
@@ -162,7 +162,7 @@ def main():
     args = parse_args()
 
     use_ddp, rank, local_rank, world_size = setup_ddp()
-    device = torch.device(f"cuda:{local_rank}" if torch.cuda.is_available() else "cpu")
+    device = torch.device(f"npu:{local_rank}" if torch.npu.is_available() else "cpu")
     main_process = is_main_process()
 
     use_bf16 = args.use_bf16 and not args.no_bf16 and torch.cuda.is_bf16_supported()
@@ -182,7 +182,7 @@ def main():
     encoder = StreamVGGT(img_size=args.target_size, patch_size=14, embed_dim=1024)
     state_dict = torch.load(args.encoder_ckpt, map_location="cpu")
     encoder.load_state_dict(state_dict, strict=False)
-    encoder = encoder.to(device=device, dtype=torch.bfloat16).eval()
+    encoder = encoder.to(device=device, dtype=torch.float16).eval()
     for p in encoder.parameters():
         p.requires_grad_(False)
     level_stats = load_token_stats(args.token_stats, device, dtype=torch.float32)
@@ -225,6 +225,7 @@ def main():
             print(f"[2.5/5] Loading CLIP text encoder...")
         from models.clip_encoder import CLIPTextEncoder
         clip_encoder = CLIPTextEncoder()
+        clip_encoder.model = clip_encoder.model.to(device=device)  # GPU: ~340MB
 
     # ---- 3.5 Optional frozen decoder ----
     decoder_gld = None
@@ -246,7 +247,7 @@ def main():
         dataset, batch_size=args.batch_size,
         shuffle=(sampler is None), sampler=sampler,
         num_workers=args.num_workers, collate_fn=collate_fn,
-        pin_memory=True, drop_last=True,
+        pin_memory=False, drop_last=True,
     )
 
     # ---- Eval sampling ----
@@ -264,12 +265,12 @@ def main():
         dt = 1.0 / 20
         for i in range(20):
             t_val = torch.tensor([i / 20.], device=device)
-            with torch.amp.autocast('cuda', dtype=torch.bfloat16):
+            with torch.amp.autocast('cuda', dtype=torch.float16):
                 v = model_ema(z, t_val)
             z = (z + v * dt).float()
         # Decode with frozen decoder if available
         if decoder_gld is not None:
-            with torch.amp.autocast('cuda', dtype=torch.bfloat16):
+            with torch.amp.autocast('cuda', dtype=torch.float16):
                 tokens_out = build_sparse_decoder_tokens(z.float(), args.select_levels)
                 result = decoder_gld(tokens_out, images=eval_frames.float().to(device),
                                      patch_start_idx=0, frames_chunk_size=args.seq_len)
@@ -297,7 +298,7 @@ def main():
     steps_per_epoch = (len(dataloader) + args.accum_steps - 1) // args.accum_steps
     total_steps = args.epochs * steps_per_epoch
     scheduler = build_scheduler(optimizer, warmup_steps=args.warmup_steps, total_steps=max(total_steps, 1))
-    scaler = GradScaler(enabled=(not use_bf16))
+    scaler = GradScaler(enabled=False)
 
     # Resume
     global_step = 0
@@ -339,7 +340,7 @@ def main():
         pbar = tqdm(dataloader, desc=f"Epoch {epoch}/{args.epochs}", dynamic_ncols=True)
 
         for batch_idx, batch in enumerate(pbar):
-            frames = batch["frames"].to(device=device, dtype=torch.bfloat16)
+            frames = batch["frames"].to(device=device, dtype=torch.float16)
 
             with torch.no_grad():
                 tokens_list, psi = encoder(frames)
@@ -366,7 +367,7 @@ def main():
             recon_loss = x1.new_zeros(())
 
             if use_bf16:
-                with autocast(device_type="cuda", dtype=torch.bfloat16):
+                with autocast(device_type="npu", dtype=torch.float16):
                     flow_out = flow.compute_loss(x1, text_emb=text_emb, return_outputs=use_decoder_aux)
             else:
                 flow_out = flow.compute_loss(x1, text_emb=text_emb, return_outputs=use_decoder_aux)

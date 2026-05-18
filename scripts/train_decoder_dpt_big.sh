@@ -9,7 +9,7 @@ mkdir -p ${PROJECT}/ckpts
 
 NUM_GPUS=8
 GPU_IDS=0,1,2,3,4,5,6,7
-CUDA_VISIBLE_DEVICES=${GPU_IDS} torchrun --nproc_per_node=${NUM_GPUS} --master_port=29504 \
+ASCEND_RT_VISIBLE_DEVICES=${GPU_IDS} torchrun --nproc_per_node=${NUM_GPUS} --master_port=29504 \
   ${PROJECT}/train_decoder_dpt.py \
     --data_csv ${DATASET}/data/train/SpatialVID_HQ_metadata.csv \
     --video_root ${DATASET}/videos/SpatialVID/videos \

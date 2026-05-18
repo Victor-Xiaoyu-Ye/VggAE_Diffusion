@@ -152,8 +152,8 @@ def parse_args():
 # ---------------------------------------------------------------------------
 def set_seed(seed):
     torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
+    if torch.npu.is_available():
+        torch.npu.manual_seed_all(seed)
 
 
 def count_parameters(model):
@@ -240,7 +240,7 @@ def main():
 
     # DDP setup
     use_ddp, rank, local_rank, world_size = setup_ddp()
-    device = torch.device(f"cuda:{local_rank}" if torch.cuda.is_available() else "cpu")
+    device = torch.device(f"npu:{local_rank}" if torch.npu.is_available() else "cpu")
     main_process = is_main_process()
 
     use_bf16 = args.use_bf16 and not args.no_bf16 and torch.cuda.is_bf16_supported()
@@ -269,7 +269,7 @@ def main():
     encoder = StreamVGGT(img_size=args.target_size, patch_size=14, embed_dim=1024)
     state_dict = torch.load(args.encoder_ckpt, map_location="cpu")
     encoder.load_state_dict(state_dict, strict=False)
-    encoder = encoder.to(device=device, dtype=torch.bfloat16).eval()
+    encoder = encoder.to(device=device, dtype=torch.float16).eval()
     for p in encoder.parameters():
         p.requires_grad_(False)
     level_stats = load_token_stats(args.token_stats, device, dtype=torch.float32)
@@ -355,7 +355,7 @@ def main():
         sampler=sampler,
         num_workers=args.num_workers,
         collate_fn=collate_fn,
-        pin_memory=True,
+        pin_memory=False,
         drop_last=True,
     )
 
@@ -373,7 +373,7 @@ def main():
     scheduler = build_scheduler(optimizer, warmup_steps=args.warmup_steps, total_steps=max(total_steps, 1))
 
     # GradScaler for fp16 fallback (unused with bf16, but harmless to create)
-    scaler = GradScaler(enabled=(not use_bf16))
+    scaler = GradScaler(enabled=False)
 
     # ------------------------------------------------------------------
     # 6. Resume if requested
@@ -433,7 +433,7 @@ def main():
 
         for batch_idx, batch in enumerate(pbar):
             # --- Load frames ---
-            frames = batch["frames"].to(device=device, dtype=torch.bfloat16)  # [B, S, 3, H, W]
+            frames = batch["frames"].to(device=device, dtype=torch.float16)  # [B, S, 3, H, W]
 
             # --- Encode with frozen StreamVGGT ---
             with torch.no_grad():
@@ -469,7 +469,7 @@ def main():
 
             # --- Forward pass with mixed precision ---
             if use_bf16:
-                with autocast(device_type="cuda", dtype=torch.bfloat16):
+                with autocast(device_type="npu", dtype=torch.float16):
                     flow_out = flow.compute_loss(
                         x1,
                         text_emb=text_emb,
@@ -584,13 +584,13 @@ def main():
                     for ei, eb in enumerate(dataloader):
                         if ei >= 20:
                             break
-                        ef = eb["frames"].to(device=device, dtype=torch.bfloat16)
+                        ef = eb["frames"].to(device=device, dtype=torch.float16)
                         tl, psi = encoder(ef)
                         tl = strip_special_tokens(tl, psi)
                         tl = normalize_tokens(tl, level_stats)
                         ex = select_levels(tl, levels=args.select_levels).to(dtype=dtype)
                         et = clip_encoder(eb["caption"]).to(device=device, dtype=dtype) if clip_encoder else None
-                        with autocast(device_type="cuda", dtype=torch.bfloat16):
+                        with autocast(device_type="npu", dtype=torch.float16):
                             el = flow.compute_loss(ex, text_emb=et)
                         loss_sum += el.item()
                         n += 1
@@ -612,7 +612,7 @@ def main():
                 writer.add_scalar("eval/loss", eval_avg, epoch)
                 writer.add_scalar("eval/ema_loss", eval_ema_avg, epoch)
 
-            torch.cuda.empty_cache()
+            torch.npu.empty_cache()
             model.train()
 
         # --- Save checkpoint ---

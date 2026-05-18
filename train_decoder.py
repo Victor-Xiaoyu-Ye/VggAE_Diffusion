@@ -167,7 +167,7 @@ def train_one_epoch(epoch, encoder, decoder, lpips_model, train_loader,
     pbar = tqdm(train_loader, desc=f"Epoch {epoch + 1}", dynamic_ncols=True)
 
     for batch_idx, batch in enumerate(pbar):
-        frames = batch["frames"].to(device, dtype=torch.bfloat16)
+        frames = batch["frames"].to(device, dtype=torch.float16)
         B, S = frames.shape[:2]
 
         with torch.no_grad():
@@ -184,7 +184,7 @@ def train_one_epoch(epoch, encoder, decoder, lpips_model, train_loader,
         )
         tokens_list = [t.to(dtype=torch.float32) for t in tokens_list]
 
-        with torch.amp.autocast(device_type="cuda", dtype=dtype):
+        with torch.amp.autocast(device_type="npu", dtype=dtype):
             if output_depth:
                 recon, conf, depth_pred, depth_conf = decoder(
                     tokens_list, images=frames.float(),
@@ -270,7 +270,7 @@ def evaluate(encoder, decoder, eval_loader, level_stats, device, dtype, args):
     num_batches = 0
 
     for batch in tqdm(eval_loader, desc="  Eval", dynamic_ncols=True):
-        frames = batch["frames"].to(device, dtype=torch.bfloat16)
+        frames = batch["frames"].to(device, dtype=torch.float16)
         B, S = frames.shape[:2]
 
         with torch.no_grad():
@@ -279,7 +279,7 @@ def evaluate(encoder, decoder, eval_loader, level_stats, device, dtype, args):
         tokens_list = normalize_tokens(tokens_list, level_stats)
         tokens_list = [t.to(dtype=torch.float32) for t in tokens_list]
 
-        with torch.amp.autocast(device_type="cuda", dtype=dtype):
+        with torch.amp.autocast(device_type="npu", dtype=dtype):
             if args.output_depth:
                 recon, conf, _, _ = decoder(tokens_list, images=frames.float(),
                                              patch_start_idx=0, frames_chunk_size=S)
@@ -315,7 +315,7 @@ def save_recon_sample(decoder, encoder, lpips_model, frames, level_stats, path, 
     from PIL import Image
 
     decoder.eval()
-    frames = frames.to(device, dtype=torch.bfloat16)
+    frames = frames.to(device, dtype=torch.float16)
     B, S = frames.shape[:2]
     display_S = min(S, 4)
     display_B = min(B, 2)
@@ -397,7 +397,7 @@ def main():
     setup_seed(args.seed)
 
     use_ddp, rank, local_rank, world_size = setup_ddp()
-    device = torch.device(f"cuda:{local_rank}" if use_ddp else ("cuda" if torch.cuda.is_available() else "cpu"))
+    device = torch.device(f"npu:{local_rank}" if use_ddp else ("cuda" if torch.npu.is_available() else "cpu"))
     dtype = torch.bfloat16 if args.dtype == "bf16" else torch.float32
 
     if is_main_process():
@@ -414,7 +414,7 @@ def main():
     train_loader = DataLoader(
         train_dataset, batch_size=args.batch_size,
         shuffle=(train_sampler is None), sampler=train_sampler,
-        num_workers=args.num_workers, pin_memory=True,
+        num_workers=args.num_workers, pin_memory=False,
         collate_fn=collate_fn, drop_last=True,
     )
 
@@ -426,7 +426,7 @@ def main():
         val_loader = DataLoader(
             val_dataset, batch_size=args.batch_size, shuffle=False,
             sampler=val_sampler, num_workers=args.num_workers,
-            pin_memory=True, collate_fn=collate_fn, drop_last=False,
+            pin_memory=False, collate_fn=collate_fn, drop_last=False,
         )
 
     steps_per_epoch = (len(train_loader) + args.accum_steps - 1) // args.accum_steps
@@ -442,7 +442,7 @@ def main():
                           embed_dim=args.token_dim // 2)
     encoder_state = torch.load(args.encoder_ckpt, map_location="cpu")
     encoder.load_state_dict(encoder_state, strict=False)
-    encoder = encoder.to(device=device, dtype=torch.bfloat16).eval()
+    encoder = encoder.to(device=device, dtype=torch.float16).eval()
     for p in encoder.parameters():
         p.requires_grad = False
 

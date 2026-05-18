@@ -64,7 +64,7 @@ def main():
     if args.keep_levels:
         keep_levels = {int(x) for x in args.keep_levels.split(",") if x.strip()}
 
-    device = torch.device(f"cuda:{args.gpu}")
+    device = torch.device(f"npu:{args.gpu}")
     os.makedirs(args.out_dir, exist_ok=True)
 
     # 1. Load encoder (frozen, bf16)
@@ -72,7 +72,7 @@ def main():
     encoder = StreamVGGT(img_size=args.img_size, patch_size=args.patch_size, embed_dim=1024)
     state = torch.load(args.encoder_ckpt, map_location="cpu")
     encoder.load_state_dict(state, strict=False)
-    encoder = encoder.to(device=device, dtype=torch.bfloat16).eval()
+    encoder = encoder.to(device=device, dtype=torch.float16).eval()
     for p in encoder.parameters():
         p.requires_grad_(False)
 
@@ -110,7 +110,7 @@ def main():
     print(f"  Video: {orig_total} frames at {orig_fps:.1f}fps, sampling {args.seq_len} frames ({args.sample_fps} fps)")
 
     frames = read_video_frames(args.video_path, args.seq_len, args.img_size)
-    frames_tensor = frames.unsqueeze(0).to(device=device, dtype=torch.bfloat16)  # [1, S, 3, H, W]
+    frames_tensor = frames.unsqueeze(0).to(device=device, dtype=torch.float16)  # [1, S, 3, H, W]
     B, S = frames_tensor.shape[:2]
 
     with torch.no_grad():

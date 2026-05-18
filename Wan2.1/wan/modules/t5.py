@@ -474,8 +474,8 @@ class T5EncoderModel:
     def __init__(
         self,
         text_len,
-        dtype=torch.bfloat16,
-        device=torch.cuda.current_device(),
+        dtype=torch.float16,
+        device=torch.npu.current_device(),
         checkpoint_path=None,
         tokenizer_path=None,
         shard_fn=None,

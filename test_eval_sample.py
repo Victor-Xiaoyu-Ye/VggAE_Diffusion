@@ -5,14 +5,14 @@ from models.wan_adapter import WanVGGTAdapter
 from utils.decoder_loader import load_decoder
 from data.token_utils import build_decoder_tokens_from_generated
 
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda:0" if torch.npu.is_available() else "cpu")
 
 # Load checkpoint (only model+ema, skip optimizer)
 ckpt_path = "ckpts/diffusion_wan/exp-3-text/checkpoint_epoch0019.pt"
 print(f"Loading {ckpt_path}...")
 raw = torch.load(ckpt_path, map_location="cpu")
 state = raw["model"]; ema_state = raw["ema"]; del raw
-torch.cuda.empty_cache()
+torch.npu.empty_cache()
 
 # Build model
 has_lora = any("lora_A" in k for k in state.keys())
@@ -22,7 +22,7 @@ model = WanVGGTAdapter(
 ).to(device)
 model.load_state_dict(state, strict=has_lora)
 model.load_state_dict(ema_state, strict=False)
-del state, ema_state; torch.cuda.empty_cache()
+del state, ema_state; torch.npu.empty_cache()
 model.eval()
 print(f"  Model: {sum(p.numel() for p in model.parameters())/1e9:.2f}B, GPU: {torch.cuda.memory_allocated()/1e9:.1f}GB")
 
@@ -38,7 +38,7 @@ print(f"Sampling ({S*N} tokens, {num_steps} steps)...")
 with torch.no_grad():
     for i in range(num_steps):
         t_val = torch.tensor([i / num_steps], device=device)
-        with torch.amp.autocast('cuda', dtype=torch.bfloat16):
+        with torch.amp.autocast('cuda', dtype=torch.float16):
             v = model(z, t_val)
         z = (z + v * dt).float()
 print(f"  Done. z mean={z.mean():.4f} std={z.std():.4f}")
@@ -47,7 +47,7 @@ print(f"  Done. z mean={z.mean():.4f} std={z.std():.4f}")
 print("Decoding...")
 tokens = build_decoder_tokens_from_generated(z.float(), [11], seq_len=S)
 dummy = torch.zeros(1, S, 3, 518, 518, device=device)
-with torch.no_grad(), torch.amp.autocast('cuda', dtype=torch.bfloat16):
+with torch.no_grad(), torch.amp.autocast('cuda', dtype=torch.float16):
     result = decoder(tokens, images=dummy, patch_start_idx=0, frames_chunk_size=S)
 if getattr(decoder, 'output_depth', False):
     preds, _, _, _ = result

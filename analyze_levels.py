@@ -85,7 +85,7 @@ def pca_analysis(features):
 def main():
     args = parse_args()
     os.makedirs(args.out_dir, exist_ok=True)
-    device = torch.device(f"cuda:{args.gpu}")
+    device = torch.device(f"npu:{args.gpu}")
     dtype = torch.bfloat16 if args.dtype == "bf16" else torch.float32
 
     # Load video paths

@@ -1,6 +1,6 @@
 # Copyright 2024-2025 The Alibaba Wan Team Authors. All rights reserved.
 import torch
-import torch.cuda.amp as amp
+import torch.npu.amp as amp
 from xfuser.core.distributed import (
     get_sequence_parallel_rank,
     get_sequence_parallel_world_size,
@@ -185,7 +185,7 @@ def usp_attn_forward(self,
                      seq_lens,
                      grid_sizes,
                      freqs,
-                     dtype=torch.bfloat16):
+                     dtype=torch.float16):
     b, s, n, d = *x.shape[:2], self.num_heads, self.head_dim
     half_dtypes = (torch.float16, torch.bfloat16)
 

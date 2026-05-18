@@ -346,7 +346,7 @@ def main():
     levels = parse_levels(args.levels)
     decoder_keep_levels = set(parse_levels(args.decoder_keep_levels))
     dtype = torch.bfloat16 if args.dtype == "bf16" else torch.float32
-    device = torch.device(args.device if torch.cuda.is_available() or args.device == "cpu" else "cpu")
+    device = torch.device(args.device if torch.npu.is_available() or args.device == "cpu" else "cpu")
 
     if args.decoder_ckpt and not args.token_stats:
         raise ValueError("--token_stats is required when --decoder_ckpt is used")

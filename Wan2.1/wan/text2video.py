@@ -10,7 +10,7 @@ from contextlib import contextmanager
 from functools import partial
 
 import torch
-import torch.cuda.amp as amp
+import torch.npu.amp as amp
 import torch.distributed as dist
 from tqdm import tqdm
 
@@ -60,7 +60,7 @@ class WanT2V:
             t5_cpu (`bool`, *optional*, defaults to False):
                 Whether to place T5 model on CPU. Only works without t5_fsdp.
         """
-        self.device = torch.device(f"cuda:{device_id}")
+        self.device = torch.device(f"npu:{device_id}")
         self.config = config
         self.rank = rank
         self.t5_cpu = t5_cpu
@@ -256,7 +256,7 @@ class WanT2V:
             x0 = latents
             if offload_model:
                 self.model.cpu()
-                torch.cuda.empty_cache()
+                torch.npu.empty_cache()
             if self.rank == 0:
                 videos = self.vae.decode(x0)
 

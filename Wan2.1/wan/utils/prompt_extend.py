@@ -414,7 +414,7 @@ class QwenPromptExpander(PromptExpander):
                 use_fast=True)
             self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
                 self.model_name,
-                torch_dtype=torch.bfloat16 if FLASH_VER == 2 else
+                torch_dtype=torch.float16 if FLASH_VER == 2 else
                 torch.float16 if "AWQ" in self.model_name else "auto",
                 attn_implementation="flash_attention_2"
                 if FLASH_VER == 2 else None,

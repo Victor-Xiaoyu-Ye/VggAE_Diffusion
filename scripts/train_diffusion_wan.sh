@@ -6,9 +6,9 @@ DATASET=/public2/LiZhen/yexiaoyu/dataset/spatial-vid-hq-oft
 
 mkdir -p ${PROJECT}/ckpts
 
-NUM_GPUS=5
-GPU_IDS=0,4,5,6,7
-CUDA_VISIBLE_DEVICES=${GPU_IDS} torchrun --nproc_per_node=${NUM_GPUS} --master_port=29506 \
+NUM_GPUS=8
+GPU_IDS=0,1,2,3,4,5,6,7
+ASCEND_RT_VISIBLE_DEVICES=${GPU_IDS} torchrun --nproc_per_node=${NUM_GPUS} --master_port=29506 \
   ${PROJECT}/train_diffusion_wan.py \
     --csv ${DATASET}/data/train/SpatialVID_HQ_metadata.csv \
     --video_root ${DATASET}/videos/SpatialVID/videos \

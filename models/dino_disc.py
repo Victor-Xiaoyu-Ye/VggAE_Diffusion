@@ -27,8 +27,8 @@ class DinoDiscriminator(nn.Module):
                 nn.utils.spectral_norm(nn.Conv1d(embed_dim, head_dim, 1)),
                 nn.LeakyReLU(0.2),
                 nn.utils.spectral_norm(nn.Conv1d(head_dim, 1, 1)),
-            ) for _ in range(len(self.out_indices) + 1)  # +1 for final layer
-        ])
+            ) for _ in range(len(self.out_indices) + 1)
+        ]).to(device)
 
     def forward(self, x):
         """x: [B, 3, H, W] in [-1, 1]"""

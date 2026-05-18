@@ -129,7 +129,7 @@ def main():
     parser.add_argument("--gpu", type=int, default=0)
     args = parser.parse_args()
 
-    device = torch.device(f"cuda:{args.gpu}")
+    device = torch.device(f"npu:{args.gpu}")
     os.makedirs(args.out_dir, exist_ok=True)
 
     print("=" * 60)
@@ -145,7 +145,7 @@ def main():
     encoder = StreamVGGT(img_size=518, patch_size=14, embed_dim=1024)
     state = torch.load(args.encoder_ckpt, map_location="cpu")
     encoder.load_state_dict(state, strict=False)
-    encoder = encoder.to(device=device, dtype=torch.bfloat16).eval()
+    encoder = encoder.to(device=device, dtype=torch.float16).eval()
     for p in encoder.parameters():
         p.requires_grad_(False)
 
@@ -153,7 +153,7 @@ def main():
 
     # Load video
     frames = read_video_frames(args.video_path, args.seq_len, 518)
-    frames_tensor = frames.unsqueeze(0).to(device=device, dtype=torch.bfloat16)  # [1, S, 3, H, W]
+    frames_tensor = frames.unsqueeze(0).to(device=device, dtype=torch.float16)  # [1, S, 3, H, W]
 
     # Extract tokens
     with torch.no_grad():
@@ -318,7 +318,7 @@ def main():
             cos_f, _ = do_sample_decode(model, x1, step + 1, args.out_dir, text_emb)
             print(f"  Token cos_sim (gen vs real): {cos_f:.4f}")
             sample_log.append({"step": step + 1, "token_cos_sim": cos_f})
-            torch.cuda.empty_cache()
+            torch.npu.empty_cache()
 
     # ------------------------------------------------------------------
     # 4. Final sample

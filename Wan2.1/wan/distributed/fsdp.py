@@ -12,7 +12,7 @@ from torch.distributed.utils import _free_storage
 def shard_model(
     model,
     device_id,
-    param_dtype=torch.bfloat16,
+    param_dtype=torch.float16,
     reduce_dtype=torch.float32,
     buffer_dtype=torch.float32,
     process_group=None,
@@ -40,4 +40,4 @@ def free_model(model):
             _free_storage(m._handle.flat_param.data)
     del model
     gc.collect()
-    torch.cuda.empty_cache()
+    torch.npu.empty_cache()
