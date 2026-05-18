@@ -11,7 +11,7 @@ GPU_IDS=0,1
 ASCEND_RT_VISIBLE_DEVICES=${GPU_IDS} torchrun --nproc_per_node=${NUM_GPUS} --master_port=29506 \
   ${PROJECT}/train_diffusion_wan.py \
     --csv ${DATASET}/data/train/SpatialVID_HQ_metadata.csv \
-    --video_root ${DATASET}/videos/SpatialVID/videos \
+    --video_root ${DATASET}/videos/SpatialVid/HQ//videos \
     --encoder_ckpt /cache/yexiaoyu/vggae_ref/StreamVGGT/checkpoints.pth \
     --token_stats /cache/yexiaoyu/vggae_ref/token_stats.pt \
     --wan_ckpt_dir /cache/yexiaoyu/vggae_ref/Wan2.1-T2V-1.3B \
