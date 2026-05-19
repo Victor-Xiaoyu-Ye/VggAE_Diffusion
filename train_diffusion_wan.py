@@ -341,7 +341,11 @@ def main():
 
         pbar = tqdm(dataloader, desc=f"Epoch {epoch}/{args.epochs}", dynamic_ncols=True)
 
+        epoch_start = time.time()
+        batch_times = []
+        batch_time = 0
         for batch_idx, batch in enumerate(pbar):
+            t0 = time.time()
             frames = batch["frames"].to(device=device, dtype=torch.float16)
 
             with torch.no_grad():
@@ -404,8 +408,13 @@ def main():
                 ema.update(model.module if use_ddp else model)
                 scheduler.step()
                 global_step += 1
+                batch_time = time.time() - t0
+                batch_times.append(max(batch_time, 1e-6))
+                avg_bt = sum(batch_times[-10:]) / min(len(batch_times), 10)
+                throughput = args.batch_size / max(avg_bt, 1e-6)
                 pbar.set_postfix(loss=f"{loss_val:.6f}", flow=f"{flow_loss.item():.6f}" if use_decoder_aux else f"{loss_val:.6f}",
-                                 recon=f"{recon_loss.item():.4f}", lr=f"{optimizer.param_groups[0]['lr']:.2e}")
+                                 recon=f"{recon_loss.item():.4f}", lr=f"{optimizer.param_groups[0]['lr']:.2e}",
+                                 thru=f"{throughput:.2f}")
 
                 if main_process and writer is not None and global_step % 50 == 0:
                     writer.add_scalar("train/loss", loss_val, global_step)
@@ -426,7 +435,10 @@ def main():
 
         avg_loss = epoch_loss / max(num_batches, 1)
         if main_process:
+            avg_bt_all = sum(batch_times) / max(len(batch_times), 1) if batch_times else 0
+            tp = args.batch_size / max(avg_bt_all, 1e-6)
             print(f"  Epoch {epoch}/{args.epochs} | avg loss: {avg_loss:.6f} | steps: {global_step}")
+            print(f"  DI_throughput: {tp:.3f} samples/s/npu")
             if writer is not None:
                 writer.add_scalar("train/epoch_loss", avg_loss, epoch)
 
