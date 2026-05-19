@@ -45,7 +45,7 @@ python -m torch.distributed.run \
     --recon_weight 0.0 --recon_every 9999999 \
     --recon_num_frames 1 --recon_t_min 0.25 --recon_grad_weight 0.05 \
     --input_noise 0.005 \
-    --batch_size 1 --accum_steps 8 \
+    --batch_size 1 --accum_steps 4 \
     --epochs 100 --lr 1e-4 --wd 1e-2 \
     --warmup_steps 1000 --ema_decay 0.9999 \
     --eval_every 10 --save_every 5 \

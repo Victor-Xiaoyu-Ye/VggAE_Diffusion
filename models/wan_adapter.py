@@ -184,23 +184,27 @@ class WanVGGTAdapter(nn.Module):
         if self.wan.freqs.device != x.device:
             self.wan.freqs = self.wan.freqs.to(x.device)
 
-        for block in self.wan.blocks:
+        def _block_fn(x, e, seq_lens, grid_sizes, freqs, context, context_lens, block):
             e_dtype = x.dtype
             e6 = (block.modulation.to(e_dtype) + e.to(e_dtype)).chunk(6, dim=1)
-
-            # self-attention
             y = block.self_attn(
-                block.norm1(x) * (1 + e6[1]) + e6[0],
-                seq_lens, grid_sizes, self.wan.freqs)
+                block.norm1(x) * (1 + e6[1]) + e6[0], seq_lens, grid_sizes, freqs)
             x = x + y * e6[2].to(x.dtype)
-
-            # cross-attn (skip if no text)
             if context is not None:
                 x = x + block.cross_attn(block.norm3(x), context, context_lens)
-
-            # FFN
             y = block.ffn(block.norm2(x) * (1 + e6[4].to(x.dtype)) + e6[3].to(x.dtype))
             x = x + y * e6[5].to(x.dtype)
+            return x
+
+        for block in self.wan.blocks:
+            if self.training:
+                x = torch.utils.checkpoint.checkpoint(
+                    _block_fn, x, e, seq_lens, grid_sizes, self.wan.freqs,
+                    context, context_lens, block,
+                    use_reentrant=False)
+            else:
+                x = _block_fn(x, e, seq_lens, grid_sizes, self.wan.freqs,
+                             context, context_lens, block)
 
         # ---- Output projection ----
         x = self.output_norm(x)
