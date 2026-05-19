@@ -37,7 +37,7 @@ python -m torch.distributed.run \
     --encoder_ckpt /cache/yexiaoyu/vggae_ref/StreamVGGT/checkpoints.pth \
     --token_stats /cache/yexiaoyu/vggae_ref/token_stats.pt \
     --wan_ckpt_dir /cache/yexiaoyu/vggae_ref/Wan2.1-T2V-1.3B \
-    --output_dir $OUTPUT_URL/yexiaoyu/ckpts/diffusion_wan/exp-3-text-ascend \
+    --output_dir $OUTPUT_URL/yexiaoyu/ckpts/diffusion_wan/exp-2-lora-ascend \
     --select_levels 11 --seq_len 8 \
     --lora_rank 0 --lora_alpha 128 \
     --text_cond --cfg_dropout 0.1 \
@@ -48,5 +48,5 @@ python -m torch.distributed.run \
     --batch_size 1 --accum_steps 8 \
     --epochs 100 --lr 1e-4 --wd 1e-2 \
     --warmup_steps 1000 --ema_decay 0.9999 \
-    --eval_every 10 --save_every 1 \
+    --eval_every 10 --save_every 5 \
     --num_workers 8 --use_checkpoint
