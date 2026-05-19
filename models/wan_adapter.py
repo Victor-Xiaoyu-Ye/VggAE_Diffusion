@@ -97,12 +97,11 @@ class WanVGGTAdapter(nn.Module):
         )
         self.text_dim = 768
 
-        # ---- Freeze all non-adapter Wan params ----
-        self._freeze_wan()
-
-        # ---- Apply LoRA to attention QKV ----
+        # ---- Freeze / unfreeze Wan params based on mode ----
         if lora_rank > 0:
+            self._freeze_wan()
             self._apply_lora(lora_rank, lora_alpha)
+        # lora_rank == 0: full fine-tune, don't freeze wan
 
         self._time_emb_converted = False
 
@@ -136,7 +135,9 @@ class WanVGGTAdapter(nn.Module):
         return e.unflatten(1, (6, self.wan_dim)).float()
 
     def set_lora_trainable(self):
-        """Set only LoRA params + i/o adapters + time embedding as trainable."""
+        """Set trainable params based on mode (LoRA vs full fine-tune)."""
+        if self.lora_rank <= 0:
+            return  # full fine-tune: all params already trainable
         for p in self.parameters():
             p.requires_grad_(False)
         for p in self.input_proj.parameters():
@@ -148,7 +149,6 @@ class WanVGGTAdapter(nn.Module):
         for n, p in self.named_parameters():
             if 'lora_A' in n or 'lora_B' in n:
                 p.requires_grad_(True)
-        # Also train time embedding + text projection
         for p in self.wan.time_embedding.parameters():
             p.requires_grad_(True)
         for p in self.wan.time_projection.parameters():
