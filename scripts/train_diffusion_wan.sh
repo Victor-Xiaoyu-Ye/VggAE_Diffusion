@@ -41,8 +41,7 @@ python -m torch.distributed.run \
     --select_levels 11 --seq_len 8 \
     --lora_rank 0 --lora_alpha 128 \
     --text_cond --cfg_dropout 0.1 \
-    --decoder_ckpt /cache/yexiaoyu/vggae_ref/decoder_epoch120.pt \
-    --recon_weight 0.05 --recon_every 1 \
+    --recon_weight 0.0 --recon_every 0 \
     --recon_num_frames 1 --recon_t_min 0.25 --recon_grad_weight 0.05 \
     --input_noise 0.005 \
     --batch_size 1 --accum_steps 4 \
