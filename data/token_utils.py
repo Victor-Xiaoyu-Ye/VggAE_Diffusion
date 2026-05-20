@@ -52,6 +52,36 @@ def select_levels(tokens_list, levels):
     return torch.stack(selected, dim=1).reshape(B, len(levels) * S, N, D)
 
 
+def select_levels_mean(tokens_list, levels, downsample=0):
+    """Average multiple DPT levels and optionally spatial-downsample.
+
+    RAEv2-style multi-layer mean: different encoder layers have independent noise,
+    averaging boosts SNR. Spatial downsample reduces latent dimension for diffusion.
+
+    Args:
+        tokens_list: list of 24 tensors [B, S, N, 2048]
+        levels: DPT level indices to average
+        downsample: spatial downsample factor (0=none, 2=half grid size)
+
+    Returns:
+        [B, S, N', 2048] where N' = N / (downsample**2) if downsample > 0 else N
+    """
+    selected = [tokens_list[lvl] for lvl in levels]
+    z = torch.stack(selected, dim=0).mean(dim=0)  # [B, S, N, 2048]
+
+    if downsample > 0:
+        B, S, N, D = z.shape
+        grid = int(N ** 0.5)
+        z = z.reshape(B, S, grid, grid, D).permute(0, 1, 4, 2, 3)
+        z = F.avg_pool2d(z.reshape(B * S, D, grid, grid),
+                         kernel_size=downsample, stride=downsample)
+        new_grid = grid // downsample
+        z = z.reshape(B, S, D, new_grid, new_grid).permute(0, 1, 3, 4, 2)
+        z = z.reshape(B, S, new_grid * new_grid, D)
+
+    return z
+
+
 def augment_tokens_for_decoder(
     tokens_list,
     levels=DPT_LEVELS,

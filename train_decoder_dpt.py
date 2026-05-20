@@ -83,6 +83,8 @@ def parse_args():
                         help="Multi-scale L1 supervision at 518/256/128")
     parser.add_argument("--gan", action="store_true",
                         help="Enable GAN loss (DINO discriminator, epoch 6+)")
+    parser.add_argument("--multi_layer_mean", action="store_true",
+                        help="RAEv2-style: average levels 4,11,17,23 into one representation")
 
     # Training hyperparameters
     parser.add_argument("--lr", type=float, default=1e-4)
@@ -256,6 +258,13 @@ def train_one_epoch(
             boundary_only_prob=args.boundary_only_prob,
             token_noise_std=args.token_noise_std,
         )
+
+        # Multi-layer mean (RAEv2): replace each DPT level with the mean
+        if args.multi_layer_mean:
+            z_mean = (tokens_list[4] + tokens_list[11] + tokens_list[17] + tokens_list[23]) / 4.0
+            for lvl in DPT_LEVELS:
+                tokens_list[lvl] = z_mean
+
         # ---- Cast to fp32 for DPTHead ----
         tokens_list = [t.to(dtype=torch.float32) for t in tokens_list]
 
@@ -423,6 +432,10 @@ def evaluate(
 
         tokens_list = strip_special_tokens(tokens_list, psi)
         tokens_list = normalize_tokens(tokens_list, level_stats)
+        if args.multi_layer_mean:
+            z_mean = (tokens_list[4] + tokens_list[11] + tokens_list[17] + tokens_list[23]) / 4.0
+            for lvl in DPT_LEVELS:
+                tokens_list[lvl] = z_mean
         tokens_list = [t.to(dtype=torch.float32) for t in tokens_list]
 
         with torch.amp.autocast(device_type="cuda", dtype=dtype):
