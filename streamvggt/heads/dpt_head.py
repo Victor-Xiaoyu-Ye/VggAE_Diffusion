@@ -273,10 +273,6 @@ class DPTHead(nn.Module):
         """
         Apply positional embedding to tensor x.
         """
-        # NPU workaround: torch.linspace/meshgrid are broken on Ascend (aclnnSort error).
-        # The pos_embed is a minor spatial prior; skip it on NPU.
-        if x.device.type == 'npu':
-            return x
         patch_w = x.shape[-1]
         patch_h = x.shape[-2]
         pos_embed = create_uv_grid(patch_w, patch_h, aspect_ratio=W / H, dtype=x.dtype, device=x.device)
@@ -494,6 +490,19 @@ def custom_interpolate(
     INT_MAX = 1610612736
 
     input_elements = size[0] * size[1] * x.shape[0] * x.shape[1]
+
+    # NPU bilinear is broken (aclnnSort bug) — run on CPU
+    if x.device.type == 'npu' and mode == 'bilinear':
+        x_cpu = x.cpu()
+        if input_elements > INT_MAX:
+            chunks = torch.chunk(x_cpu, chunks=(input_elements // INT_MAX) + 1, dim=0)
+            interpolated_chunks = [
+                nn.functional.interpolate(chunk, size=size, mode=mode, align_corners=align_corners) for chunk in chunks
+            ]
+            result = torch.cat(interpolated_chunks, dim=0).contiguous()
+        else:
+            result = nn.functional.interpolate(x_cpu, size=size, mode=mode, align_corners=align_corners)
+        return result.to(x.device)
 
     if input_elements > INT_MAX:
         chunks = torch.chunk(x, chunks=(input_elements // INT_MAX) + 1, dim=0)
