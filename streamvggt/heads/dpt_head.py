@@ -273,6 +273,10 @@ class DPTHead(nn.Module):
         """
         Apply positional embedding to tensor x.
         """
+        # NPU workaround: torch.linspace/meshgrid are broken on Ascend (aclnnSort error).
+        # The pos_embed is a minor spatial prior; skip it on NPU.
+        if x.device.type == 'npu':
+            return x
         patch_w = x.shape[-1]
         patch_h = x.shape[-2]
         pos_embed = create_uv_grid(patch_w, patch_h, aspect_ratio=W / H, dtype=x.dtype, device=x.device)

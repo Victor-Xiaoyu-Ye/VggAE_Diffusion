@@ -88,13 +88,10 @@ def create_uv_grid(
     top_y = -span_y * (height - 1) / height
     bottom_y = span_y * (height - 1) / height
 
-    # Generate 1D coordinates with numpy (NPU linspace is broken even on CPU)
+    # Generate UV grid entirely in numpy (NPU has issues with linspace, meshgrid)
     import numpy as np
-    x_coords = torch.from_numpy(np.linspace(left_x, right_x, width).astype(np.float32)).to(device, dtype=dtype)
-    y_coords = torch.from_numpy(np.linspace(top_y, bottom_y, height).astype(np.float32)).to(device, dtype=dtype)
-
-    # Create 2D meshgrid (width x height) and stack into UV
-    uu, vv = torch.meshgrid(x_coords, y_coords, indexing="xy")
-    uv_grid = torch.stack((uu, vv), dim=-1)
-
-    return uv_grid
+    x = np.linspace(left_x, right_x, width).astype(np.float32)
+    y = np.linspace(top_y, bottom_y, height).astype(np.float32)
+    uu, vv = np.meshgrid(x, y)
+    uv = np.stack([uu, vv], axis=-1)
+    return torch.from_numpy(uv).to(device=device, dtype=dtype)
