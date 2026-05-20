@@ -470,10 +470,11 @@ def evaluate(
 def save_checkpoint(path, decoder, optimizer, scheduler, ema, epoch, global_step, args):
     """Save decoder checkpoint with optimizer, scheduler, and EMA states."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
+    raw = decoder.module if hasattr(decoder, 'module') else decoder
     ckpt = {
         "epoch": epoch,
         "global_step": global_step,
-        "model_state_dict": decoder.state_dict(),
+        "model_state_dict": raw.state_dict(),
         "optimizer_state_dict": optimizer.state_dict(),
         "scheduler_state_dict": scheduler.state_dict(),
         "ema_state_dict": ema.state_dict(),
@@ -555,7 +556,10 @@ def save_recon_sample(decoder, encoder, lpips_model, frames, level_stats, path, 
 def load_checkpoint(path, decoder, optimizer, scheduler, ema):
     """Load decoder checkpoint and restore optimizer, scheduler, EMA states."""
     ckpt = torch.load(path, map_location="cpu")
-    decoder.load_state_dict(ckpt["model_state_dict"])
+    state = ckpt["model_state_dict"]
+    if any(k.startswith("module.") for k in state):
+        state = {k.replace("module.", "", 1): v for k, v in state.items()}
+    decoder.load_state_dict(state)
     optimizer.load_state_dict(ckpt["optimizer_state_dict"])
     scheduler.load_state_dict(ckpt["scheduler_state_dict"])
     ema.load_state_dict(ckpt["ema_state_dict"])

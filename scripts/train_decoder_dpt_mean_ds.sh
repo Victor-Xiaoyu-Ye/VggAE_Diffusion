@@ -4,7 +4,7 @@
 set -e
 
 PROJECT=/home/yexiaoyu/work/VggAE-Diffusion
-DATASET=/public2/LiZhen/yexiaoyu/dataset/spatial-vid-hq-oft
+DATASET=/home/yexiaoyu/data/spatial-vid-hq-oft
 
 mkdir -p ${PROJECT}/ckpts
 
@@ -14,8 +14,8 @@ CUDA_VISIBLE_DEVICES=${GPU_IDS} torchrun --nproc_per_node=${NUM_GPUS} --master_p
   ${PROJECT}/train_decoder_dpt.py \
     --data_csv ${DATASET}/data/train/SpatialVID_HQ_metadata.csv \
     --video_root ${DATASET}/videos/SpatialVID/videos \
-    --encoder_ckpt /home/yexiaoyu/work/4DLangVGGT/ckpt/streamvggt/checkpoints.pth \
-    --token_stats ${PROJECT}/ckpts/token_stats.pt \
+    --encoder_ckpt /home/yexiaoyu/data/StreamVGGT/checkpoints.pth \
+    --token_stats /home/yexiaoyu/data/token_stats.pt \
     --output_dir ${PROJECT}/ckpts/decoder_dpt/exp-9-mean-ds \
     --seq_len 8 \
     --batch_size 10 --accum_steps 4 \
