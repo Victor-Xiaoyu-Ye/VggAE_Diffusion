@@ -1,162 +1,171 @@
 # VggAE-Diffusion：几何潜在空间中的视频生成
 
-## 一、Motivation
+## 一、核心假设
 
-现有视频生成方法（SVD、Wan2.1）在 VAE latent space 中做 diffusion。VAE latent 擅长压缩像素，但**不编码几何结构**。StreamVGGT 是几何基础模型，其 token space 天然编码跨帧的几何对应关系。
+在 StreamVGGT 的几何 token space 中做 diffusion，利用预训练 encoder 的 3D 几何先验，生成具有更好结构一致性的视频。
 
-**核心假设**：在 StreamVGGT 的几何潜在空间中做 diffusion，生成的视频会有更好的 3D 结构一致性和时序连贯性。
+|                 | Latent Space   | 数据        | Latent 维度 |
+|-----------------|---------------|------------|-------------|
+| SVD/Wan2.1      | VAE (像素压缩)  | 百万视频    | ~100K       |
+| GLD             | DA3 (几何)    | 几千多视图  | ~770K       |
+| RAEv2           | DINOv3 (语义) | 100万图像   | ~262K       |
+| **VggAE-Diffusion** | **StreamVGGT (几何+时空)** | **1万视频** | **22M → 660K (降维后)** |
 
-|                 | Latent Space   | 数据        |
-|-----------------|---------------|------------|
-| SVD/Wan2.1      | VAE (像素压缩)  | 百万视频    |
-| GLD             | DA3 (几何)    | 几千多视图  |
-| **VggAE-Diffusion** | **StreamVGGT (几何+时空)** | **1万视频** |
-
-## 二、Pipeline
-
-```
-数据: mp4 (+ zip/EXR depth) → read_video_frames (8帧, 518×518)
-
-Encoder (StreamVGGT, frozen, bf16):
-  [B,8,3,518,518] → 24 alternating-attention blocks
-  → tokens_list[24]×[B,8,1+4+1369,2048]
-  → strip_special_tokens → tokens_list[24]×[B,8,1369,2048]
-
-Token Processing:
-  normalize → diffusion: 1 boundary level (level 11)
-            → decoder:  4 DPT levels [4,11,17,23]
-
-Phase 1 — Decoder 训练:
-  tokens → ViTDecoder (token-native transformer, 主方案)
-        → DPTHead    (卷积多尺度融合, 对比方案, train_decoder_dpt.py)
-  Loss: L1 + LPIPS + temporal_diff + image_gradient (+ depth_L1 for DPT)
-
-Phase 2 — Diffusion 训练 (OT-CFM):
-  noise → VideoDiT (12层, 768-dim, spatial+temporal attention) → tokens
-  + frozen decoder auxiliary loss (RGB-space)
-  + 可选 CLIP text conditioning
-
-Inference:
-  noise → ODE (Euler/Midpoint, 50步) → tokens → decoder → RGB video
-```
-
-## 三、Decoder 对比
-
-|              | ViTDecoder (主线)                    | DPTHead (对比)                    |
-|--------------|--------------------------------------|----------------------------------|
-| 风格          | Token-native transformer (GLD/MAE)   | 卷积多尺度融合 (MiDaS/DPT)        |
-| 参数量         | 16M (dim=512, depth=4)              | 33M                              |
-| 跨level融合    | Learned fusion MLP                   | Refinenet 渐进融合 + resize       |
-| 训练脚本       | `train_decoder.py`                   | `train_decoder_dpt.py`           |
-| 特点           | 更轻量, 与 token space 自然匹配       | 多尺度金字塔, 成熟                 |
-
-ViTDecoder 关键设计：
-- 2048 → decoder_dim 投影
-- Level embedding + spatial position embedding
-- Transformer blocks (跨 patch + 跨 level attention)
-- **Learned level fusion**: `Linear(4D→D) + GELU + Linear(D→D)` (非简单平均)
-- Zero-init output projection
-
-DPTHead 额外支持：`--output_depth` + `--depth_root` 多任务学习（借鉴 GLD）
-
-## 四、深度数据
-
-格式：zip 包内 EXR 文件，与视频 `group_0001/{id}.mp4` 一一对应
+## 二、项目架构
 
 ```
-depths/SpatialVID/depths/group_0001/{video_id}.zip
-  ├── 00000.exr  (1 channel 'Z', float32, 米制深度)
-  ├── 00001.exr
-  └── ...
+视频 [B,8,3,518,518]
+  │
+  ▼
+StreamVGGT Encoder (frozen, 24 blocks)
+  │
+  ▼
+tokens_list[24] × [B,8,1369,2048]
+  │
+  ├──► Decoder (DPTHead) ──► RGB video [B,8,518,518,3]
+  │    Loss: L1 + LPIPS + temporal + gradient + depth
+  │
+  └──► Diffusion (Wan2.1 DiT + adapter)
+       [B,8,1369,2048] → multi-layer mean → Linear 2048→256
+       → spatial pool 37→18 → Wan backbone → unpool 18→37
+       → Linear 256→2048 → [B,8,1369,2048]
+       Loss: flow matching MSE + decoder auxiliary (RGB-space)
 ```
 
-视频帧和深度帧共享同一组采样索引。深度模式下关闭 temporal jitter 保证对齐。
+## 三、Decoder 研究进展
 
-## 五、项目结构
+### 实验结果汇总
+
+| 实验 | 架构 | PSNR | LPIPS | 结论 |
+|------|------|------|-------|------|
+| exp-5-dpt | DPTHead baseline (256f) | 20.9 dB | 0.256 | **最佳 baseline** |
+| exp-6-big | DPTHead big (512f) | 22.3 dB | 0.253 | +1.4dB PSNR，LPIPS 几乎不动 |
+| exp-7-gan | DPTHead + GAN | 22.3 dB | 0.255 | GAN 无增益，LPIPS 天花板 ~0.25 |
+| exp-4-gld | ViTDecoder GLD | ~18 dB | 0.52 | 不如 conv decoder |
+| exp-5-big | ViTDecoder big (262M) | ~18 dB | 0.39 | 容量不解决问题 |
+| exp-8-mean | DPTHead + all-level mean | 18.2 dB | 0.35 | **变差**——mean 替换全部 level 破坏多尺度 |
+| exp-10-mean-bdry | DPTHead + mean→boundary only | 训练中 | - | mean 只替代 level 11，保留多尺度多样性 |
+
+### 核心发现
+
+1. **Decoder 天花板在 ~22dB PSNR，LPIPS 卡在 0.25**。三种架构（DPTHead、ViTDecoder、DPTUNet）、容量翻倍、GAN 均无法突破。瓶颈在 encoder token 本身的 RGB 信息承载能力，不在 decoder 架构。
+2. **DPTHead refinenet 是最佳 decoder**——33M 参数碾压 262M ViTDecoder。多尺度金字塔对该任务有强先验。
+3. **Multi-layer mean 不适用于 DPTHead**——替换全部 4 level 破坏了多尺度金字塔。boundary-only 模式（mean 替代 level 11，其余保持原始）正在验证。
+4. **4DLangVGGT 用极简 UNet 在 HyperNeRF 静态场景获得 26.5dB**——对比说明视频 token 的时序压缩稀释了单帧信息。
+
+### 参考论文
+
+- **RAEv2** (arXiv:2605.18324): Multi-layer mean 降噪 + REPA 加速扩散收敛。用于 ViT flat decoder，不适用于 DPTHead 多尺度架构。
+- **GLD** (arXiv:2603.22275): Channel-concat multi-level features + ViT decoder。在 DA3 静态场景实现 35.4dB——多视图比视频简单得多。
+- **4DLangVGGT** (arXiv:2512.05060): UNet skip decoder on VGGT tokens。静态场景 26.5dB，验证了 token 信息承载上限。
+- **LaSt-ViT** (CVPR 2026): ViT 深层特征"线性化"，有效秩远低于名义维度。解释了深层 level (17/23) 可能信息量低。
+
+## 四、Diffusion 研究进展
+
+### 实验汇总
+
+| 实验 | 架构 | Flow Loss | Epoch | GPU | 结论 |
+|------|------|-----------|-------|-----|------|
+| exp-diff-1 | VideoDiT from-scratch (300M) | 1.47 | 100 | A100 | 不收敛 |
+| exp-2-wo-lora | Wan 1.45B full adapters (无LoRA) | 1.45 | 44 | 910B | 不收敛 |
+| exp-3-text | Wan + LoRA + text (GPU) | 1.13 | 49 | A100 | 收敛慢但有效 |
+| exp-3-text-ascend | Wan + LoRA + text (NPU) | 1.57 | 68 | 910B | NPU 不稳定 |
+| **exp-4-reduced** | **Wan + LoRA + 降维 (34×)** | **1.21** | **50** | **A100** | **Latent 660K → 每步下降更快** |
+
+### 降维方案 (exp-4-reduced)
 
 ```
-VggAE-Diffusion/
-├── data/
-│   ├── token_utils.py          # 归一化、level 选择、增强、编解码
-│   └── video_dataset.py        # SpatialVidDataset (mp4 + zip/EXR depth)
-├── models/
-│   ├── video_dit.py            # VideoDiT (spatial + temporal attention)
-│   ├── flow_matching.py        # OT-CFM (flow matching + ODE sampling)
-│   ├── clip_encoder.py         # Frozen CLIP ViT-L/14
-│   └── vit_decoder.py          # ViTDecoder (token-native, learned fusion)
-├── streamvggt/                 # StreamVGGT encoder (from Meta/VGGT)
-│   ├── models/aggregator.py    # 24 alternating-attention blocks
-│   ├── heads/dpt_head.py       # DPTHead (RGB + optional depth)
-│   └── layers/                 # Transformer primitives
-├── utils/
-│   ├── video_io.py             # mp4 读取 + EXR depth + temporal jitter
-│   ├── decoder_loader.py       # 共享 decoder 加载 (auto-detect ViT/DPT)
-│   ├── training.py             # EMA, AdamW, cosine schedule
-│   └── distributed.py          # DDP setup
-├── scripts/
-│   ├── train_decoder.sh        # ViTDecoder 训练
-│   ├── train_decoder_dpt.sh    # DPTHead 训练 (含 depth)
-│   ├── train_diffusion.sh      # Diffusion 训练
-│   ├── reconstruct.sh          # 重建 (encoder→decoder, PSNR/SSIM)
-│   └── sample.sh               # 生成视频
-├── train_decoder.py            # Phase 1: ViTDecoder (主线)
-├── train_decoder_dpt.py        # Phase 1: DPTHead (对比)
-├── train_diffusion.py          # Phase 2: OT-CFM diffusion
-├── reconstruct.py              # 重建评估 (兼容 ViT/DPT)
-├── sample.py                   # 采样生成 (兼容 ViT/DPT)
-├── overfit_single.py           # Debug: 单视频过拟合
-├── analyze_levels.py           # Level ablation 工具
-├── visualize_latent_space.py   # PCA、距离分析
-└── compute_token_stats.py      # Step 0: Welford 统计量
+Input:  [B, 8, 1369, 2048]
+  ├─ multi-layer mean (levels 4+11+17+23)/4  → SNR 提升
+  ├─ Linear(2048→256)                         → channel 降维
+  ├─ adaptive_avg_pool(37→18)                 → spatial 降维
+  │
+  ▼ Wan backbone: [B, 8, 324, 1536]  (660K dims)
+  │
+  ├─ nearest unpool(18→37)                    → spatial 恢复
+  └─ Linear(256→2048)                         → channel 恢复
+Output: [B, 8, 1369, 2048]                    → 外部格式不变，decoder auxiliary 兼容
 ```
 
-## 六、启动命令
+**效果**：Latent 从 22M dims → 660K dims（34× 缩减），RAEv2 量级。同 steps 内下降更快，epoch 效率待优化。
 
-```bash
-# Step 0: 计算 token 统计量 (如未计算)
-python compute_token_stats.py --csv_path ... --video_root ... --out_path ckpts/token_stats.pt
+### 核心发现
 
-# Phase 1: 训练 decoder
-bash scripts/train_decoder.sh       # ViTDecoder (主线)
-bash scripts/train_decoder_dpt.sh   # DPTHead + depth (对比)
+1. **维度灾难是最大瓶颈**：22M-dim continuous flow matching 在 10K 数据上几乎不可训。降维 34× 后每步下降更快。
+2. **NPU 910B 训练不稳定**：多个算子（interpolate、sort、linspace）有兼容性问题，需逐个绕过。GPU 版本更稳定。
+3. **Decoder auxiliary 在 NPU 上不可用**：DPTHead 的 bilinear interpolate 触发 aclnnSort 崩溃。GPU 上正常工作。
+4. **CubiD 离散扩散是下一步方向**：256-dim token 用 dimension-level 离散 mask/predict 替代 continuous flow matching，在高维更稳定。
 
-# Phase 2: 训练 diffusion
-bash scripts/train_diffusion.sh
+### 参考论文
 
-# 评估
-python reconstruct.py --video_path ... --encoder_ckpt ... --decoder_ckpt ...
-python analyze_levels.py --video_list ... --encoder_ckpt ... --decoder_ckpt ...
+- **CubiD** (arXiv:2603.19232): 高维 token 的离散扩散——把生成分解为逐维度 mask/predict，T 步固定。适合 256-dim 降维后的 latent。
+- **RAEv2 REPA**: 在 DiT 中间层抽特征匹配 encoder 输出，作为辅助 loss。10× 加速收敛，可用于我们的 adapter。
 
-# 生成
-python sample.py --flow_ckpt ... --decoder_ckpt ... --text_prompt "..."
+## 五、关键设计决策
+
+### Level 选取策略
+
+| 方案 | 效果 | 说明 |
+|------|------|------|
+| 单一 level 11 | **baseline (22.3 dB)** | 当前选择 |
+| 4 level concat | DPTHead 标准输入 | 不同分辨率特征互补 |
+| mean → all levels | **变差 (18.2 dB)** | 破坏多尺度 |
+| mean → boundary only | 待验证 | exp-10 进行中 |
+
+### 降维策略
+
+| 维度 | 当前 | 降维后 | 方式 |
+|------|------|--------|------|
+| Channel | 2048 | 256 | Learned Linear projection |
+| Spatial | 1369 patches | 324 patches | adaptive_avg_pool 2× |
+| Temporal | 8 frames | 8 frames | 保持不变 |
+| 总维度 | 22M | 660K | **34× reduction** |
+
+## 六、当前实验矩阵
+
+### Decoder (GPU)
+
+| 实验 | 目录 | 状态 |
+|------|------|------|
+| exp-5-dpt (baseline) | `decoder_dpt/exp-5-dpt` | 完成, PSNR 20.9 |
+| exp-6-big (512f) | `decoder_dpt/exp-6-big` | 完成, PSNR 22.3 |
+| exp-7-gan | `decoder_dpt/exp-7-gan` | 完成, PSNR 22.3 |
+| exp-8-mean (全替换) | `decoder_dpt/exp-8-mean` | 完成, PSNR 18.2 |
+| exp-10-mean-bdry | `decoder_dpt/exp-10-mean-bdry` | 训练中 |
+
+### Diffusion
+
+| 实验 | 目录 | 平台 | 状态 |
+|------|------|------|------|
+| exp-diff-1 (VideoDiT) | `diffusion_level11_dpt` | GPU | 完成, loss 1.47 |
+| exp-3-text (Wan LoRA) | `diffusion_wan/exp-3-text` | GPU | 完成, loss 1.13 |
+| exp-4-reduced (降维) | `diffusion_wan/exp-4-reduced` | GPU | 完成, loss 1.21 |
+
+## 七、新增模型文件
+
+```
+models/
+├── video_dit.py              # 12层 from-scratch DiT
+├── flow_matching.py          # OT-CFM flow matching
+├── wan_adapter.py            # Wan2.1 1.3B adapter (LoRA + i/o proj)
+├── wan_adapter_reduced.py    # 降维版 Wan adapter (34× reduction)
+├── vit_decoder.py            # ViTDecoder (GLD-style channel-concat)
+├── dino_disc.py              # DINO discriminator (GAN)
+└── clip_encoder.py           # CLIP ViT-L/14 text encoder
 ```
 
-## 七、训练 Trick
+## 八、待做事项
 
-| 类别 | Trick | 默认值 |
-|------|-------|--------|
-| Decoder 鲁棒性 | Level dropout | 0.15 |
-| Decoder 鲁棒性 | Boundary-only training | prob=0.25 |
-| Decoder 鲁棒性 | Token noise | std=0.02 |
-| 数据增强 | Temporal jitter | 随机起始帧+步长抖动 |
-| 正则化 | EMA | decay=0.999 (decoder) / 0.9999 (diffusion) |
-| 正则化 | Input token noise (diffusion) | std=0.005 |
-| 训练稳定 | Zero-init output projection | ViTDecoder + VideoDiT |
-| 训练稳定 | bf16 mixed precision | ✓ |
-| 训练稳定 | Gradient checkpointing | ✓ |
-| 多任务 | Depth head (DPT only) | weight=0.1 |
-| 损失 | L1 + LPIPS(0.1) + temporal(0.05) + gradient(0.05) | decoder |
-| 辅助 | Frozen decoder auxiliary loss | weight=0.05, every=1 batch |
+### 短期
+- [ ] exp-10-mean-bdry 完成，评估 PSNR vs baseline
+- [ ] exp-4-reduced 续训到更多 steps，看 flow loss 能否到 <1.0
+- [ ] exp-4-reduced 采样一版视频看质量
 
-## 八、下游脚本兼容性
+### 中期
+- [ ] CubiD 离散扩散方案（256-dim × 8 groups）
+- [ ] REPA-style auxiliary loss（DiT 中间层匹配 encoder feature）
+- [ ] 数据扩展到 100K 视频
 
-`reconstruct.py` / `sample.py` / `train_diffusion.py` / `overfit_single.py` 均通过 `utils/decoder_loader.py` 自动检测 checkpoint 类型（ViT vs DPT），无需手动指定。
-
-## 九、待做事项
-
-1. 训练 ViTDecoder，评估 PSNR/SSIM，与 DPTHead 对比
-2. 训练 DPTHead + depth，验证多任务对 RGB 的提升
-3. `analyze_levels.py` 量化 level 4/11/17/23 的信息含量
-4. 从零训练 diffusion (100 epoch)，监控 loss + decoder auxiliary
-5. Wan2.1 weight init 对照实验 (等 from-scratch 稳定后)
-6. Causal temporal attention → 自回归长视频生成
+### 长期
+- [ ] Causal temporal attention → 自回归长视频
+- [ ] 在降维 latent 上 from-scratch 训练 DiT（对比 Wan transfer）

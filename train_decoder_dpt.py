@@ -85,6 +85,8 @@ def parse_args():
                         help="Enable GAN loss (DINO discriminator, epoch 6+)")
     parser.add_argument("--multi_layer_mean", action="store_true",
                         help="RAEv2-style: average levels 4,11,17,23 into one representation")
+    parser.add_argument("--mlm_boundary_only", action="store_true",
+                        help="Multi-layer mean only replaces boundary level, others keep original")
 
     # Training hyperparameters
     parser.add_argument("--lr", type=float, default=1e-4)
@@ -259,11 +261,14 @@ def train_one_epoch(
             token_noise_std=args.token_noise_std,
         )
 
-        # Multi-layer mean (RAEv2): replace each DPT level with the mean
+        # Multi-layer mean (RAEv2): average levels → replace DPT levels
         if args.multi_layer_mean:
             z_mean = (tokens_list[4] + tokens_list[11] + tokens_list[17] + tokens_list[23]) / 4.0
-            for lvl in DPT_LEVELS:
-                tokens_list[lvl] = z_mean
+            if args.mlm_boundary_only:
+                tokens_list[DEFAULT_BOUNDARY_LEVEL] = z_mean  # only boundary level
+            else:
+                for lvl in DPT_LEVELS:
+                    tokens_list[lvl] = z_mean
 
         # ---- Cast to fp32 for DPTHead ----
         tokens_list = [t.to(dtype=torch.float32) for t in tokens_list]
@@ -434,8 +439,11 @@ def evaluate(
         tokens_list = normalize_tokens(tokens_list, level_stats)
         if args.multi_layer_mean:
             z_mean = (tokens_list[4] + tokens_list[11] + tokens_list[17] + tokens_list[23]) / 4.0
-            for lvl in DPT_LEVELS:
-                tokens_list[lvl] = z_mean
+            if args.mlm_boundary_only:
+                tokens_list[DEFAULT_BOUNDARY_LEVEL] = z_mean
+            else:
+                for lvl in DPT_LEVELS:
+                    tokens_list[lvl] = z_mean
         tokens_list = [t.to(dtype=torch.float32) for t in tokens_list]
 
         with torch.amp.autocast(device_type="cuda", dtype=dtype):
