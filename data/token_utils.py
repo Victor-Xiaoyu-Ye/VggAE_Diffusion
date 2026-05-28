@@ -1,4 +1,5 @@
 import torch
+import torch.nn.functional as F
 
 DPT_LEVELS = [4, 11, 17, 23]
 DEFAULT_BOUNDARY_LEVEL = 11

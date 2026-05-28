@@ -97,12 +97,12 @@ class WanVGGTAdapter(nn.Module):
         )
         self.text_dim = 768
 
-        # ---- Freeze all non-adapter Wan params ----
-        self._freeze_wan()
-
-        # ---- Apply LoRA to attention QKV ----
+        # ---- Mode: LoRA vs head-only vs full fine-tune ----
         if lora_rank > 0:
+            self._freeze_wan()
             self._apply_lora(lora_rank, lora_alpha)
+        # lora_rank == 0: don't freeze — full fine-tune (1.43B)
+        # explicitly pass lora_rank=-1 for head-only mode (freeze wan, no lora)
 
         self._time_emb_converted = False
 

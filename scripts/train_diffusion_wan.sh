@@ -18,6 +18,7 @@ CUDA_VISIBLE_DEVICES=${GPU_IDS} torchrun --nproc_per_node=${NUM_GPUS} --master_p
     --output_dir ${PROJECT}/ckpts/diffusion_wan/exp-3-text \
     --select_levels 11 --seq_len 8 \
     --lora_rank 64 --lora_alpha 128 \
+    --annotation_index ${PROJECT}/ckpts/annotation_index.json \
     --text_cond --cfg_dropout 0.1 \
     --decoder_ckpt ${PROJECT}/ckpts/decoder_dpt/exp-5-dpt/decoder_final.pt \
     --recon_weight 0.05 --recon_every 1 \

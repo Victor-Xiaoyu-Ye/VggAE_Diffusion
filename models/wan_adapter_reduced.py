@@ -101,10 +101,12 @@ class WanVGGTAdapterReduced(nn.Module):
             nn.Linear(wan_dim, wan_dim),
         )
 
-        # ---- LoRA on Wan attention ----
+        # ---- Mode: LoRA vs full fine-tune ----
         if lora_rank > 0:
             self._freeze_wan()
             self._apply_lora(lora_rank, lora_alpha)
+        # lora_rank == 0: full fine-tune (don't freeze)
+        # lora_rank == -1: head-only (freeze wan, no lora)
 
         self._time_emb_converted = False
 
