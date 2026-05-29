@@ -118,6 +118,55 @@ def parse_args():
     return p.parse_args()
 
 
+@torch.no_grad()
+def eval_samples(tokenizer, decoder, encoder, eval_frames, device, out_dir, epoch, use_bf16):
+    """Save reconstruction comparison images for visual progress tracking."""
+    import numpy as np
+    from PIL import Image as PImage
+
+    os.makedirs(out_dir, exist_ok=True)
+
+    frames = eval_frames.to(device=device, dtype=torch.bfloat16)
+    tokens_list, psi = encoder(frames)
+    tokens_list = strip_special_tokens(tokens_list, psi)
+
+    z_g, _ = tokenizer(tokens_list)
+
+    if use_bf16:
+        with torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
+            result = decoder(z_g)
+    else:
+        result = decoder(z_g)
+
+    if decoder.output_depth:
+        preds, _, _, _ = result
+    else:
+        preds, _ = result
+
+    recon = preds[..., :3].clamp(0, 1)  # [1, S, H, W, 3]
+    orig = frames.permute(0, 1, 3, 4, 2).clamp(0, 1)  # [1, S, H, W, 3]
+
+    # Save per-frame comparison: top=original, bottom=reconstructed
+    S = recon.shape[1]
+    for s in range(S):
+        row = torch.cat([orig[0, s], recon[0, s]], dim=1)  # [H, 2W, 3]
+        row_np = (row.float().cpu().numpy() * 255).astype(np.uint8)
+        PImage.fromarray(row_np).save(os.path.join(out_dir, f'epoch{epoch:04d}_frame{s}.png'))
+
+    # Also save a grid of all frames
+    grid_rows = []
+    for s in range(S):
+        grid_rows.append(torch.cat([orig[0, s], recon[0, s]], dim=1))
+    grid = torch.cat(grid_rows, dim=0)
+    grid_np = (grid.float().cpu().numpy() * 255).astype(np.uint8)
+    PImage.fromarray(grid_np).save(os.path.join(out_dir, f'epoch{epoch:04d}_grid.png'))
+
+    # Compute PSNR
+    mse = F.mse_loss(recon, orig).item()
+    psnr = -10 * np.log10(mse) if mse > 0 else float('inf')
+    print(f'  Eval PSNR: {psnr:.2f} dB')
+
+
 def set_seed(seed):
     torch.manual_seed(seed)
     if torch.cuda.is_available():
@@ -192,6 +241,7 @@ def main():
         output_dim=3, output_depth=args.output_depth,
         img_size=args.target_size, latent_grid=args.latent_grid,
         num_resblocks=args.decoder_num_resblocks,
+        use_checkpoint=True,
     ).to(device=device)
 
     total_p = sum(p.numel() for p in tokenizer.parameters()) + \
@@ -222,6 +272,12 @@ def main():
         num_workers=args.num_workers, collate_fn=collate_fn,
         pin_memory=True, drop_last=True,
     )
+
+    # Capture eval frames for periodic sampling
+    eval_frames = None
+    for eb in dataloader:
+        eval_frames = eb['frames'][:1].clone()
+        break
 
     # ---- 4. Optimizer ----
     if main_process:
@@ -290,12 +346,12 @@ def main():
             else:
                 z_g_noisy = z_g
 
-            # ---- Decode ----
+            # ---- Decode (bf16 for memory, outputs cast to fp32 for loss) ----
             if use_bf16:
                 with autocast(device_type='cuda', dtype=torch.bfloat16):
-                    result = decoder(z_g_noisy.float())
+                    result = decoder(z_g_noisy)
             else:
-                result = decoder(z_g_noisy.float())
+                result = decoder(z_g_noisy)
 
             if decoder.module.output_depth if use_ddp else decoder.output_depth:
                 preds, pred_depth, pred_conf, _ = result
@@ -401,7 +457,7 @@ def main():
             if writer:
                 writer.add_scalar('train/epoch_loss', avg_loss, epoch)
 
-        # Save checkpoint
+        # Save checkpoint + eval samples
         if main_process and (epoch + 1) % args.save_every == 0:
             save_path = os.path.join(args.output_dir, f'checkpoint_epoch{epoch:04d}.pt')
             tok = tokenizer.module if use_ddp else tokenizer
@@ -417,6 +473,14 @@ def main():
                 'args': vars(args),
             }, save_path)
             print(f'  Saved: {save_path}')
+
+            # ---- Eval sampling ----
+            try:
+                eval_samples(tok, dec, encoder, eval_frames, device,
+                            os.path.join(args.output_dir, 'samples'),
+                            epoch, use_bf16)
+            except Exception as e:
+                print(f'  [WARN] Eval sampling failed: {e}')
 
     # Final save
     if main_process:

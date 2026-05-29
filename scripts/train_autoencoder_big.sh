@@ -22,7 +22,7 @@ CUDA_VISIBLE_DEVICES=${GPU_IDS} torchrun --nproc_per_node=${NUM_GPUS} --master_p
     --decoder_base_dim 384 --decoder_num_resblocks 2 \
     --latent_noise_std 0.05 --latent_noise_warmup 1000 \
     --lambda_l1 1.0 --lambda_lpips 1.0 --lambda_grad 0.05 --lambda_temporal 0.05 --lambda_latent_reg 0.01 \
-    --batch_size 10 --accum_steps 4 \
+    --batch_size 2 --accum_steps 15 \
     --epochs 120 --lr 1e-4 --wd 1e-2 \
     --warmup_steps 500 --ema_decay 0.999 \
     --seq_len 8 --target_size 518 \

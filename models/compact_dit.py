@@ -135,15 +135,18 @@ class CompactLatentDiT(nn.Module):
         nn.init.zeros_(self.output_head.net[-1].bias)
 
     def _time_embed(self, t):
-        """t: [B] in [0, 1], returns [B, model_dim]."""
+        """t: [B] in [0, 1], returns [B, model_dim] matching model dtype."""
         half = self.time_emb_dim // 2
+        # Compute sinusoidal features in float32 for numerical precision
         emb = torch.exp(
             torch.arange(half, device=t.device, dtype=torch.float32) *
             (-math.log(10000) / (half - 1))
         )
         emb = t.float().unsqueeze(1) * emb.unsqueeze(0)
         emb = torch.cat([torch.sin(emb), torch.cos(emb)], dim=1)
-        return self.time_mlp(emb.to(t.dtype))
+        # Convert to model dtype before MLP
+        model_dtype = next(self.time_mlp.parameters()).dtype
+        return self.time_mlp(emb.to(dtype=model_dtype))
 
     def forward(self, z, t, cond=None, text_emb=None):
         """Flow matching forward.
@@ -161,7 +164,7 @@ class CompactLatentDiT(nn.Module):
 
         # Time embedding
         t_emb = self._time_embed(t)  # [B, model_dim]
-        t_emb = t_emb.unsqueeze(1).unsqueeze(1).expand(B, S, N, -1)  # [B, S, N, model_dim]
+        t_emb = t_emb.unsqueeze(1).unsqueeze(1).expand(B, S, N, -1)
 
         # Concat token + time → wide input projection
         x = torch.cat([z, t_emb], dim=-1)  # [B, S, N, D + model_dim]

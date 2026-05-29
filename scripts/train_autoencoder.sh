@@ -18,7 +18,7 @@ CUDA_VISIBLE_DEVICES=${GPU_IDS} torchrun --nproc_per_node=${NUM_GPUS} --master_p
     --output_dir ${PROJECT}/ckpts/autoencoder/exp-1 \
     --latent_dim 512 --latent_grid 18 \
     --levels 4 11 17 23 \
-    --decoder_base_dim 256 \
+    --decoder_base_dim 256 --decoder_num_resblocks 1 \
     --latent_noise_std 0.1 --latent_noise_warmup 1000 \
     --lambda_l1 1.0 --lambda_grad 0.1 --lambda_temporal 0.2 --lambda_latent_reg 0.01 \
     --batch_size 3 --accum_steps 4 \

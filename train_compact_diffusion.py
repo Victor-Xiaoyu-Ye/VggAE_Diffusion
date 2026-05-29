@@ -56,6 +56,11 @@ def parse_args():
     p.add_argument('--num_heads', type=int, default=12)
     p.add_argument('--token_dim', type=int, default=2048)
     p.add_argument('--levels', type=int, nargs='+', default=[4, 11, 17, 23])
+    p.add_argument('--decoder_base_dim', type=int, default=256)
+    p.add_argument('--decoder_num_resblocks', type=int, default=1)
+    p.add_argument('--decoder_pixel_shuffle', action='store_true', default=False)
+    p.add_argument('--decoder_temporal_blocks', type=int, default=1)
+    p.add_argument('--decoder_output_depth', action='store_true', default=True)
     p.add_argument('--text_cond', action='store_true')
     p.add_argument('--cfg_dropout', type=float, default=0.1)
 
@@ -73,7 +78,7 @@ def parse_args():
     p.add_argument('--warmup_steps', type=int, default=1000)
     p.add_argument('--ema_decay', type=float, default=0.9999)
     p.add_argument('--max_grad_norm', type=float, default=1.0)
-    p.add_argument('--use_bf16', action='store_true', default=True)
+    p.add_argument('--dtype', type=str, default='bf16', choices=['bf16', 'fp32'])
     p.add_argument('--input_noise', type=float, default=0.0)
 
     # Data loading
@@ -91,6 +96,54 @@ def parse_args():
     return p.parse_args()
 
 
+@torch.no_grad()
+def diffusion_sample(model, flow, decoder, tokenizer, encoder, eval_frames, device,
+                     out_dir, step, use_bf16, num_steps=20):
+    """Generate samples via ODE integration + decode for visual tracking."""
+    import numpy as np
+    from PIL import Image as PImage
+
+    os.makedirs(out_dir, exist_ok=True)
+    model.eval()
+
+    B = 1
+    num_tokens = 18 * 18
+    latent_dim = 512
+
+    # Sample noise in z_g flat space (match model dtype: bf16)
+    model_dtype = next(model.parameters()).dtype
+    z = torch.randn(B, 8, num_tokens, latent_dim, device=device, dtype=model_dtype)
+    dt = 1.0 / num_steps
+
+    for i in range(num_steps):
+        t_val = torch.full((B,), i / num_steps, device=device, dtype=model_dtype)
+        v = model(z, t_val)
+        z = (z + v * dt)
+
+    # Reshape z_flat → z_g grid for decoder (decoder is float32)
+    z_g = z.reshape(B, 8, 18, 18, latent_dim).float()
+    result = decoder(z_g)
+
+    if getattr(decoder, 'output_depth', False):
+        preds, _, _, _ = result
+    else:
+        preds, _ = result
+
+    gen = preds[..., :3].clamp(0, 1)  # [1, S, H, W, 3]
+    orig = eval_frames.to(device).permute(0, 1, 3, 4, 2).clamp(0, 1)
+
+    # Save comparison grid: original top, generated bottom
+    S = gen.shape[1]
+    grid_rows = []
+    for s in range(S):
+        grid_rows.append(torch.cat([orig[0, s], gen[0, s]], dim=1))
+    grid = torch.cat(grid_rows, dim=0)
+    grid_np = (grid.float().cpu().numpy() * 255).astype(np.uint8)
+    PImage.fromarray(grid_np).save(os.path.join(out_dir, f'sample_step{step:06d}.png'))
+
+    model.train()
+
+
 def set_seed(seed):
     torch.manual_seed(seed)
     if torch.cuda.is_available():
@@ -104,7 +157,7 @@ def main():
     device = torch.device(f'cuda:{local_rank}' if torch.cuda.is_available() else 'cpu')
     main_process = is_main_process()
 
-    use_bf16 = args.use_bf16 and torch.cuda.is_bf16_supported()
+    use_bf16 = args.dtype == 'bf16' and torch.cuda.is_bf16_supported()
     dtype = torch.bfloat16 if use_bf16 else torch.float32
 
     if main_process:
@@ -133,9 +186,13 @@ def main():
     ).to(device=device)
 
     decoder = CompactDecoder(
-        latent_dim=args.latent_dim, base_dim=256,
-        output_dim=3, output_depth=True,
+        latent_dim=args.latent_dim, base_dim=args.decoder_base_dim,
+        output_dim=3, output_depth=args.decoder_output_depth,
         img_size=args.target_size, latent_grid=args.latent_grid,
+        num_resblocks=args.decoder_num_resblocks,
+        use_pixel_shuffle=args.decoder_pixel_shuffle,
+        num_temporal_blocks=args.decoder_temporal_blocks,
+        use_checkpoint=False,
     ).to(device=device)
 
     # Load Phase 1 weights
@@ -161,7 +218,7 @@ def main():
         model_dim=args.model_dim, spatial_depth=args.spatial_depth,
         temporal_depth=args.temporal_depth, num_heads=args.num_heads,
         seq_len=args.seq_len, text_cond=args.text_cond,
-    ).to(device=device)
+    ).to(device=device, dtype=dtype)
 
     total_p = sum(p.numel() for p in model.parameters())
     if main_process:
@@ -265,12 +322,8 @@ def main():
                     mask = torch.rand(x1.shape[0], device=device) < args.cfg_dropout
                     text_emb = text_emb * (~mask).view(-1, 1, 1).to(dtype=text_emb.dtype)
 
-            # ---- Flow matching loss ----
-            if use_bf16:
-                with autocast(device_type='cuda', dtype=torch.bfloat16):
-                    loss = flow.compute_loss(x1, text_emb=text_emb)
-            else:
-                loss = flow.compute_loss(x1, text_emb=text_emb)
+            # ---- Flow matching loss (model is bf16, no autocast needed) ----
+            loss = flow.compute_loss(x1, text_emb=text_emb)
 
             # Decoder auxiliary loss
             dec_loss = x1.new_zeros(())
@@ -278,12 +331,11 @@ def main():
                 with torch.no_grad():
                     flow_out_full = flow.compute_loss(x1, text_emb=text_emb, return_outputs=True)
                     x1_pred = flow_out_full['x1_pred']  # predicted clean z_g
-                # Decode predicted z_g
-                z_g_pred = x1_pred.reshape(*z_g.shape)
+                # Decode predicted z_g (decoder is float32)
+                z_g_pred = x1_pred.reshape(*z_g.shape).float()
                 with torch.no_grad():
-                    with autocast(device_type='cuda', dtype=torch.bfloat16):
-                        result = decoder(z_g_pred.float())
-                    if decoder.module.output_depth if use_ddp else decoder.output_depth:
+                    result = decoder(z_g_pred)
+                    if decoder.output_depth:
                         preds, _, _, _ = result
                     else:
                         preds, _ = result
@@ -358,6 +410,20 @@ def main():
                 'args': vars(args),
             }, save_path)
             print(f'  Saved: {save_path}')
+
+            # ---- Eval sampling ----
+            if eval_frames is not None:
+                try:
+                    ema_state = {k: v.clone() for k, v in base_model.state_dict().items()}
+                    base_model.load_state_dict({k: v for k, v in ema.state_dict().items()})
+                    diffusion_sample(base_model, flow, decoder, tokenizer, encoder,
+                                    eval_frames, device,
+                                    os.path.join(args.output_dir, 'samples'),
+                                    global_step, use_bf16)
+                    base_model.load_state_dict(ema_state)
+                    del ema_state
+                except Exception as e:
+                    print(f'  [WARN] Eval sampling failed: {e}')
 
     if main_process:
         base_model = model.module if use_ddp else model
