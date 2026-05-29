@@ -37,3 +37,5 @@ Wan2.1/checkpoints/
 # Annotation index (large JSON)
 ckpts/annotation_index.json
 ckpts/
+
+outputs/
