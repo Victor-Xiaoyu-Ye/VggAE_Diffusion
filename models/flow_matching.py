@@ -59,8 +59,9 @@ class OTCFM:
         # Sample noise
         x0 = torch.randn_like(x1)
 
-        # Sample time ~ LogitNormal(0, 1)
-        t = logit_normal_sampling((x1.shape[0],), device=x1.device, m=0.0, s=1.0)
+        # Sample time ~ uniform + small bias toward [0,1] extremes
+        # LogitNormal(0,1) under-samples t near 1, causing OOD at late sampling steps
+        t = torch.rand((x1.shape[0],), device=x1.device)
         t = t.to(dtype=x1.dtype)
         # Reshape t to broadcast over all dims except batch
         t_expand = t.view(-1, *([1] * (x1.dim() - 1)))

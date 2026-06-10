@@ -44,6 +44,8 @@ def parse_args():
     p.add_argument('--encoder_ckpt', type=str, required=True)
     p.add_argument('--autoencoder_ckpt', type=str, required=True,
                    help='Phase 1 checkpoint (contains tokenizer + decoder)')
+    p.add_argument('--i0_decoder_ckpt', type=str, default='',
+                   help='Optional I_0 conditional decoder checkpoint for aux loss')
     p.add_argument('--output_dir', type=str, default='ckpts/diffusion_compact/exp-1')
     p.add_argument('--resume', type=str, default='')
 
@@ -80,6 +82,8 @@ def parse_args():
     p.add_argument('--max_grad_norm', type=float, default=1.0)
     p.add_argument('--dtype', type=str, default='bf16', choices=['bf16', 'fp32'])
     p.add_argument('--input_noise', type=float, default=0.0)
+    p.add_argument('--rescale', action='store_true', default=True,
+                   help='Rescale z_g to std≈1 for stable flow matching')
 
     # Data loading
     p.add_argument('--seq_len', type=int, default=8)
@@ -98,7 +102,8 @@ def parse_args():
 
 @torch.no_grad()
 def diffusion_sample(model, flow, decoder, tokenizer, encoder, eval_frames, device,
-                     out_dir, step, use_bf16, num_steps=20):
+                     out_dir, step, use_bf16, latent_scale=1.0, num_steps=20,
+                     i0_app_cnn=None):
     """Generate samples via ODE integration + decode for visual tracking."""
     import numpy as np
     from PIL import Image as PImage
@@ -120,9 +125,17 @@ def diffusion_sample(model, flow, decoder, tokenizer, encoder, eval_frames, devi
         v = model(z, t_val)
         z = (z + v * dt)
 
-    # Reshape z_flat → z_g grid for decoder (decoder is float32)
+    # Undo latent rescale before decoding
+    z = z / latent_scale
     z_g = z.reshape(B, 8, 18, 18, latent_dim).float()
-    result = decoder(z_g)
+
+    if i0_app_cnn is not None:
+        # I_0 conditional decoding: use first frame as appearance reference
+        I_0 = eval_frames[:, 0:1].to(device)  # [1, 1, 3, H, W]
+        I_0_feats = i0_app_cnn(I_0[:, 0].to(dtype=torch.bfloat16))
+        result = decoder(z_g, I_0_feats)
+    else:
+        result = decoder(z_g)
 
     if getattr(decoder, 'output_depth', False):
         preds, _, _, _ = result
@@ -132,16 +145,21 @@ def diffusion_sample(model, flow, decoder, tokenizer, encoder, eval_frames, devi
     gen = preds[..., :3].clamp(0, 1)  # [1, S, H, W, 3]
     orig = eval_frames.to(device).permute(0, 1, 3, 4, 2).clamp(0, 1)
 
-    # Save comparison grid: original top, generated bottom
-    S = gen.shape[1]
-    grid_rows = []
+    # Metrics
+    mse = F.mse_loss(gen.float(), orig.float()).item()
+    psnr = float(-10 * np.log10(mse) if mse > 0 else 100.0)
+    z_std = z.float().std().item()
+
+    # Save comparison grid
+    S = gen.shape[1]; grid_rows = []
     for s in range(S):
-        grid_rows.append(torch.cat([orig[0, s], gen[0, s]], dim=1))
+        grid_rows.append(torch.cat([orig[0, s].cpu(), gen[0, s].cpu()], dim=1))
     grid = torch.cat(grid_rows, dim=0)
     grid_np = (grid.float().cpu().numpy() * 255).astype(np.uint8)
     PImage.fromarray(grid_np).save(os.path.join(out_dir, f'sample_step{step:06d}.png'))
 
     model.train()
+    return {'psnr': psnr, 'z_std': z_std}
 
 
 def set_seed(seed):
@@ -198,13 +216,38 @@ def main():
     # Load Phase 1 weights
     ae_ckpt = torch.load(args.autoencoder_ckpt, map_location='cpu')
     tokenizer.load_state_dict(ae_ckpt['tokenizer'])
-    decoder.load_state_dict(ae_ckpt['decoder'])
+    decoder.load_state_dict(ae_ckpt['decoder'], strict=False)
+    # Match checkpoint's actual depth_head status
+    has_depth = any('depth_head' in k for k in ae_ckpt['decoder'].keys())
+    decoder.output_depth = has_depth
+    if not has_depth and hasattr(decoder, 'depth_head'):
+        del decoder.depth_head
     tokenizer.eval()
     decoder.eval()
     for p in tokenizer.parameters():
         p.requires_grad_(False)
     for p in decoder.parameters():
         p.requires_grad_(False)
+
+    # Optional I_0 conditional decoder for sampling
+    i0_decoder = None; i0_app_cnn = None
+    if args.i0_decoder_ckpt and os.path.exists(args.i0_decoder_ckpt):
+        if main_process: print(f'  Loading I_0 conditional decoder from {args.i0_decoder_ckpt}')
+        from models.i0_decoder import I0ConditionalDecoder
+        from models.appearance_cnn import AppearanceCNN
+        i0_decoder = I0ConditionalDecoder(
+            latent_dim=args.latent_dim, base_dim=args.decoder_base_dim, img_size=args.target_size,
+            latent_grid=args.latent_grid, num_resblocks=args.decoder_num_resblocks,
+            use_checkpoint=False,
+        ).to(device=device)
+        i0_app_cnn = AppearanceCNN().to(device=device, dtype=torch.bfloat16)
+        i0_ckpt = torch.load(args.i0_decoder_ckpt, map_location='cpu')
+        i0_decoder.load_state_dict(i0_ckpt['decoder'])
+        i0_app_cnn.load_state_dict(i0_ckpt['app_cnn'])
+        i0_decoder.eval(); i0_app_cnn.eval()
+        for p in i0_decoder.parameters(): p.requires_grad_(False)
+        for p in i0_app_cnn.parameters(): p.requires_grad_(False)
+        if main_process: print(f'  I_0 decoder loaded.')
 
     if main_process:
         print(f'  Tokenizer + Decoder frozen.')
@@ -271,8 +314,12 @@ def main():
         ckpt = torch.load(args.resume, map_location='cpu')
         model.load_state_dict(ckpt['model'])
         ema.load_state_dict(ckpt['ema']); ema = ema.to(device)
-        optimizer.load_state_dict(ckpt['optimizer'])
-        scheduler.load_state_dict(ckpt['scheduler'])
+        if 'optimizer' in ckpt:
+            optimizer.load_state_dict(ckpt['optimizer'])
+            scheduler.load_state_dict(ckpt['scheduler'])
+            print(f'  Restored optimizer/scheduler state')
+        else:
+            print(f'  Optimizer state not in checkpoint, starting fresh optimizer')
         global_step = ckpt.get('global_step', 0)
         start_epoch = ckpt.get('epoch', 0) + 1
 
@@ -284,6 +331,23 @@ def main():
         flow.model = model
 
     # Eval frames
+    # Compute rescale factor from first few batches
+    latent_scale = 1.0
+    if args.rescale:
+        if main_process: print('  Computing latent rescale factor...')
+        z_stds = []
+        with torch.no_grad():
+            for i, eb in enumerate(dataloader):
+                if i >= 10: break
+                frames = eb['frames'].to(device=device, dtype=torch.bfloat16)
+                tokens_list, psi = encoder(frames)
+                tokens_list = strip_special_tokens(tokens_list, psi)
+                _, z_g_flat = tokenizer(tokens_list)
+                z_stds.append(z_g_flat.float().std().item())
+        latent_scale = 1.0 / (sum(z_stds) / len(z_stds))
+        if main_process:
+            print(f'  Latent scale: {latent_scale:.2f} (z_g std={1.0/latent_scale:.4f} → 1.0)')
+
     eval_frames = None
     for eb in dataloader:
         eval_frames = eb['frames'][:1].clone()
@@ -312,7 +376,7 @@ def main():
                 tokens_list, psi = encoder(frames)
                 tokens_list = strip_special_tokens(tokens_list, psi)
                 z_g, z_g_flat = tokenizer(tokens_list)
-                x1 = z_g_flat.to(dtype=dtype)  # [B, S, N, D] target for flow matching
+                x1 = (z_g_flat * latent_scale).to(dtype=dtype)  # rescale to std≈1
 
             # Text conditioning
             text_emb = None
@@ -332,7 +396,7 @@ def main():
                     flow_out_full = flow.compute_loss(x1, text_emb=text_emb, return_outputs=True)
                     x1_pred = flow_out_full['x1_pred']  # predicted clean z_g
                 # Decode predicted z_g (decoder is float32)
-                z_g_pred = x1_pred.reshape(*z_g.shape).float()
+                z_g_pred = (x1_pred / latent_scale).reshape(*z_g.shape).float()
                 with torch.no_grad():
                     result = decoder(z_g_pred)
                     if decoder.output_depth:
@@ -416,12 +480,18 @@ def main():
                 try:
                     ema_state = {k: v.clone() for k, v in base_model.state_dict().items()}
                     base_model.load_state_dict({k: v for k, v in ema.state_dict().items()})
-                    diffusion_sample(base_model, flow, decoder, tokenizer, encoder,
-                                    eval_frames, device,
+                    metrics = diffusion_sample(base_model, flow,
+                                    i0_decoder if i0_decoder is not None else decoder,
+                                    tokenizer, encoder, eval_frames, device,
                                     os.path.join(args.output_dir, 'samples'),
-                                    global_step, use_bf16)
+                                    global_step, use_bf16, latent_scale,
+                                    i0_app_cnn=i0_app_cnn)
                     base_model.load_state_dict(ema_state)
                     del ema_state
+                    if metrics and writer:
+                        writer.add_scalar('eval/psnr', metrics['psnr'], global_step)
+                        writer.add_scalar('eval/z_std', metrics['z_std'], global_step)
+                        print(f'  Eval: PSNR={metrics["psnr"]:.1f} dB, z_std={metrics["z_std"]:.4f}')
                 except Exception as e:
                     print(f'  [WARN] Eval sampling failed: {e}')
 

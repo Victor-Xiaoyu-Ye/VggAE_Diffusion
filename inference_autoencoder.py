@@ -113,7 +113,7 @@ def load_model(args, device):
         decoder = build_v2_decoder(base_dim, args)
     decoder = decoder.to(device=device)
 
-    decoder.load_state_dict(dec_state, strict=True)
+    decoder.load_state_dict(dec_state, strict=False)
     decoder.eval()
     for p in decoder.parameters():
         p.requires_grad_(False)
