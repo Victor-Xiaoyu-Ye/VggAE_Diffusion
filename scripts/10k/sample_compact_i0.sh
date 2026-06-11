@@ -2,21 +2,37 @@
 set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-PROJECT=${PROJECT:-$(cd "${SCRIPT_DIR}/../.." && pwd)}
-I0_PATH=${I0_PATH:?Set I0_PATH to a reference image or video}
-ENCODER_CKPT=${ENCODER_CKPT:?Set ENCODER_CKPT to StreamVGGT weights}
-AUTOENCODER_CKPT=${AUTOENCODER_CKPT:?Set AUTOENCODER_CKPT}
-I0_DECODER_CKPT=${I0_DECODER_CKPT:?Set I0_DECODER_CKPT}
-DIFFUSION_CKPT=${DIFFUSION_CKPT:?Set DIFFUSION_CKPT}
-OUT_DIR=${OUT_DIR:-${PROJECT}/outputs/compact_i0}
-GPU_ID=${GPU_ID:-0}
-SEED=${SEED:-42}
+source "${SCRIPT_DIR}/../spatialvid_config.sh"
+source "${SCRIPT_DIR}/../lib/spatialvid.sh"
 
-CUDA_VISIBLE_DEVICES="${GPU_ID}" python3 "${PROJECT}/sample_compact_i0.py" \
-  --i0_path "${I0_PATH}" \
-  --encoder_ckpt "${ENCODER_CKPT}" \
+# ----------------------------- editable settings -----------------------------
+REFERENCE_PATH="${I0_PATH}"
+AUTOENCODER_CKPT="${GEOMETRY_AE_CKPT}"
+I0_CKPT="${I0_DECODER_CKPT}"
+GENERATOR_CKPT="${DIFFUSION_CKPT}"
+OUT_DIR="${RUN_ROOT}/samples/compact_i0"
+DEVICE_ID=0
+SEED=42
+NUM_STEPS=50
+SOLVER="midpoint"
+FPS=8
+# -----------------------------------------------------------------------------
+
+validate_model_config
+require_file "${REFERENCE_PATH}" "reference image or video"
+require_file "${AUTOENCODER_CKPT}" "geometry autoencoder checkpoint"
+require_file "${I0_CKPT}" "I0 decoder checkpoint"
+require_file "${GENERATOR_CKPT}" "diffusion checkpoint"
+
+CUDA_VISIBLE_DEVICES="${DEVICE_ID}" python3 \
+  "${PROJECT}/sample_compact_i0.py" \
+  --i0_path "${REFERENCE_PATH}" \
+  --encoder_ckpt "${STREAMVGGT_CKPT}" \
   --autoencoder_ckpt "${AUTOENCODER_CKPT}" \
-  --i0_decoder_ckpt "${I0_DECODER_CKPT}" \
-  --diffusion_ckpt "${DIFFUSION_CKPT}" \
+  --i0_decoder_ckpt "${I0_CKPT}" \
+  --diffusion_ckpt "${GENERATOR_CKPT}" \
   --out_dir "${OUT_DIR}" \
-  --num_steps 50 --solver midpoint --seed "${SEED}"
+  --num_steps "${NUM_STEPS}" \
+  --solver "${SOLVER}" \
+  --seed "${SEED}" \
+  --fps "${FPS}"

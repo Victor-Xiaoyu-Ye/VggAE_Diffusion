@@ -3,6 +3,7 @@
 
 import argparse
 import csv
+import glob
 import json
 import os
 
@@ -12,7 +13,17 @@ def parse_args():
     parser.add_argument("--csv", required=True)
     parser.add_argument("--output_dir", required=True)
     parser.add_argument("--num_shards", type=int, default=256)
+    parser.add_argument("--force", action="store_true")
     return parser.parse_args()
+
+
+def source_signature(path):
+    stat = os.stat(path)
+    return {
+        "path": os.path.abspath(path),
+        "size": stat.st_size,
+        "mtime_ns": stat.st_mtime_ns,
+    }
 
 
 def main():
@@ -25,10 +36,26 @@ def main():
         os.path.join(args.output_dir, f"part-{index:05d}.csv")
         for index in range(args.num_shards)
     ]
-    existing = [path for path in final_paths if os.path.exists(path)]
-    if existing:
-        raise FileExistsError(
-            f"Refusing to overwrite {len(existing)} existing CSV shards")
+    counts_path = os.path.join(args.output_dir, "counts.json")
+    expected = {
+        "source": source_signature(args.csv),
+        "num_shards": args.num_shards,
+    }
+    if not args.force and os.path.exists(counts_path):
+        try:
+            with open(counts_path) as counts_file:
+                existing_metadata = json.load(counts_file)
+            if (
+                    existing_metadata.get("configuration") == expected
+                    and all(os.path.exists(path) for path in final_paths)):
+                print(
+                    f"Reusing {args.num_shards} metadata shards in "
+                    f"{args.output_dir}")
+                return
+        except (OSError, json.JSONDecodeError):
+            pass
+    for stale_path in glob.glob(os.path.join(args.output_dir, "part-*.csv")):
+        os.unlink(stale_path)
 
     temp_paths = [path + ".tmp" for path in final_paths]
     handles = [open(path, "w", newline="") for path in temp_paths]
@@ -54,13 +81,13 @@ def main():
 
     for temp_path, final_path in zip(temp_paths, final_paths):
         os.replace(temp_path, final_path)
-    with open(os.path.join(args.output_dir, "counts.json"), "w") as output:
+    with open(counts_path + ".tmp", "w") as output:
         json.dump({
-            "source_csv": os.path.abspath(args.csv),
-            "num_shards": args.num_shards,
+            "configuration": expected,
             "counts": counts,
             "total": sum(counts),
         }, output, indent=2)
+    os.replace(counts_path + ".tmp", counts_path)
     print(
         f"Wrote {args.num_shards} metadata shards with "
         f"{sum(counts)} total rows to {args.output_dir}")
