@@ -2,20 +2,35 @@
 set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-PROJECT=${PROJECT:-$(cd "${SCRIPT_DIR}/../.." && pwd)}
-I0_PATH=${I0_PATH:?Set I0_PATH to a reference image or video}
-ENCODER_CKPT=${ENCODER_CKPT:?Set ENCODER_CKPT to StreamVGGT weights}
-AUTOENCODER_CKPT=${AUTOENCODER_CKPT:?Set AUTOENCODER_CKPT from stage 00}
-I0_DECODER_CKPT=${I0_DECODER_CKPT:?Set I0_DECODER_CKPT from stage 01}
-DIFFUSION_CKPT=${DIFFUSION_CKPT:?Set DIFFUSION_CKPT from stage 05}
-OUT_DIR=${OUT_DIR:-${PROJECT}/outputs/scale_compact_i0}
-SEED=${SEED:-42}
+source "${SCRIPT_DIR}/../spatialvid_config.sh"
+source "${SCRIPT_DIR}/../lib/spatialvid.sh"
+
+# ----------------------------- editable settings -----------------------------
+REFERENCE_PATH="${I0_PATH}"
+AUTOENCODER_CKPT="${SCALE_GEOMETRY_AE_CKPT}"
+I0_CKPT="${SCALE_I0_DECODER_CKPT}"
+GENERATOR_CKPT="${SCALE_DIFFUSION_CKPT}"
+OUT_DIR="${SCALE_ROOT}/samples"
+SEED=42
+NUM_STEPS=50
+SOLVER="midpoint"
+FPS=8
+# -----------------------------------------------------------------------------
+
+validate_model_config
+require_file "${REFERENCE_PATH}" "reference image or video"
+require_file "${AUTOENCODER_CKPT}" "scale geometry autoencoder checkpoint"
+require_file "${I0_CKPT}" "scale I0 decoder checkpoint"
+require_file "${GENERATOR_CKPT}" "scale diffusion checkpoint"
 
 python3 "${PROJECT}/sample_compact_i0.py" \
-  --i0_path "${I0_PATH}" \
-  --encoder_ckpt "${ENCODER_CKPT}" \
+  --i0_path "${REFERENCE_PATH}" \
+  --encoder_ckpt "${STREAMVGGT_CKPT}" \
   --autoencoder_ckpt "${AUTOENCODER_CKPT}" \
-  --i0_decoder_ckpt "${I0_DECODER_CKPT}" \
-  --diffusion_ckpt "${DIFFUSION_CKPT}" \
+  --i0_decoder_ckpt "${I0_CKPT}" \
+  --diffusion_ckpt "${GENERATOR_CKPT}" \
   --out_dir "${OUT_DIR}" \
-  --num_steps 50 --solver midpoint --fps 8 --seed "${SEED}"
+  --num_steps "${NUM_STEPS}" \
+  --solver "${SOLVER}" \
+  --fps "${FPS}" \
+  --seed "${SEED}"

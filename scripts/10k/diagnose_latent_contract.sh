@@ -2,23 +2,36 @@
 set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-PROJECT=${PROJECT:-$(cd "${SCRIPT_DIR}/../.." && pwd)}
-CSV=${CSV:?Set CSV to representative evaluation metadata}
-VIDEO_ROOT=${VIDEO_ROOT:?Set VIDEO_ROOT to the video root}
-ENCODER_CKPT=${ENCODER_CKPT:?Set ENCODER_CKPT to StreamVGGT weights}
-AUTOENCODER_CKPT=${AUTOENCODER_CKPT:?Set AUTOENCODER_CKPT}
-OUTPUT=${OUTPUT:-${PROJECT}/outputs/diagnostics/latent_contract.json}
-NUM_VIDEOS=${NUM_VIDEOS:-32}
-GPU_ID=${GPU_ID:-0}
+source "${SCRIPT_DIR}/../spatialvid_config.sh"
+source "${SCRIPT_DIR}/../lib/spatialvid.sh"
 
-CUDA_VISIBLE_DEVICES="${GPU_ID}" python3 \
+# ----------------------------- editable settings -----------------------------
+OUTPUT="${RUN_ROOT}/diagnostics/latent_contract.json"
+NUM_VIDEOS=32
+DEVICE_ID=0
+SEQ_LEN=8
+TARGET_SIZE=518
+MAX_FRAME_SPAN=32
+LATENT_DIM=512
+LATENT_GRID=18
+NUM_WORKERS=2
+# -----------------------------------------------------------------------------
+
+ensure_spatialvid_splits
+require_file "${GEOMETRY_AE_CKPT}" "geometry autoencoder checkpoint"
+
+CUDA_VISIBLE_DEVICES="${DEVICE_ID}" python3 \
   "${PROJECT}/diagnose_latent_contract.py" \
-  --csv "${CSV}" \
-  --video_root "${VIDEO_ROOT}" \
-  --encoder_ckpt "${ENCODER_CKPT}" \
-  --autoencoder_ckpt "${AUTOENCODER_CKPT}" \
+  --csv "${SPATIALVID_EVAL_CSV}" \
+  --video_root "${SPATIALVID_VIDEO_ROOT}" \
+  --encoder_ckpt "${STREAMVGGT_CKPT}" \
+  --autoencoder_ckpt "${GEOMETRY_AE_CKPT}" \
   --output "${OUTPUT}" \
   --num_videos "${NUM_VIDEOS}" \
-  --seq_len 8 --target_size 518 --max_frame_span 32 \
-  --latent_dim 512 --latent_grid 18 \
-  --levels 4 11 17 23 --num_workers 2
+  --seq_len "${SEQ_LEN}" \
+  --target_size "${TARGET_SIZE}" \
+  --max_frame_span "${MAX_FRAME_SPAN}" \
+  --latent_dim "${LATENT_DIM}" \
+  --latent_grid "${LATENT_GRID}" \
+  --levels 4 11 17 23 \
+  --num_workers "${NUM_WORKERS}"

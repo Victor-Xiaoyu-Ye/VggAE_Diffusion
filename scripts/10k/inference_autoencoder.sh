@@ -2,23 +2,34 @@
 set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-PROJECT=${PROJECT:-$(cd "${SCRIPT_DIR}/../.." && pwd)}
-CSV=${CSV:?Set CSV to an evaluation metadata CSV}
-VIDEO_ROOT=${VIDEO_ROOT:?Set VIDEO_ROOT to the video root}
-ENCODER_CKPT=${ENCODER_CKPT:?Set ENCODER_CKPT to StreamVGGT weights}
-AUTOENCODER_CKPT=${AUTOENCODER_CKPT:?Set AUTOENCODER_CKPT}
-OUTPUT_DIR=${OUTPUT_DIR:-${PROJECT}/outputs/autoencoder_inference}
-NUM_VIDEOS=${NUM_VIDEOS:-20}
-GPU_ID=${GPU_ID:-0}
+source "${SCRIPT_DIR}/../spatialvid_config.sh"
+source "${SCRIPT_DIR}/../lib/spatialvid.sh"
 
-CUDA_VISIBLE_DEVICES="${GPU_ID}" python3 "${PROJECT}/inference_autoencoder.py" \
-  --checkpoint "${AUTOENCODER_CKPT}" \
-  --encoder_ckpt "${ENCODER_CKPT}" \
-  --csv "${CSV}" \
-  --video_root "${VIDEO_ROOT}" \
+# ----------------------------- editable settings -----------------------------
+CHECKPOINT="${GEOMETRY_AE_CKPT}"
+OUTPUT_DIR="${RUN_ROOT}/evaluation/geometry_autoencoder"
+NUM_VIDEOS=20
+DEVICE_ID=0
+SEQ_LEN=8
+TARGET_SIZE=518
+LATENT_DIM=512
+LATENT_GRID=18
+# -----------------------------------------------------------------------------
+
+ensure_spatialvid_splits
+require_file "${CHECKPOINT}" "geometry autoencoder checkpoint"
+
+CUDA_VISIBLE_DEVICES="${DEVICE_ID}" python3 \
+  "${PROJECT}/inference_autoencoder.py" \
+  --checkpoint "${CHECKPOINT}" \
+  --encoder_ckpt "${STREAMVGGT_CKPT}" \
+  --csv "${SPATIALVID_EVAL_CSV}" \
+  --video_root "${SPATIALVID_VIDEO_ROOT}" \
   --output_dir "${OUTPUT_DIR}" \
   --num_videos "${NUM_VIDEOS}" \
-  --seq_len 8 --target_size 518 \
-  --latent_dim 512 --latent_grid 18 \
+  --seq_len "${SEQ_LEN}" \
+  --target_size "${TARGET_SIZE}" \
+  --latent_dim "${LATENT_DIM}" \
+  --latent_grid "${LATENT_GRID}" \
   --levels 4 11 17 23 \
   --compute_psnr

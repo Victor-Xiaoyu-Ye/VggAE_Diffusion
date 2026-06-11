@@ -6,6 +6,18 @@ flow matching.
 
 ## Active Workflows
 
+Before launching, edit the cluster paths once in:
+
+```text
+scripts/spatialvid_config.sh
+```
+
+The active scripts automatically create deterministic, non-overlapping
+SpatialVID CSV files under `RUN_ROOT/metadata/`. You do not need to extract
+overfit or validation CSV files manually. Experiment hyperparameters are
+grouped at the top of each `.sh`; only distributed launch settings are read
+from environment variables.
+
 ### 10K experiments
 
 Use [`scripts/10k/`](scripts/10k/README.md) to reproduce and validate the
@@ -16,6 +28,13 @@ current online pipeline:
 3. Overfit the decoder and diffusion model on a tiny set.
 4. Train I0-conditioned compact diffusion.
 5. Sample and evaluate.
+
+Run all bring-up gates and write one result report with:
+
+```bash
+bash scripts/10k/run_validation_suite.sh
+bash scripts/10k/collect_results.sh
+```
 
 This path decodes video and runs StreamVGGT inside the training loop. It is not
 intended for the 10M run.

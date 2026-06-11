@@ -5,27 +5,24 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source "${SCRIPT_DIR}/../spatialvid_config.sh"
 source "${SCRIPT_DIR}/../lib/spatialvid.sh"
 
-# Cache the full training split. Submit this script as an array job.
+# Cache the held-out evaluation split once.
 
 # ----------------------------- editable settings -----------------------------
 AUTOENCODER_CKPT="${SCALE_GEOMETRY_AE_CKPT}"
-INDEX_NUM_SHARDS=256
-SAMPLES_PER_TAR=512
+SAMPLES_PER_TAR=128
 BATCH_SIZE=1
-NUM_WORKERS=8
+NUM_WORKERS=4
 # -----------------------------------------------------------------------------
 
-INDEX_SHARD_ID=${INDEX_SHARD_ID:?Cluster array must set INDEX_SHARD_ID}
 NUM_GPUS=${NUM_GPUS:-8}
 NNODES=${NNODES:-1}
 NODE_RANK=${NODE_RANK:-0}
 MASTER_ADDR=${MASTER_ADDR:-127.0.0.1}
-MASTER_PORT=${MASTER_PORT:-29602}
+MASTER_PORT=${MASTER_PORT:-29603}
 
 require_file "${AUTOENCODER_CKPT}" "scale geometry autoencoder checkpoint"
-printf -v CSV_PART "part-%05d.csv" "${INDEX_SHARD_ID}"
-CSV_PATH="${SCALE_CSV_SHARD_ROOT}/train/${CSV_PART}"
-require_file "${CSV_PATH}" "training metadata shard"
+CSV_PATH="${SCALE_CSV_SHARD_ROOT}/eval/part-00000.csv"
+require_file "${CSV_PATH}" "evaluation metadata shard"
 
 torchrun --nnodes="${NNODES}" --node_rank="${NODE_RANK}" \
   --nproc_per_node="${NUM_GPUS}" --master_addr="${MASTER_ADDR}" \
@@ -35,9 +32,8 @@ torchrun --nnodes="${NNODES}" --node_rank="${NODE_RANK}" \
   --video_root "${SPATIALVID_VIDEO_ROOT}" \
   --encoder_ckpt "${STREAMVGGT_CKPT}" \
   --autoencoder_ckpt "${AUTOENCODER_CKPT}" \
-  --output_dir "${SCALE_TRAIN_CACHE_DIR}" \
-  --partition_id "${INDEX_SHARD_ID}" \
-  --num_partitions "${INDEX_NUM_SHARDS}" \
+  --output_dir "${SCALE_EVAL_CACHE_DIR}" \
+  --partition_id 0 --num_partitions 1 \
   --samples_per_tar "${SAMPLES_PER_TAR}" \
   --latent_dim 512 --latent_grid 18 \
   --levels 4 11 17 23 \
