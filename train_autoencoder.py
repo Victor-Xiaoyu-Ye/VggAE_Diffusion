@@ -17,8 +17,10 @@ The resulting z_g should be:
 """
 
 import argparse
-import os, sys, time, math
+import os
+import random
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -31,8 +33,16 @@ from streamvggt.models.streamvggt import StreamVGGT
 from models.generative_tokenizer import GenerativeTokenizer
 from models.compact_decoder import CompactDecoder
 from data.video_dataset import SpatialVidDataset, collate_fn
-from data.token_utils import DPT_LEVELS, DEFAULT_BOUNDARY_LEVEL, strip_special_tokens
-from utils.training import EMA, build_optimizer, build_scheduler
+from data.token_utils import strip_special_tokens
+from utils.training import (
+    EMA,
+    append_metrics,
+    atomic_torch_save,
+    build_optimizer,
+    build_scheduler,
+    capture_rng_state,
+    restore_rng_state,
+)
 from utils.distributed import setup_ddp, is_main_process
 
 # Lazy import for LPIPS
@@ -57,6 +67,8 @@ def parse_args():
     p.add_argument('--video_root', type=str, required=True)
     p.add_argument('--max_videos', type=int, default=0)
     p.add_argument('--annotation_index', type=str, default='')
+    p.add_argument('--eval_csv', type=str, default='')
+    p.add_argument('--eval_video_root', type=str, default='')
 
     # Checkpoints
     p.add_argument('--encoder_ckpt', type=str, required=True)
@@ -80,9 +92,6 @@ def parse_args():
                    help='Noise std added to z_g during training for decoder robustness')
     p.add_argument('--latent_noise_warmup', type=int, default=1000,
                    help='Linearly ramp noise from 0→latent_noise_std over N steps')
-    p.add_argument('--latent_dropout_prob', type=float, default=0.15,
-                   help='Probability of dropping a level during tokenizer training')
-
     # Loss weights
     p.add_argument('--lambda_l1', type=float, default=1.0)
     p.add_argument('--lambda_lpips', type=float, default=1.0,
@@ -90,7 +99,7 @@ def parse_args():
     p.add_argument('--lambda_grad', type=float, default=0.05)
     p.add_argument('--lambda_temporal', type=float, default=0.05)
     p.add_argument('--lambda_latent_reg', type=float, default=0.01,
-                   help='Light KL-style regularization on z_g to keep it near N(0,1)')
+                   help='Aggregate channel mean/std regularization toward N(0,1)')
 
     # Training
     p.add_argument('--batch_size', type=int, default=10)
@@ -107,9 +116,12 @@ def parse_args():
     p.add_argument('--seq_len', type=int, default=8)
     p.add_argument('--target_size', type=int, default=518)
     p.add_argument('--num_frames_per_video', type=int, default=8)
+    p.add_argument('--max_frame_span', type=int, default=0,
+                   help='Sample frames within at most this many source frames')
     p.add_argument('--num_workers', type=int, default=4)
 
     # Eval
+    p.add_argument('--log_every', type=int, default=100)
     p.add_argument('--eval_every', type=int, default=5)
     p.add_argument('--save_every', type=int, default=5)
     p.add_argument('--seed', type=int, default=42)
@@ -119,12 +131,17 @@ def parse_args():
 
 
 @torch.no_grad()
-def eval_samples(tokenizer, decoder, encoder, eval_frames, device, out_dir, epoch, use_bf16):
+def eval_samples(tokenizer, decoder, encoder, eval_frames, device, out_dir,
+                 epoch, use_bf16, eval_depth=None, eval_depth_valid=None):
     """Save reconstruction comparison images for visual progress tracking."""
     import numpy as np
     from PIL import Image as PImage
 
     os.makedirs(out_dir, exist_ok=True)
+    tokenizer_was_training = tokenizer.training
+    decoder_was_training = decoder.training
+    tokenizer.eval()
+    decoder.eval()
 
     frames = eval_frames.to(device=device, dtype=torch.bfloat16)
     tokens_list, psi = encoder(frames)
@@ -138,8 +155,9 @@ def eval_samples(tokenizer, decoder, encoder, eval_frames, device, out_dir, epoc
     else:
         result = decoder(z_g)
 
+    pred_depth = None
     if decoder.output_depth:
-        preds, _, _, _ = result
+        preds, pred_depth, _, _ = result
     else:
         preds, _ = result
 
@@ -164,10 +182,46 @@ def eval_samples(tokenizer, decoder, encoder, eval_frames, device, out_dir, epoc
     # Compute PSNR
     mse = F.mse_loss(recon, orig).item()
     psnr = -10 * np.log10(mse) if mse > 0 else float('inf')
-    print(f'  Eval PSNR: {psnr:.2f} dB')
+    l1 = F.l1_loss(recon, orig).item()
+    temporal = temporal_consistency_loss(
+        recon.permute(0, 1, 4, 2, 3),
+        orig.permute(0, 1, 4, 2, 3),
+    ).item()
+    metrics = {"psnr": psnr, "l1": l1, "temporal": temporal}
+    try:
+        lpips_fn = get_lpips(device)
+        recon_nchw = recon.permute(0, 1, 4, 2, 3).reshape(
+            -1, 3, recon.shape[2], recon.shape[3])
+        orig_nchw = orig.permute(0, 1, 4, 2, 3).reshape(
+            -1, 3, orig.shape[2], orig.shape[3])
+        metrics["lpips"] = lpips_fn(
+            recon_nchw * 2 - 1, orig_nchw * 2 - 1).mean().item()
+    except Exception:
+        pass
+    if pred_depth is not None and eval_depth is not None:
+        target_depth = eval_depth.to(device=device)
+        target_depth, depth_mask = normalize_relative_depth(target_depth)
+        if eval_depth_valid is not None:
+            depth_mask = depth_mask & eval_depth_valid.to(
+                device=device).view(-1, 1, 1, 1)
+        if depth_mask.any():
+            metrics["depth_l1"] = F.l1_loss(
+                pred_depth[..., 0].float()[depth_mask],
+                target_depth[depth_mask],
+            ).item()
+    if tokenizer_was_training:
+        tokenizer.train()
+    if decoder_was_training:
+        decoder.train()
+    print(
+        f'  Eval PSNR: {psnr:.2f} dB | '
+        f'L1: {l1:.5f} | temporal: {temporal:.5f}')
+    return metrics
 
 
 def set_seed(seed):
+    random.seed(seed)
+    np.random.seed(seed)
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
@@ -192,12 +246,77 @@ def temporal_consistency_loss(pred, target):
 
 
 def latent_regularization(z_g):
-    """Light regularization to keep z_g near N(0,1)."""
-    return z_g.pow(2).mean()  # encourages zero-mean, unit-variance
+    """Match aggregate latent channels to zero mean and unit variance."""
+    values = z_g.float().reshape(-1, z_g.shape[-1])
+    mean = values.mean(dim=0)
+    std = values.std(dim=0, unbiased=False)
+    return mean.square().mean() + (std - 1).square().mean()
+
+
+def validate_resume_args(saved_args, args):
+    for key in (
+            'latent_dim', 'latent_grid', 'token_dim', 'levels', 'seq_len',
+            'target_size', 'decoder_base_dim', 'decoder_num_resblocks',
+            'output_depth'):
+        if key not in saved_args:
+            continue
+        saved = saved_args[key]
+        current = getattr(args, key)
+        if isinstance(saved, (list, tuple)):
+            matches = list(saved) == list(current)
+        else:
+            matches = saved == current
+        if not matches:
+            raise ValueError(
+                f'Resume mismatch for {key}: '
+                f'checkpoint={saved}, current={current}')
+
+
+def checkpoint_payload(tokenizer, decoder, ema, optimizer, scheduler, scaler,
+                       global_step, epoch, args):
+    return {
+        'checkpoint_version': 2,
+        'tokenizer': tokenizer.state_dict(),
+        'decoder': decoder.state_dict(),
+        'ema': ema.state_dict(),
+        'optimizer': optimizer.state_dict(),
+        'scheduler': scheduler.state_dict(),
+        'scaler': scaler.state_dict(),
+        'global_step': global_step,
+        'epoch': epoch,
+        'rng_state': capture_rng_state(),
+        'args': vars(args),
+    }
+
+
+def normalize_relative_depth(depth):
+    """Normalize log-depth per frame while preserving relative geometry."""
+    normalized = torch.zeros_like(depth, dtype=torch.float32)
+    valid = torch.isfinite(depth) & (depth > 0)
+    flat_depth = depth.float().reshape(-1, depth.shape[-2] * depth.shape[-1])
+    flat_valid = valid.reshape_as(flat_depth)
+    flat_normalized = normalized.reshape_as(flat_depth)
+    for index in range(flat_depth.shape[0]):
+        mask = flat_valid[index]
+        if mask.sum() < 16:
+            flat_valid[index] = False
+            continue
+        valid_indices = torch.nonzero(mask, as_tuple=False).flatten()
+        sample_stride = max(1, valid_indices.numel() // 4096)
+        sampled = flat_depth[
+            index, valid_indices[::sample_stride]].clamp_min(1e-6).log()
+        low = torch.quantile(sampled, 0.02)
+        high = torch.quantile(sampled, 0.98)
+        scale = (high - low).clamp_min(1e-6)
+        values = flat_depth[index, mask].clamp_min(1e-6).log()
+        flat_normalized[index, mask] = ((values - low) / scale).clamp(0, 1)
+    return normalized, valid
 
 
 def main():
     args = parse_args()
+    if min(args.log_every, args.save_every, args.eval_every) < 1:
+        raise ValueError('log/save/eval intervals must be positive')
 
     use_ddp, rank, local_rank, world_size = setup_ddp()
     device = torch.device(f'cuda:{local_rank}' if torch.cuda.is_available() else 'cpu')
@@ -213,7 +332,7 @@ def main():
         print(f'Levels: {args.levels}')
         print(f'Output: {args.output_dir}')
 
-    set_seed(args.seed)
+    set_seed(args.seed + rank)
     os.makedirs(args.output_dir, exist_ok=True)
 
     # ---- 1. Load frozen encoder ----
@@ -252,7 +371,11 @@ def main():
         print(f'  Total:     {total_p / 1e6:.1f}M params')
 
     # EMA
-    ema = EMA(nn.ModuleList([tokenizer, decoder]), decay=args.ema_decay).to(device)
+    ema = EMA(
+        nn.ModuleList([tokenizer, decoder]),
+        decay=args.ema_decay,
+        dtype=torch.float32,
+    ).to(device)
 
     # ---- 3. Dataset ----
     if main_process:
@@ -264,6 +387,7 @@ def main():
         max_videos=args.max_videos,
         num_frames_per_video=args.num_frames_per_video,
         depth_root=args.depth_root,
+        max_frame_span=args.max_frame_span,
     )
     sampler = torch.utils.data.distributed.DistributedSampler(dataset) if use_ddp else None
     dataloader = DataLoader(
@@ -273,11 +397,35 @@ def main():
         pin_memory=True, drop_last=True,
     )
 
-    # Capture eval frames for periodic sampling
+    # Capture a fixed held-out sample for periodic reconstruction tracking.
     eval_frames = None
-    for eb in dataloader:
-        eval_frames = eb['frames'][:1].clone()
-        break
+    eval_depth = None
+    eval_depth_valid = None
+    if main_process:
+        eval_csv = args.eval_csv or args.csv
+        eval_video_root = args.eval_video_root or args.video_root
+        if not args.eval_csv:
+            print('  [WARN] --eval_csv not set; periodic PSNR uses training data')
+        eval_dataset = SpatialVidDataset(
+            csv_path=eval_csv,
+            video_root=eval_video_root,
+            seq_len=args.seq_len,
+            target_size=args.target_size,
+            max_videos=1,
+            num_frames_per_video=args.num_frames_per_video,
+            depth_root=args.depth_root,
+            temporal_jitter=False,
+            max_frame_span=args.max_frame_span,
+        )
+        eval_loader = DataLoader(
+            eval_dataset, batch_size=1, shuffle=False, num_workers=0,
+            collate_fn=collate_fn)
+        eval_batch = next(iter(eval_loader))
+        eval_frames = eval_batch['frames'].clone()
+        eval_depth = (
+            eval_batch['depth'].clone()
+            if eval_batch['depth'] is not None else None)
+        eval_depth_valid = eval_batch['depth_valid'].clone()
 
     # ---- 4. Optimizer ----
     if main_process:
@@ -286,23 +434,37 @@ def main():
     optimizer = build_optimizer(nn.ModuleList([tokenizer, decoder]), lr=args.lr, wd=args.wd)
     steps_per_epoch = (len(dataloader) + args.accum_steps - 1) // args.accum_steps
     total_steps = args.epochs * steps_per_epoch
+    if args.warmup_steps >= max(total_steps, 1):
+        raise ValueError(
+            f'warmup_steps={args.warmup_steps} must be smaller than '
+            f'total_steps={total_steps}')
     scheduler = build_scheduler(optimizer, warmup_steps=args.warmup_steps, total_steps=max(total_steps, 1))
     scaler = GradScaler(enabled=(not use_bf16))
 
     # Resume
     global_step = 0
     start_epoch = 0
-    if args.resume and os.path.exists(args.resume):
+    if args.resume:
+        if not os.path.exists(args.resume):
+            raise FileNotFoundError(f'Resume checkpoint not found: {args.resume}')
         if main_process:
             print(f'Resuming from {args.resume}')
-        ckpt = torch.load(args.resume, map_location='cpu')
+        ckpt = torch.load(
+            args.resume, map_location='cpu', weights_only=False)
+        validate_resume_args(ckpt.get('args', {}), args)
         tokenizer.load_state_dict(ckpt['tokenizer'])
         decoder.load_state_dict(ckpt['decoder'])
         ema.load_state_dict(ckpt['ema']); ema = ema.to(device)
         optimizer.load_state_dict(ckpt['optimizer'])
         scheduler.load_state_dict(ckpt['scheduler'])
+        if 'scaler' in ckpt:
+            scaler.load_state_dict(ckpt['scaler'])
         global_step = ckpt.get('global_step', 0)
         start_epoch = ckpt.get('epoch', 0) + 1
+        if rank == 0:
+            restore_rng_state(ckpt.get('rng_state'))
+        else:
+            set_seed(args.seed + rank + global_step * 1009)
 
     if use_ddp:
         tokenizer = nn.parallel.DistributedDataParallel(
@@ -312,7 +474,12 @@ def main():
 
     writer = None
     if main_process:
-        writer = SummaryWriter(log_dir=os.path.join(args.output_dir, 'tb'))
+        writer = SummaryWriter(
+            log_dir=os.path.join(args.output_dir, 'tb'),
+            purge_step=global_step if global_step > 0 else None,
+        )
+    metrics_path = os.path.join(args.output_dir, 'metrics.jsonl')
+    lpips_available = args.lambda_lpips > 0
 
     if main_process:
         print(f'\nTraining: {args.epochs} epochs, {steps_per_epoch} steps/epoch')
@@ -373,15 +540,17 @@ def main():
 
             # LPIPS perceptual loss
             lpips_loss = z_g.new_zeros(())
-            if args.lambda_lpips > 0:
+            if lpips_available:
                 try:
                     lpips_fn = get_lpips(device)
                     # LPIPS expects [B, 3, H, W] with values in [-1, 1] or [0, 1]
                     p_flat = pred_rgb.reshape(-1, 3, pred_rgb.shape[-2], pred_rgb.shape[-1])
                     t_flat = target_rgb.reshape(-1, 3, target_rgb.shape[-2], target_rgb.shape[-1])
                     lpips_loss = lpips_fn(p_flat * 2 - 1, t_flat * 2 - 1).mean()
-                except Exception:
-                    pass  # LPIPS not available, skip
+                except Exception as exc:
+                    lpips_available = False
+                    if main_process:
+                        print(f'  [WARN] LPIPS disabled: {exc}')
 
             loss = (args.lambda_l1 * l1 +
                     args.lambda_lpips * lpips_loss +
@@ -391,9 +560,20 @@ def main():
 
             # Depth loss (if available)
             depth_loss = z_g.new_zeros(())
-            if args.output_depth and pred_depth is not None:
-                # Placeholder: depth supervision would need ground truth depth
-                pass
+            if (args.output_depth and pred_depth is not None
+                    and batch['depth'] is not None):
+                target_depth = batch['depth'].to(device=device)
+                target_depth, depth_mask = normalize_relative_depth(target_depth)
+                sample_mask = batch['depth_valid'].to(
+                    device=device).view(-1, 1, 1, 1)
+                depth_mask = depth_mask & sample_mask
+                pred_depth_nchw = pred_depth[..., 0].float()
+                if depth_mask.any():
+                    depth_loss = F.l1_loss(
+                        pred_depth_nchw[depth_mask],
+                        target_depth[depth_mask],
+                    )
+                    loss = loss + args.lambda_depth * depth_loss
 
             # ---- Backward ----
             scaled_loss = loss / args.accum_steps
@@ -405,10 +585,12 @@ def main():
             if (batch_idx + 1) % args.accum_steps == 0:
                 if not use_bf16:
                     scaler.unscale_(optimizer)
-                    torch.nn.utils.clip_grad_norm_(params, args.max_grad_norm)
+                    grad_norm = torch.nn.utils.clip_grad_norm_(
+                        params, args.max_grad_norm)
                     scaler.step(optimizer); scaler.update()
                 else:
-                    torch.nn.utils.clip_grad_norm_(params, args.max_grad_norm)
+                    grad_norm = torch.nn.utils.clip_grad_norm_(
+                        params, args.max_grad_norm)
                     optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
                 ema.update(nn.ModuleList([
@@ -418,21 +600,37 @@ def main():
                 scheduler.step()
                 global_step += 1
 
+                if main_process and writer and global_step % args.log_every == 0:
+                    train_metrics = {
+                        'step': global_step,
+                        'epoch': epoch,
+                        'train/loss': loss.item(),
+                        'train/l1': l1.item(),
+                        'train/lpips': lpips_loss.item(),
+                        'train/gradient': grad.item(),
+                        'train/temporal': temp.item(),
+                        'train/depth': depth_loss.item(),
+                        'train/latent_regularization': reg.item(),
+                        'train/latent_mean': z_g_flat.float().mean().item(),
+                        'train/latent_std': z_g_flat.float().std().item(),
+                        'train/latent_noise_std': noise_std,
+                        'train/grad_norm': float(grad_norm),
+                        'train/lr': optimizer.param_groups[0]['lr'],
+                    }
+                    for name, value in train_metrics.items():
+                        if name.startswith('train/'):
+                            writer.add_scalar(name, value, global_step)
+                    append_metrics(metrics_path, train_metrics)
+
                 pbar.set_postfix(
                     loss=f'{loss.item():.4f}', l1=f'{l1.item():.4f}',
                     grad=f'{grad.item():.4f}', temp=f'{temp.item():.4f}',
+                    depth=f'{depth_loss.item():.4f}',
                     noise=f'{noise_std:.3f}',
                 )
 
             epoch_loss += loss.item()
             num_batches += 1
-
-            if main_process and writer and global_step % 100 == 0:
-                writer.add_scalar('train/loss', loss.item(), global_step)
-                writer.add_scalar('train/l1', l1.item(), global_step)
-                writer.add_scalar('train/gradient', grad.item(), global_step)
-                writer.add_scalar('train/temporal', temp.item(), global_step)
-                writer.add_scalar('train/latent_noise_std', noise_std, global_step)
 
         # Handle incomplete accumulation
         if num_batches % args.accum_steps != 0:
@@ -456,48 +654,75 @@ def main():
             print(f'  Epoch {epoch} | avg_loss={avg_loss:.4f} | global_step={global_step}')
             if writer:
                 writer.add_scalar('train/epoch_loss', avg_loss, epoch)
-
-        # Save checkpoint + eval samples
-        if main_process and (epoch + 1) % args.save_every == 0:
-            save_path = os.path.join(args.output_dir, f'checkpoint_epoch{epoch:04d}.pt')
-            tok = tokenizer.module if use_ddp else tokenizer
-            dec = decoder.module if use_ddp else decoder
-            torch.save({
-                'tokenizer': tok.state_dict(),
-                'decoder': dec.state_dict(),
-                'ema': ema.state_dict(),
-                'optimizer': optimizer.state_dict(),
-                'scheduler': scheduler.state_dict(),
-                'global_step': global_step,
+            append_metrics(metrics_path, {
+                'step': global_step,
                 'epoch': epoch,
-                'args': vars(args),
-            }, save_path)
+                'train/epoch_loss': avg_loss,
+            })
+
+        tok = tokenizer.module if use_ddp else tokenizer
+        dec = decoder.module if use_ddp else decoder
+
+        save_due = (epoch + 1) % args.save_every == 0
+        eval_due = (epoch + 1) % args.eval_every == 0
+
+        if main_process and save_due:
+            save_path = os.path.join(args.output_dir, f'checkpoint_epoch{epoch:04d}.pt')
+            atomic_torch_save(
+                checkpoint_payload(
+                    tok, dec, ema, optimizer, scheduler, scaler,
+                    global_step, epoch, args),
+                save_path,
+            )
             print(f'  Saved: {save_path}')
 
-            # ---- Eval sampling ----
+        should_eval = save_due or eval_due or epoch == args.epochs - 1
+        if use_ddp and should_eval:
+            torch.distributed.barrier()
+        if main_process and eval_frames is not None and should_eval:
             try:
-                eval_samples(tok, dec, encoder, eval_frames, device,
-                            os.path.join(args.output_dir, 'samples'),
-                            epoch, use_bf16)
+                eval_metrics = eval_samples(
+                    tok, dec, encoder, eval_frames, device,
+                    os.path.join(args.output_dir, 'samples'),
+                    epoch, use_bf16,
+                    eval_depth=eval_depth,
+                    eval_depth_valid=eval_depth_valid)
+                eval_record = {
+                    'step': global_step,
+                    'epoch': epoch,
+                    **{
+                        f'eval/{name}': value
+                        for name, value in eval_metrics.items()
+                    },
+                }
+                if writer:
+                    for name, value in eval_metrics.items():
+                        writer.add_scalar(f'eval/{name}', value, global_step)
+                    writer.flush()
+                append_metrics(metrics_path, eval_record)
             except Exception as e:
                 print(f'  [WARN] Eval sampling failed: {e}')
+        if use_ddp and should_eval:
+            torch.distributed.barrier()
 
     # Final save
     if main_process:
         tok = tokenizer.module if use_ddp else tokenizer
         dec = decoder.module if use_ddp else decoder
         final_path = os.path.join(args.output_dir, 'checkpoint_final.pt')
-        torch.save({
-            'tokenizer': tok.state_dict(),
-            'decoder': dec.state_dict(),
-            'ema': ema.state_dict(),
-            'global_step': global_step,
-            'epoch': args.epochs - 1,
-            'args': vars(args),
-        }, final_path)
+        atomic_torch_save(
+            checkpoint_payload(
+                tok, dec, ema, optimizer, scheduler, scaler,
+                global_step, args.epochs - 1, args),
+            final_path,
+        )
         print(f'\nDone. Final: {final_path}')
+        if writer:
+            writer.flush()
+            writer.close()
 
     if use_ddp:
+        torch.distributed.barrier()
         torch.distributed.destroy_process_group()
 
 

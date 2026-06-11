@@ -27,7 +27,8 @@ class WanCompactAdapter(nn.Module):
     """Wan backbone adapted for compact latent flow matching."""
 
     def __init__(self, wan_checkpoint_dir, latent_dim=768, latent_grid=18,
-                 seq_len=8, wan_dim=1536, freq_dim=256, num_heads=12):
+                 seq_len=8, wan_dim=1536, freq_dim=256, num_heads=12,
+                 i0_condition=False):
         super().__init__()
 
         # Load pretrained Wan 1.3B
@@ -39,6 +40,7 @@ class WanCompactAdapter(nn.Module):
         self.latent_grid = latent_grid
         self.num_tokens = latent_grid ** 2
         self.seq_len = seq_len
+        self.i0_condition = i0_condition
 
         # ---- Input: latent_dim → wan_dim with concat time injection ----
         self.time_concat_dim = 256
@@ -53,6 +55,13 @@ class WanCompactAdapter(nn.Module):
             nn.SiLU(),
             nn.Linear(wan_dim, wan_dim),
         )
+        if i0_condition:
+            self.i0_proj = nn.Sequential(
+                nn.LayerNorm(latent_dim),
+                nn.Linear(latent_dim, wan_dim),
+                nn.SiLU(),
+                nn.Linear(wan_dim, wan_dim),
+            )
 
         # ---- Output: wan_dim → latent_dim (zero-init) ----
         self.output_norm = nn.LayerNorm(wan_dim)
@@ -84,6 +93,9 @@ class WanCompactAdapter(nn.Module):
             p.requires_grad_(True)
         for p in self.input_proj.parameters():
             p.requires_grad_(True)
+        if self.i0_condition:
+            for p in self.i0_proj.parameters():
+                p.requires_grad_(True)
         for p in self.output_norm.parameters():
             p.requires_grad_(True)
         for p in self.output_proj.parameters():
@@ -118,11 +130,10 @@ class WanCompactAdapter(nn.Module):
         self._time_emb_converted = True
 
     def _time_embed(self, t):
-        """t: [B] in [0, 1] → Wan time embedding [B, 6, wan_dim] in float32."""
+        """t: [B] in Wan's native [0, 1000] range."""
         self._ensure_time_emb_float32()
-        t_wan = (t * 1000).to(device=t.device)
         with amp.autocast(device_type='cuda', enabled=False):
-            e = sinusoidal_embedding_1d(self.freq_dim, t_wan).float().to(device=t.device)
+            e = sinusoidal_embedding_1d(self.freq_dim, t).float().to(device=t.device)
             e = self.wan.time_embedding(e.float())
             e = self.wan.time_projection(e.float())
         return e.unflatten(1, (6, self.wan_dim)).float()
@@ -134,7 +145,7 @@ class WanCompactAdapter(nn.Module):
             torch.arange(half, device=t.device, dtype=torch.float32) *
             (-math.log(10000) / (half - 1))
         )
-        emb = t.float().unsqueeze(1) * emb.unsqueeze(0)
+        emb = (t.float() * 1000).unsqueeze(1) * emb.unsqueeze(0)
         emb = torch.cat([torch.sin(emb), torch.cos(emb)], dim=1)
         return self.time_concat_mlp(emb)
 
@@ -144,7 +155,8 @@ class WanCompactAdapter(nn.Module):
         Args:
             z: [B, S, N, latent_dim] noisy latent
             t: [B] flow time in [0, 1]
-            text_emb: [B, L, 768] optional CLIP text embeddings
+            cond: optional first-frame compact latent [B, 1, N, latent_dim]
+            text_emb: CLIP [B, L, 768] or native UMT5 [B, L, 4096]
 
         Returns:
             v: [B, S, N, latent_dim] predicted velocity
@@ -157,6 +169,16 @@ class WanCompactAdapter(nn.Module):
         t_concat = t_concat.unsqueeze(1).unsqueeze(1).expand(B, S, N, -1)
         x = torch.cat([z.to(dtype=model_dtype), t_concat], dim=-1)  # [B, S, N, D+time_dim]
         x = self.input_proj(x)  # [B, S, N, wan_dim]
+        if self.i0_condition:
+            if cond is None:
+                raise ValueError("I0-conditioned WanCompactAdapter requires cond")
+            if cond.dim() != 4 or cond.shape[0] != B or cond.shape[2:] != (N, D):
+                raise ValueError(
+                    f"Expected cond [B, T, N, D] compatible with {z.shape}, "
+                    f"got {cond.shape}")
+            i0_context = self.i0_proj(
+                cond.to(dtype=model_dtype).mean(dim=1)).unsqueeze(1)
+            x = x + i0_context.expand(B, S, N, self.wan_dim)
         x = x.reshape(B, S * N, self.wan_dim)  # [B, S*N, wan_dim]
 
         # ---- 2. Wan time embedding (adaLN) ----
@@ -173,7 +195,14 @@ class WanCompactAdapter(nn.Module):
         # ---- 4. Text conditioning ----
         context, context_lens = None, None
         if text_emb is not None:
-            context = self.text_proj(text_emb.to(x.dtype))
+            if text_emb.shape[-1] == self.wan.text_dim:
+                context = self.wan.text_embedding(text_emb.to(x.dtype))
+            elif text_emb.shape[-1] == 768:
+                context = self.text_proj(text_emb.to(x.dtype))
+            else:
+                raise ValueError(
+                    f"Expected text dim 768 (legacy CLIP) or "
+                    f"{self.wan.text_dim} (native UMT5), got {text_emb.shape[-1]}")
             context_lens = torch.full((B,), context.shape[1], device=x.device, dtype=torch.long)
 
         # ---- 5. Wan DiT blocks ----
