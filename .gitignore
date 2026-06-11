@@ -12,6 +12,10 @@ samples/
 reconstruct_out/
 analysis/
 overfit_debug/
+test_eval_out/
+verify_output*.txt
+*.log
+*.tmp
 
 # Python
 __pycache__/

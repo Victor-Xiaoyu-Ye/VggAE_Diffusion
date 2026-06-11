@@ -1,18 +1,29 @@
+import json
+import os
+import random
+
+import numpy as np
 import torch
 import torch.nn as nn
 
+
 class EMA:
-    def __init__(self, model, decay=0.9999):
+    def __init__(self, model, decay=0.9999, dtype=None):
         self.decay = decay
+        self.dtype = dtype
         self.shadow = {}
         for k, v in model.state_dict().items():
             if v.is_floating_point():
-                self.shadow[k] = v.clone().detach()
+                shadow = v.clone().detach()
+                if dtype is not None:
+                    shadow = shadow.to(dtype=dtype)
+                self.shadow[k] = shadow
     def update(self, model):
         for k, v in model.state_dict().items():
             if k in self.shadow:
                 self.shadow[k] = self.shadow[k].to(v.device)
-                self.shadow[k].mul_(self.decay).add_(v, alpha=1 - self.decay)
+                value = v.to(dtype=self.shadow[k].dtype)
+                self.shadow[k].mul_(self.decay).add_(value, alpha=1 - self.decay)
     def state_dict(self):
         return self.shadow
     def load_state_dict(self, state_dict):
@@ -20,6 +31,50 @@ class EMA:
     def to(self, device):
         self.shadow = {k: v.to(device) for k, v in self.shadow.items()}
         return self
+
+
+def atomic_torch_save(payload, path):
+    """Write a checkpoint atomically so interrupted saves are not resumable."""
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    temporary_path = f"{path}.tmp-{os.getpid()}"
+    torch.save(payload, temporary_path)
+    os.replace(temporary_path, path)
+
+
+def capture_rng_state():
+    state = {
+        "python": random.getstate(),
+        "numpy": np.random.get_state(),
+        "torch": torch.get_rng_state(),
+    }
+    if torch.cuda.is_available():
+        state["cuda"] = torch.cuda.get_rng_state_all()
+    return state
+
+
+def restore_rng_state(state):
+    if not state:
+        return
+    random.setstate(state["python"])
+    np.random.set_state(state["numpy"])
+    torch.set_rng_state(state["torch"])
+    if torch.cuda.is_available() and "cuda" in state:
+        torch.cuda.set_rng_state_all(state["cuda"])
+
+
+def append_metrics(path, metrics):
+    """Append durable scalar metrics alongside TensorBoard event files."""
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    serializable = {}
+    for key, value in metrics.items():
+        if isinstance(value, torch.Tensor):
+            value = value.detach().float().cpu().item()
+        if isinstance(value, np.generic):
+            value = value.item()
+        serializable[key] = value
+    with open(path, "a") as output:
+        output.write(json.dumps(serializable, sort_keys=True) + "\n")
+
 
 def build_optimizer(model, lr, wd):
     decay_params, no_decay_params = [], []

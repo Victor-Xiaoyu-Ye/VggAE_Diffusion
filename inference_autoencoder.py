@@ -4,11 +4,7 @@
 Supports both v1 (exp-1) and v2 (big) checkpoints via auto-detection.
 
 Usage:
-  # exp-1
-  bash scripts/inference_autoencoder.sh
-
-  # big version
-  bash scripts/inference_autoencoder_big.sh
+  bash scripts/10k/inference_autoencoder.sh
 """
 
 import argparse
@@ -40,7 +36,9 @@ def parse_args():
     p.add_argument('--seq_len', type=int, default=8)
     p.add_argument('--target_size', type=int, default=518)
     p.add_argument('--output_dir', type=str, default='outputs/autoencoder_inference')
-    p.add_argument('--compute_psnr', action='store_true', default=True)
+    p.add_argument('--compute_psnr', dest='compute_psnr', action='store_true')
+    p.add_argument('--no_compute_psnr', dest='compute_psnr', action='store_false')
+    p.set_defaults(compute_psnr=True)
     p.add_argument('--latent_dim', type=int, default=512)
     p.add_argument('--latent_grid', type=int, default=18)
     p.add_argument('--token_dim', type=int, default=2048)
@@ -63,21 +61,23 @@ def detect_version(decoder_state):
     return 'v1'
 
 
-def build_v1_decoder(base_dim, args):
+def build_v1_decoder(base_dim, output_depth, args):
     """exp-1 architecture: bilinear, 1 ResBlock/stage, 1 temporal."""
     return CompactDecoder(
         latent_dim=args.latent_dim, base_dim=base_dim, output_dim=3,
-        output_depth=True, img_size=args.target_size, latent_grid=args.latent_grid,
+        output_depth=output_depth, img_size=args.target_size,
+        latent_grid=args.latent_grid,
         num_resblocks=1, use_pixel_shuffle=False, num_temporal_blocks=1,
         version='v1', use_checkpoint=False,
     )
 
 
-def build_v2_decoder(base_dim, args):
+def build_v2_decoder(base_dim, output_depth, args):
     """Big architecture: pixel-shuffle, 2 ResBlocks/stage, 2 temporal."""
     return CompactDecoder(
         latent_dim=args.latent_dim, base_dim=base_dim, output_dim=3,
-        output_depth=True, img_size=args.target_size, latent_grid=args.latent_grid,
+        output_depth=output_depth, img_size=args.target_size,
+        latent_grid=args.latent_grid,
         num_resblocks=2, use_pixel_shuffle=True, num_temporal_blocks=2,
         version='v2', use_checkpoint=False,
     )
@@ -95,25 +95,29 @@ def load_model(args, device):
         token_dim=args.token_dim, latent_dim=args.latent_dim,
         latent_grid=args.latent_grid, levels=args.levels,
         seq_len=args.seq_len, input_grid=args.input_grid,
-    ).to(device=device)
+    ).to(device=device).eval()
 
-    ckpt = torch.load(args.checkpoint, map_location='cpu')
+    ckpt = torch.load(
+        args.checkpoint, map_location='cpu', weights_only=False)
     tokenizer.load_state_dict(ckpt['tokenizer'])
 
     # Auto-detect decoder version and base_dim from checkpoint
     dec_state = ckpt['decoder']
     version = detect_version(dec_state)
+    output_depth = any(key.startswith('depth_head.') for key in dec_state)
     # Infer base_dim from stem.0.conv weight shape
     base_dim = dec_state['stem.0.conv.weight'].shape[0] // 2
-    print(f'Detected: version={version}, base_dim={base_dim}')
+    print(
+        f'Detected: version={version}, base_dim={base_dim}, '
+        f'output_depth={output_depth}')
 
     if version == 'v1':
-        decoder = build_v1_decoder(base_dim, args)
+        decoder = build_v1_decoder(base_dim, output_depth, args)
     else:
-        decoder = build_v2_decoder(base_dim, args)
+        decoder = build_v2_decoder(base_dim, output_depth, args)
     decoder = decoder.to(device=device)
 
-    decoder.load_state_dict(dec_state, strict=False)
+    decoder.load_state_dict(dec_state)
     decoder.eval()
     for p in decoder.parameters():
         p.requires_grad_(False)
@@ -148,7 +152,9 @@ def save_comparison_grid(original, reconstructed, out_path):
 
 def main():
     args = parse_args()
-    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    if not torch.cuda.is_available():
+        raise RuntimeError('Autoencoder inference requires CUDA')
+    device = torch.device('cuda:0')
 
     print('Loading model...')
     encoder, tokenizer, decoder = load_model(args, device)
@@ -162,7 +168,7 @@ def main():
         from utils.video_io import read_video_frames
         print(f'Processing: {args.video_path}')
         frames = read_video_frames(args.video_path, args.seq_len, args.target_size)
-        frames_t = torch.from_numpy(frames).permute(0, 3, 1, 2).unsqueeze(0)
+        frames_t = frames.unsqueeze(0)
         original = frames_t[0].permute(0, 2, 3, 1)
         recon = reconstruct(encoder, tokenizer, decoder, frames_t, device)
         recon = recon[0].cpu()

@@ -11,10 +11,21 @@ import Imath
 
 
 def _compute_frame_indices(total_frames, num_frames, temporal_jitter=True,
-                            max_start_frac=0.3, stride_jitter_frac=0.15):
+                            max_start_frac=0.3, stride_jitter_frac=0.15,
+                            max_frame_span=0):
     """Compute frame indices for sampling. Shared by video and depth loading."""
     if total_frames <= num_frames:
         return np.linspace(0, total_frames - 1, num_frames, dtype=int)
+
+    if max_frame_span > 0:
+        span = min(total_frames, max(max_frame_span, num_frames))
+        if temporal_jitter and total_frames > span:
+            start_offset = random.randint(0, total_frames - span)
+        else:
+            start_offset = max(0, (total_frames - span) // 2)
+        end_offset = min(total_frames - 1, start_offset + span - 1)
+        return np.linspace(
+            start_offset, end_offset, num_frames, dtype=int)
 
     if temporal_jitter:
         max_start = max(1, int(total_frames * max_start_frac))
@@ -36,7 +47,8 @@ def _compute_frame_indices(total_frames, num_frames, temporal_jitter=True,
 
 def read_video_frames(video_path, num_frames, target_size=518,
                        temporal_jitter=True, max_start_frac=0.3,
-                       stride_jitter_frac=0.15, frame_indices=None):
+                       stride_jitter_frac=0.15, frame_indices=None,
+                       max_frame_span=0):
     """Read N frames from mp4.
 
     Args:
@@ -57,7 +69,8 @@ def read_video_frames(video_path, num_frames, target_size=518,
 
     if frame_indices is None:
         indices = _compute_frame_indices(total, num_frames, temporal_jitter,
-                                          max_start_frac, stride_jitter_frac)
+                                          max_start_frac, stride_jitter_frac,
+                                          max_frame_span)
     else:
         indices = frame_indices
 

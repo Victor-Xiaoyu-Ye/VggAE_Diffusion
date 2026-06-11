@@ -52,7 +52,9 @@ def parse_args():
     p.add_argument('--decoder_version', type=str, default='v2')
     p.add_argument('--text_cond', action='store_true')
     p.add_argument('--cfg_dropout', type=float, default=0.1)
-    p.add_argument('--decoder_aux', action='store_true', default=True)
+    p.add_argument('--decoder_aux', dest='decoder_aux', action='store_true')
+    p.add_argument('--no_decoder_aux', dest='decoder_aux', action='store_false')
+    p.set_defaults(decoder_aux=False)
     p.add_argument('--recon_weight', type=float, default=0.05)
     p.add_argument('--recon_every', type=int, default=1)
     p.add_argument('--batch_size', type=int, default=2)
@@ -279,13 +281,17 @@ def main():
                     mask = torch.rand(x1.shape[0], device=device) < args.cfg_dropout
                     text_emb = text_emb * (~mask).view(-1, 1, 1).to(dtype=text_emb.dtype)
 
-            loss = flow.compute_loss(x1, text_emb=text_emb)
-
             dec_loss = x1.new_zeros(())
-            if args.decoder_aux and (batch_idx % args.recon_every == 0):
-                with torch.no_grad():
-                    flow_out = flow.compute_loss(x1, text_emb=text_emb, return_outputs=True)
-                    z_g_pred = flow_out['x1_pred'].reshape(*z_g.shape).float()
+            use_decoder_aux = (
+                args.decoder_aux and batch_idx % args.recon_every == 0)
+            flow_out = flow.compute_loss(
+                x1, text_emb=text_emb, return_outputs=use_decoder_aux)
+            if use_decoder_aux:
+                loss = flow_out['loss']
+                z_g_pred = flow_out['x1_pred'].reshape(*z_g.shape).float()
+                with autocast(
+                        device_type='cuda', dtype=torch.bfloat16,
+                        enabled=use_bf16):
                     result = decoder(z_g_pred)
                 if decoder.output_depth:
                     preds, _, _, _ = result
@@ -294,6 +300,8 @@ def main():
                 recon = preds[..., :3].permute(0, 1, 4, 2, 3).clamp(0, 1).float()
                 dec_loss = F.l1_loss(recon, frames.float().clamp(0, 1))
                 loss = loss + args.recon_weight * dec_loss
+            else:
+                loss = flow_out
 
             (loss / args.accum_steps).backward()
             epoch_loss += loss.item(); num_batches += 1
@@ -320,8 +328,8 @@ def main():
             print(f'  Epoch {epoch} | avg_loss={avg_loss:.4f} | steps={global_step}')
             if writer: writer.add_scalar('train/epoch_loss', avg_loss, epoch)
 
+        base_model = model.module if use_ddp else model
         if main_process and (epoch + 1) % args.save_every == 0:
-            base_model = model.module if use_ddp else model
             save_path = os.path.join(args.output_dir, f'checkpoint_epoch{epoch:04d}.pt')
             torch.save({
                 'model': base_model.state_dict(), 'ema': ema.state_dict(),
@@ -329,16 +337,17 @@ def main():
                 'global_step': global_step, 'epoch': epoch, 'args': vars(args),
             }, save_path)
             print(f'  Saved: {save_path}')
-            if eval_frames is not None:
-                try:
-                    ema_state = {k: v.clone() for k, v in base_model.state_dict().items()}
-                    base_model.load_state_dict({k: v for k, v in ema.state_dict().items()})
-                    diffusion_sample(base_model, decoder, tokenizer, encoder,
-                                    eval_frames, device,
-                                    os.path.join(args.output_dir, 'samples'), global_step)
-                    base_model.load_state_dict(ema_state); del ema_state
-                except Exception as ex:
-                    print(f'  [WARN] Eval sampling failed: {ex}')
+        if (main_process and eval_frames is not None
+                and (epoch + 1) % args.eval_every == 0):
+            try:
+                ema_state = {k: v.clone() for k, v in base_model.state_dict().items()}
+                base_model.load_state_dict({k: v for k, v in ema.state_dict().items()})
+                diffusion_sample(base_model, decoder, tokenizer, encoder,
+                                eval_frames, device,
+                                os.path.join(args.output_dir, 'samples'), global_step)
+                base_model.load_state_dict(ema_state); del ema_state
+            except Exception as ex:
+                print(f'  [WARN] Eval sampling failed: {ex}')
 
     if main_process:
         base_model = model.module if use_ddp else model

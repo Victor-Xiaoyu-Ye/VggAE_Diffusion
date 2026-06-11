@@ -1,4 +1,4 @@
-"""I_0-Conditioned Decoder: cross-attention to I_0 features for appearance-guided decoding.
+"""I_0-conditioned decoder for appearance-guided video reconstruction.
 
 Architecture:
   z_geo [B, S, 18, 18, 512] + I_0 features {f36, f72, f144}
@@ -9,11 +9,26 @@ Architecture:
   → RGB head
 """
 
-import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint as torch_checkpoint
+
+
+def load_i0_decoder_state_dict(decoder, state_dict):
+    """Load current or pre-f144 decoder weights without hiding real mismatches."""
+    load_info = decoder.load_state_dict(state_dict, strict=False)
+    allowed_missing_prefixes = ("spade2.", "app144_proj.")
+    invalid_missing = [
+        key for key in load_info.missing_keys
+        if not key.startswith(allowed_missing_prefixes)
+    ]
+    if invalid_missing or load_info.unexpected_keys:
+        raise RuntimeError(
+            "I0 decoder checkpoint mismatch: "
+            f"missing={invalid_missing}, "
+            f"unexpected={load_info.unexpected_keys}")
+    return load_info
 
 
 def _gn(ch):
@@ -50,6 +65,8 @@ class CrossAttnBlock(nn.Module):
 
     def __init__(self, geo_ch, app_ch, num_heads=8):
         super().__init__()
+        if geo_ch % num_heads != 0:
+            raise ValueError(f"geo_ch={geo_ch} must be divisible by num_heads={num_heads}")
         self.num_heads = num_heads
         head_dim = geo_ch // num_heads
         self.head_dim = head_dim
@@ -57,7 +74,6 @@ class CrossAttnBlock(nn.Module):
         self.k_proj = nn.Linear(app_ch, geo_ch)
         self.v_proj = nn.Linear(app_ch, geo_ch)
         self.out_proj = nn.Linear(geo_ch, geo_ch)
-        self.scale = head_dim ** -0.5
 
     def forward(self, z_geo_flat, I_0_feat):
         """z_geo_flat: [B*S, N_g, C_g], I_0_feat: [B*S, N_f, C_a]"""
@@ -70,9 +86,8 @@ class CrossAttnBlock(nn.Module):
         K = K.view(BS, Nf, self.num_heads, self.head_dim).transpose(1, 2)
         V = V.view(BS, Nf, self.num_heads, self.head_dim).transpose(1, 2)
 
-        attn = (Q @ K.transpose(-2, -1)) * self.scale
-        attn = attn.softmax(dim=-1)
-        x = attn @ V  # [BS, heads, Ng, head_dim]
+        # Fused SDPA avoids materializing the very large 72x72 attention matrix.
+        x = F.scaled_dot_product_attention(Q, K, V)
         x = x.transpose(1, 2).reshape(BS, Ng, Cg)
         return z_geo_flat + self.out_proj(x)
 
@@ -92,11 +107,10 @@ class SPADEBlock(nn.Module):
         nn.init.zeros_(self.beta.weight); nn.init.zeros_(self.beta.bias)
 
     def forward(self, z_geo_grid, I_0_feat):
-        """z_geo_grid: [B*S, C_g, H, W], I_0_feat: [1, C_a, H, W]"""
+        """z_geo_grid: [B*S, C_g, H, W], I_0_feat: [B*S, C_a, H, W]"""
         g = self.gamma(z_geo_grid)      # [BS, C_a, H, W]
         b = self.beta(z_geo_grid)        # [BS, C_a, H, W]
-        I_expanded = I_0_feat.expand(z_geo_grid.shape[0], -1, -1, -1)
-        return self.norm(I_expanded) * (1 + g) + b
+        return self.norm(I_0_feat) * (1 + g) + b
 
 
 class TemporalAttnBlock(nn.Module):
@@ -107,9 +121,11 @@ class TemporalAttnBlock(nn.Module):
 
     def forward(self, x, B, S):
         BS, C, H, W = x.shape
+        residual = x
         x_t = x.reshape(B, S, C, H * W).permute(0, 3, 1, 2).contiguous().reshape(B * H * W, S, C)
         x_t = self.norm(x_t); x_t, _ = self.attn(x_t, x_t, x_t)
-        return x_t.reshape(B, H * W, S, C).permute(0, 2, 3, 1).contiguous().reshape(B * S, C, H, W)
+        x_t = x_t.reshape(B, H * W, S, C).permute(0, 2, 3, 1).contiguous().reshape(B * S, C, H, W)
+        return residual + x_t
 
 
 class I0ConditionalDecoder(nn.Module):
@@ -154,6 +170,11 @@ class I0ConditionalDecoder(nn.Module):
         self.cross_attn1 = CrossAttnBlock(self.C1, 64, num_heads=8)
 
         self.up2 = _stage(self.C1, self.C2)
+        self.spade2 = SPADEBlock(self.C2, 32)
+        self.app144_proj = nn.Conv2d(32, self.C2, 1)
+        # Old checkpoints start with identical behavior and can be fine-tuned.
+        nn.init.zeros_(self.app144_proj.weight)
+        nn.init.zeros_(self.app144_proj.bias)
 
         self.up3 = _stage(self.C2, self.C3)
         self.up4 = _stage(self.C3, self.C4)
@@ -205,8 +226,10 @@ class I0ConditionalDecoder(nn.Module):
         x_flat = self.cross_attn1(x_flat, f72_flat)
         x = x_flat.transpose(1, 2).reshape(B * S, self.C1, 72, 72)
 
-        # up2: upsample only (no I_0 — lower level features already injected)
+        # up2 + high-frequency appearance modulation at 144x144
         x = self._stage_forward(self.up2, x)  # [B*S, C2, 144, 144]
+        f144 = _expand_I0(I_0_feats['f144'])
+        x = x + self.app144_proj(self.spade2(x, f144))
 
         # up3 + up4: no I_0 conditioning (disocclusion inpainting)
         x = self._stage_forward(self.up3, x)

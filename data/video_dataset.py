@@ -18,15 +18,23 @@ class SpatialVidDataset(Dataset):
 
     def __init__(self, csv_path, video_root, seq_len=8, target_size=518,
                  annotation_index_path="", max_videos=0, num_frames_per_video=8,
-                 depth_root="", temporal_jitter=True):
+                 depth_root="", temporal_jitter=True, index_shard_id=0,
+                 index_num_shards=1, check_files=True, max_frame_span=0):
+        if index_num_shards < 1:
+            raise ValueError("index_num_shards must be >= 1")
+        if not 0 <= index_shard_id < index_num_shards:
+            raise ValueError(
+                f"index_shard_id must be in [0, {index_num_shards}), "
+                f"got {index_shard_id}")
+
         self.target_size = target_size
         self.seq_len = seq_len
         self.num_frames_per_video = num_frames_per_video
+        self.max_frame_span = max_frame_span
         self.depth_root = depth_root
-        self.temporal_jitter = temporal_jitter and not depth_root  # disable jitter when depth needed for frame alignment
-        # TODO: re-enable jitter with depth once frame index alignment is verified
-        if depth_root:
-            self.temporal_jitter = False
+        # Video and depth share one precomputed index list, so jitter remains
+        # frame-aligned when depth supervision is enabled.
+        self.temporal_jitter = temporal_jitter
 
         # Load annotation index
         self.annotations = {}
@@ -38,11 +46,13 @@ class SpatialVidDataset(Dataset):
         self.index = []
         with open(csv_path) as f:
             reader = csv.DictReader(f)
-            for row in reader:
+            for row_idx, row in enumerate(reader):
+                if row_idx % index_num_shards != index_shard_id:
+                    continue
                 vid_id = row["id"]
                 relative_path = row["video path"].replace("videos/", "")
                 video_path = os.path.join(video_root, relative_path)
-                if not os.path.exists(video_path):
+                if check_files and not os.path.exists(video_path):
                     continue
                 num_frames = int(row["num frames"])
                 caption = self.annotations.get(vid_id, {}).get("caption", "")
@@ -60,14 +70,16 @@ class SpatialVidDataset(Dataset):
                     "caption": caption,
                     "depth_zip_path": depth_zip_path,
                 })
-
-        if max_videos > 0:
-            self.index = self.index[:max_videos]
+                if max_videos > 0 and len(self.index) >= max_videos:
+                    break
 
         depth_info = f", depth_root={depth_root}" if depth_root else ""
         jitter_info = f", temporal_jitter={self.temporal_jitter}"
+        shard_info = (
+            f", index_shard={index_shard_id}/{index_num_shards}"
+            if index_num_shards > 1 else "")
         print(f"SpatialVidDataset: {len(self)} videos, seq_len={seq_len}, "
-              f"target_size={target_size}{depth_info}{jitter_info}")
+              f"target_size={target_size}{depth_info}{jitter_info}{shard_info}")
 
     def __len__(self):
         return len(self.index)
@@ -80,6 +92,7 @@ class SpatialVidDataset(Dataset):
         indices = _compute_frame_indices(
             entry["num_frames"], nf,
             temporal_jitter=self.temporal_jitter,
+            max_frame_span=self.max_frame_span,
         )
 
         frames = read_video_frames(
@@ -106,10 +119,22 @@ def collate_fn(batch):
     captions = [b["caption"] for b in batch]
     video_ids = [b["video_id"] for b in batch]
     depths = [b["depth"] for b in batch]
+    depth_valid = torch.tensor(
+        [depth is not None for depth in depths], dtype=torch.bool)
     depth_tensor = None
-    if all(d is not None for d in depths):
-        depth_tensor = torch.stack(depths, dim=0)  # [B, S, H, W]
-    return {"frames": frames, "caption": captions, "video_id": video_ids, "depth": depth_tensor}
+    if any(d is not None for d in depths):
+        reference = next(depth for depth in depths if depth is not None)
+        depth_tensor = torch.stack([
+            depth if depth is not None else torch.zeros_like(reference)
+            for depth in depths
+        ], dim=0)  # [B, S, H, W]
+    return {
+        "frames": frames,
+        "caption": captions,
+        "video_id": video_ids,
+        "depth": depth_tensor,
+        "depth_valid": depth_valid,
+    }
 
 
 class CachedTokenDataset(Dataset):
