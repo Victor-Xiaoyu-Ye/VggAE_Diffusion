@@ -52,6 +52,12 @@ def load_decoder(path, device, decoder_type="auto", **overrides):
         )
     else:
         has_depth_keys = any("depth_output_conv2" in k for k in state)
+        # Auto-detect features from checkpoint (default 256, exp-6-big uses 512)
+        features = overrides.get("features", 256)
+        for k in state:
+            if "scratch.layer1_rn.weight" in k:
+                features = state[k].shape[0]
+                break
         decoder = DPTHead(
             dim_in=overrides.get("dim_in", overrides.get("token_dim", 2048)),
             patch_size=overrides.get("patch_size", 14),
@@ -59,6 +65,7 @@ def load_decoder(path, device, decoder_type="auto", **overrides):
             activation=overrides.get("activation", "sigmoid"),
             conf_activation=overrides.get("conf_activation", "sigmoid"),
             output_depth=has_depth_keys or overrides.get("output_depth", False),
+            features=features,
         )
 
     decoder = decoder.to(device=device, dtype=torch.float32)

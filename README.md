@@ -1,86 +1,84 @@
-# VggAE-Diffusion: Video Generation in Geometric Latent Space
+# VggAE Diffusion
 
-Diffusion-based video generation operating in StreamVGGT's geometrically-aware token space, rather than traditional VAE latent space.
+Geometry-aware video reconstruction and generation using frozen StreamVGGT
+features, a compact generative tokenizer, an I0-conditioned decoder, and latent
+flow matching.
 
-## Pipeline
+This branch targets Ascend 910B. Active training uses `torch_npu`, HCCL, and
+FP16 with gradient scaling.
 
-```
-Video → StreamVGGT (frozen) → Tokens [B,8,1369,2048]
-                                    │
-              ┌─────────────────────┼─────────────────────┐
-              ▼                                           ▼
-        Decoder Training                          Diffusion Training
-   tokens → RGB reconstruction               noise → Wan2.1/ViTDiT → tokens
-   (DPTHead / ViTDecoder / DPTUNet)          (OT-CFM flow matching)
-              │                                           │
-              └─────────────────────┬─────────────────────┘
-                                    ▼
-                            Generated Video
+## Active Workflows
+
+Before launching, edit the cluster paths once in:
+
+```text
+scripts/spatialvid_config.sh
 ```
 
-## Project Structure
+The active scripts automatically create deterministic, non-overlapping
+SpatialVID CSV files under `RUN_ROOT/metadata/`. You do not need to extract
+overfit or validation CSV files manually. Experiment hyperparameters are
+grouped at the top of each `.sh`; only distributed launch settings are read
+from environment variables.
 
+### 10K experiments
+
+Use [`scripts/10k/`](scripts/10k/README.md) to reproduce and validate the
+current online pipeline:
+
+1. Train the compact geometry autoencoder.
+2. Train the I0-conditioned RGB decoder.
+3. Overfit the decoder and diffusion model on a tiny set.
+4. Train I0-conditioned compact diffusion.
+5. Sample and evaluate.
+
+Run all bring-up gates and write one result report with:
+
+```bash
+bash scripts/10k/run_validation_suite.sh
+bash scripts/10k/collect_results.sh
 ```
-├── data/              # Dataset + token utilities
-├── models/            # ViTDecoder, ViTDiT, WanAdapter, DPTUNet
-├── streamvggt/        # StreamVGGT encoder + DPTHead
-├── utils/             # Video IO, training helpers, decoder loader
-├── Wan2.1/            # Wan2.1 source (submodule / copy)
-├── scripts/           # Training shell scripts
-├── train_decoder*.py  # Decoder training entry points
-├── train_diffusion*.py # Diffusion training entry points
-├── sample.py          # Video generation
-├── reconstruct.py     # Reconstruction evaluation
-└── compute_token_stats.py  # Token normalization stats
+
+This path decodes video and runs StreamVGGT inside the training loop. It is not
+intended for the 10M run.
+
+### Large-scale training
+
+Use [`scripts/scale/`](scripts/scale/README.md). The scale path freezes the
+tokenizer, caches compact I0/future-residual latent tar shards, and trains the
+generator by optimizer step without video decoding in the diffusion loop.
+
+The design, validation gates, storage estimates, and Wan recommendation are in
+[`SCALE_TRAINING.md`](SCALE_TRAINING.md).
+
+The supported/experimental/legacy version matrix is in
+[`VERSION_STATUS.md`](VERSION_STATUS.md).
+
+## Current Model Contract
+
+```text
+video -> frozen StreamVGGT -> tokenizer -> compact latent
+I0 RGB -> appearance CNN ------------------------+
+                                                  |
+I0 latent + seven generated residual latents -> I0 decoder -> RGB video
 ```
+
+Frame 0 is observed and is not a diffusion target.
+
+## Legacy Experiments
+
+Older DPT decoder, raw-token diffusion, reduced-Wan, and non-I0 compact scripts
+are isolated in [`scripts/legacy/`](scripts/legacy/README.md). They are retained
+only for checkpoint reproduction and should not be used for new scale runs.
+
+Historical design notes are in [`docs/legacy/`](docs/legacy/README.md).
 
 ## Setup
 
 ```bash
+# Install the torch/torch_npu/torchvision versions matching the cluster CANN
+# release first.
 pip install -r requirements.txt
-
-# Download required HuggingFace models (see HF_MODELS.md)
-huggingface-cli download Wan-AI/Wan2.1-T2V-1.3B --local-dir Wan2.1/checkpoints/Wan2.1-T2V-1.3B
 ```
 
-## Quick Start
-
-```bash
-# 1. Compute token statistics
-python compute_token_stats.py --csv_path ... --video_root ... --out_path ckpts/token_stats.pt
-
-# 2. Train decoder (choose one)
-bash scripts/train_decoder_dpt_unet.sh   # DPT + UNet skip connections (recommended)
-bash scripts/train_decoder_dpt.sh        # DPTHead (refinenet fusion)
-bash scripts/train_decoder.sh            # ViTDecoder (GLD-style)
-
-# 3. Train diffusion (choose one)
-bash scripts/train_diffusion_wan.sh      # Wan2.1 LoRA adapter (recommended)
-bash scripts/train_diffusion.sh          # From-scratch VideoDiT
-
-# 4. Generate samples
-bash scripts/sample.sh
-```
-
-## Decoder Architectures
-
-|              | DPTUNet | DPTHead | ViTDecoder |
-|--------------|---------|---------|------------|
-| Type         | DPT + UNet skip | Refinenet fusion | Transformer |
-| Params       | 11.5M   | 33M     | 262M       |
-| Key feature  | Concat skip | Additive residual | Channel-concat |
-
-## Diffusion Architectures
-
-|              | Wan2.1 LoRA | From-scratch VideoDiT |
-|--------------|-------------|----------------------|
-| Backbone     | Wan2.1 1.3B pretrained | 12-layer DiT |
-| Trainable    | 43M (LoRA + adapters) | 300M |
-| Text cond    | ✓ (CLIP) | ✗ (optional) |
-
-## References
-
-- [4DLangVGGT](https://arxiv.org/abs/2512.05060) - RGB reconstruction from VGGT features
-- [GLD](https://arxiv.org/abs/2603.22275) - Geometric Latent Diffusion
-- [LaSt-ViT](https://arxiv.org/abs/2602.22394) - ViT feature analysis
-- [Wan2.1](https://github.com/Wan-Video/Wan2.1) - Video diffusion backbone
+Wan source is vendored under `Wan2.1/`; checkpoints are downloaded separately.

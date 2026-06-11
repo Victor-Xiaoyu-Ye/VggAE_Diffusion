@@ -82,7 +82,7 @@ class CompactLatentDiT(nn.Module):
     def __init__(self, latent_dim=512, num_tokens=324, model_dim=768,
                  spatial_depth=8, temporal_depth=4, num_heads=12,
                  seq_len=8, time_emb_dim=256, text_cond=True,
-                 text_dim=768):
+                 text_dim=768, i0_condition=False, time_scale=1.0):
         super().__init__()
         self.latent_dim = latent_dim
         self.num_tokens = num_tokens
@@ -90,6 +90,8 @@ class CompactLatentDiT(nn.Module):
         self.seq_len = seq_len
         self.time_emb_dim = time_emb_dim
         self.text_cond = text_cond
+        self.i0_condition = i0_condition
+        self.time_scale = time_scale
 
         # ---- Time embedding (sinusoidal + MLP) ----
         self.time_mlp = nn.Sequential(
@@ -100,6 +102,13 @@ class CompactLatentDiT(nn.Module):
 
         # ---- Wide input head ----
         self.input_head = WideHead(latent_dim + model_dim, model_dim, expansion=4)
+        if i0_condition:
+            self.i0_proj = nn.Sequential(
+                nn.LayerNorm(latent_dim),
+                nn.Linear(latent_dim, model_dim),
+                nn.SiLU(),
+                nn.Linear(model_dim, model_dim),
+            )
 
         # ---- Positional embeddings ----
         self.spatial_pos = nn.Parameter(
@@ -142,7 +151,10 @@ class CompactLatentDiT(nn.Module):
             torch.arange(half, device=t.device, dtype=torch.float32) *
             (-math.log(10000) / (half - 1))
         )
-        emb = t.float().unsqueeze(1) * emb.unsqueeze(0)
+        emb = (
+            t.float().unsqueeze(1)
+            * self.time_scale
+            * emb.unsqueeze(0))
         emb = torch.cat([torch.sin(emb), torch.cos(emb)], dim=1)
         # Convert to model dtype before MLP
         model_dtype = next(self.time_mlp.parameters()).dtype
@@ -154,7 +166,7 @@ class CompactLatentDiT(nn.Module):
         Args:
             z: [B, S, N, D] noisy latent tokens
             t: [B] flow time in [0, 1]
-            cond: unused (API compat)
+            cond: optional first-frame latent [B, 1, N, D]
             text_emb: [B, L, text_dim] optional text conditioning
 
         Returns:
@@ -169,6 +181,16 @@ class CompactLatentDiT(nn.Module):
         # Concat token + time → wide input projection
         x = torch.cat([z, t_emb], dim=-1)  # [B, S, N, D + model_dim]
         x = self.input_head(x)  # [B, S, N, model_dim]
+
+        if self.i0_condition:
+            if cond is None:
+                raise ValueError("I0-conditioned CompactLatentDiT requires cond")
+            if cond.dim() != 4 or cond.shape[0] != B or cond.shape[2:] != (N, D):
+                raise ValueError(
+                    f"Expected cond [B, T, N, D] compatible with {z.shape}, got {cond.shape}")
+            # A temporal mean also supports multiple reference frames later.
+            i0_context = self.i0_proj(cond.mean(dim=1)).unsqueeze(1)
+            x = x + i0_context.expand(B, S, N, self.model_dim)
 
         # Add positional embeddings
         x = x + self.spatial_pos[:, :, :N, :] + self.temporal_pos[:, :S, :, :]

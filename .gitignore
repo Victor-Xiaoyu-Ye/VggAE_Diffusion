@@ -12,6 +12,10 @@ samples/
 reconstruct_out/
 analysis/
 overfit_debug/
+test_eval_out/
+verify_output*.txt
+*.log
+*.tmp
 
 # Python
 __pycache__/
@@ -37,3 +41,5 @@ Wan2.1/checkpoints/
 # Annotation index (large JSON)
 ckpts/annotation_index.json
 ckpts/
+
+outputs/

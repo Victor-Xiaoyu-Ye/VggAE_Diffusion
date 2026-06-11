@@ -41,6 +41,7 @@ def parse_args():
     # Data
     p.add_argument("--csv", type=str, default="")
     p.add_argument("--video_root", type=str, default="")
+    p.add_argument("--annotation_index", type=str, default="")
     p.add_argument("--max_videos", type=int, default=0)
 
     # Checkpoints
@@ -242,6 +243,7 @@ def main():
     dataset = SpatialVidDataset(
         csv_path=args.csv, video_root=args.video_root,
         seq_len=args.seq_len, target_size=args.target_size,
+        annotation_index_path=args.annotation_index,
         max_videos=args.max_videos, num_frames_per_video=args.num_frames_per_video,
     )
     sampler = torch.utils.data.distributed.DistributedSampler(dataset) if use_ddp else None
