@@ -6,8 +6,8 @@ source "${SCRIPT_DIR}/../spatialvid_config.sh"
 source "${SCRIPT_DIR}/../lib/spatialvid.sh"
 
 # ----------------------------- editable settings -----------------------------
-OUTPUT="${RUN_ROOT}/diagnostics/latent_contract.json"
-NUM_VIDEOS=32
+OUTPUT_PREFIX="${RUN_ROOT}/diagnostics/compact_latent_stats"
+NUM_VIDEOS=64
 DEVICE_ID=6
 SEQ_LEN=8
 TARGET_SIZE=518
@@ -16,6 +16,8 @@ CLIP_DURATION_SECONDS=1.0
 LATENT_DIM=512
 LATENT_GRID=18
 NUM_WORKERS=2
+COV_SAMPLES_PER_VIDEO=256
+CONVERGENCE_POINTS=(4 8 16 32 64)
 DISABLE_TEMPORAL_MIXER=1
 # -----------------------------------------------------------------------------
 
@@ -28,12 +30,13 @@ if [[ "${DISABLE_TEMPORAL_MIXER}" == "1" ]]; then
 fi
 
 CUDA_VISIBLE_DEVICES="${DEVICE_ID}" "${PYTHON_BIN}" \
-  "${PROJECT}/diagnose_latent_contract.py" \
+  "${PROJECT}/diagnose_compact_latent_stats.py" \
   --csv "${SPATIALVID_EVAL_CSV}" \
   --video_root "${SPATIALVID_VIDEO_ROOT}" \
   --encoder_ckpt "${STREAMVGGT_CKPT}" \
   --autoencoder_ckpt "${GEOMETRY_AE_CKPT}" \
-  --output "${OUTPUT}" \
+  --output_json "${OUTPUT_PREFIX}.json" \
+  --output_pt "${OUTPUT_PREFIX}.pt" \
   --num_videos "${NUM_VIDEOS}" \
   --seq_len "${SEQ_LEN}" \
   --target_size "${TARGET_SIZE}" \
@@ -43,4 +46,6 @@ CUDA_VISIBLE_DEVICES="${DEVICE_ID}" "${PYTHON_BIN}" \
   --latent_grid "${LATENT_GRID}" \
   --levels 4 11 17 23 \
   --num_workers "${NUM_WORKERS}" \
+  --cov_samples_per_video "${COV_SAMPLES_PER_VIDEO}" \
+  --convergence_points "${CONVERGENCE_POINTS[@]}" \
   "${EXTRA_ARGS[@]}"

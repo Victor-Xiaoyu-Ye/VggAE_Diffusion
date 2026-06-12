@@ -10,7 +10,7 @@ AUTOENCODER_CKPT="${GEOMETRY_AE_CKPT}"
 I0_CKPT="${OVERFIT_I0_DECODER_CKPT}"
 OUTPUT_DIR="${RUN_ROOT}/validation/compact_diffusion_overfit"
 RESUME=""
-DEVICE_ID=0
+DEVICE_ID=1
 
 EPOCHS=3000
 BATCH_SIZE=1
@@ -26,6 +26,8 @@ SAVE_EVERY=100
 EVAL_EVERY=100
 LOG_EVERY=10
 NUM_WORKERS=0
+CLIP_DURATION_SECONDS=1.0
+NORMALIZATION_BATCHES=1
 # -----------------------------------------------------------------------------
 
 ensure_spatialvid_splits
@@ -37,7 +39,7 @@ if [[ -n "${RESUME}" ]]; then
   EXTRA_ARGS+=(--resume "${RESUME}")
 fi
 
-CUDA_VISIBLE_DEVICES="${DEVICE_ID}" python3 \
+CUDA_VISIBLE_DEVICES="${DEVICE_ID}" "${PYTHON_BIN}" \
   "${PROJECT}/train_compact_diffusion.py" \
   --csv "${SPATIALVID_OVERFIT_CSV}" \
   --video_root "${SPATIALVID_VIDEO_ROOT}" \
@@ -59,6 +61,7 @@ CUDA_VISIBLE_DEVICES="${DEVICE_ID}" python3 \
   --decoder_base_dim 384 --decoder_num_resblocks 2 \
   --decoder_pixel_shuffle --decoder_temporal_blocks 2 \
   --no_decoder_aux --rescale \
+  --normalization_batches "${NORMALIZATION_BATCHES}" \
   --batch_size "${BATCH_SIZE}" \
   --accum_steps "${ACCUM_STEPS}" \
   --epochs "${EPOCHS}" \
@@ -67,8 +70,10 @@ CUDA_VISIBLE_DEVICES="${DEVICE_ID}" python3 \
   --warmup_steps "${WARMUP_STEPS}" \
   --ema_decay 0.999 \
   --seq_len 8 --target_size 518 --max_frame_span 32 \
+  --clip_duration_seconds "${CLIP_DURATION_SECONDS}" \
   --num_workers "${NUM_WORKERS}" --dtype bf16 \
   --log_every "${LOG_EVERY}" \
   --eval_every "${EVAL_EVERY}" \
   --save_every "${SAVE_EVERY}" \
+  --disable_temporal_mixer \
   "${EXTRA_ARGS[@]}"

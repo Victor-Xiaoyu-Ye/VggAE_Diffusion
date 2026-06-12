@@ -23,13 +23,15 @@ SPATIAL_DEPTH=8
 TEMPORAL_DEPTH=4
 NUM_HEADS=12
 NUM_WORKERS=4
+CLIP_DURATION_SECONDS=1.0
+NORMALIZATION_BATCHES=64
 SAVE_EVERY=5
 EVAL_EVERY=5
 LOG_EVERY=50
 # -----------------------------------------------------------------------------
 
 NUM_GPUS=${NUM_GPUS:-4}
-GPU_IDS=${GPU_IDS:-0,1,2,3}
+GPU_IDS=${GPU_IDS:-2,3,4,5}
 MASTER_PORT=${MASTER_PORT:-29540}
 
 ensure_spatialvid_splits
@@ -41,7 +43,7 @@ if [[ -n "${RESUME}" ]]; then
   EXTRA_ARGS+=(--resume "${RESUME}")
 fi
 
-CUDA_VISIBLE_DEVICES="${GPU_IDS}" torchrun \
+CUDA_VISIBLE_DEVICES="${GPU_IDS}" "${TORCHRUN_BIN}" \
   --nproc_per_node="${NUM_GPUS}" --master_port="${MASTER_PORT}" \
   "${PROJECT}/train_compact_diffusion.py" \
   --csv "${SPATIALVID_TRAIN_10K_CSV}" \
@@ -63,6 +65,7 @@ CUDA_VISIBLE_DEVICES="${GPU_IDS}" torchrun \
   --decoder_base_dim 384 --decoder_num_resblocks 2 \
   --decoder_pixel_shuffle --decoder_temporal_blocks 2 \
   --rescale --no_decoder_aux \
+  --normalization_batches "${NORMALIZATION_BATCHES}" \
   --batch_size "${BATCH_SIZE}" \
   --accum_steps "${ACCUM_STEPS}" \
   --epochs "${EPOCHS}" \
@@ -71,6 +74,8 @@ CUDA_VISIBLE_DEVICES="${GPU_IDS}" torchrun \
   --warmup_steps "${WARMUP_STEPS}" \
   --ema_decay "${EMA_DECAY}" \
   --seq_len 8 --target_size 518 --max_frame_span 32 \
+  --clip_duration_seconds "${CLIP_DURATION_SECONDS}" \
+  --disable_temporal_mixer \
   --num_workers "${NUM_WORKERS}" --dtype bf16 \
   --log_every "${LOG_EVERY}" \
   --eval_every "${EVAL_EVERY}" \

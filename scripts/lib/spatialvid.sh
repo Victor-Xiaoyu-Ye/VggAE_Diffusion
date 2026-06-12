@@ -34,7 +34,7 @@ validate_model_config() {
 
 ensure_spatialvid_splits() {
   validate_spatialvid_config
-  python3 "${PROJECT}/prepare_spatialvid_splits.py" \
+  "${PYTHON_BIN}" "${PROJECT}/prepare_spatialvid_splits.py" \
     --csv "${SPATIALVID_METADATA}" \
     --video_root "${SPATIALVID_VIDEO_ROOT}" \
     --output_dir "${SPATIALVID_SPLIT_DIR}" \
@@ -47,7 +47,7 @@ ensure_spatialvid_splits() {
 
 ensure_spatialvid_scale_splits() {
   validate_spatialvid_config
-  python3 "${PROJECT}/prepare_spatialvid_splits.py" \
+  "${PYTHON_BIN}" "${PROJECT}/prepare_spatialvid_splits.py" \
     --csv "${SPATIALVID_METADATA}" \
     --video_root "${SPATIALVID_VIDEO_ROOT}" \
     --output_dir "${SPATIALVID_SPLIT_DIR}" \

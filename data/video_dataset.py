@@ -6,7 +6,12 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from utils.video_io import read_video_frames, read_depth_frames, _compute_frame_indices
+from utils.video_io import (
+    VideoDecodeError,
+    _compute_frame_indices,
+    read_depth_frames,
+    read_video_frames,
+)
 
 
 class SpatialVidDataset(Dataset):
@@ -19,7 +24,8 @@ class SpatialVidDataset(Dataset):
     def __init__(self, csv_path, video_root, seq_len=8, target_size=518,
                  annotation_index_path="", max_videos=0, num_frames_per_video=8,
                  depth_root="", temporal_jitter=True, index_shard_id=0,
-                 index_num_shards=1, check_files=True, max_frame_span=0):
+                 index_num_shards=1, check_files=True, max_frame_span=0,
+                 clip_duration_seconds=0.0, decode_retries=8):
         if index_num_shards < 1:
             raise ValueError("index_num_shards must be >= 1")
         if not 0 <= index_shard_id < index_num_shards:
@@ -31,6 +37,8 @@ class SpatialVidDataset(Dataset):
         self.seq_len = seq_len
         self.num_frames_per_video = num_frames_per_video
         self.max_frame_span = max_frame_span
+        self.clip_duration_seconds = clip_duration_seconds
+        self.decode_retries = max(0, int(decode_retries))
         self.depth_root = depth_root
         # Video and depth share one precomputed index list, so jitter remains
         # frame-aligned when depth supervision is enabled.
@@ -55,6 +63,7 @@ class SpatialVidDataset(Dataset):
                 if check_files and not os.path.exists(video_path):
                     continue
                 num_frames = int(row["num frames"])
+                fps = float(row.get("fps", 0) or 0)
                 caption = self.annotations.get(vid_id, {}).get("caption", "")
 
                 # Depth zip path: replace videos/ with depths/ and .mp4 with .zip
@@ -67,6 +76,7 @@ class SpatialVidDataset(Dataset):
                     "video_id": vid_id,
                     "video_path": video_path,
                     "num_frames": num_frames,
+                    "fps": fps,
                     "caption": caption,
                     "depth_zip_path": depth_zip_path,
                 })
@@ -84,7 +94,7 @@ class SpatialVidDataset(Dataset):
     def __len__(self):
         return len(self.index)
 
-    def __getitem__(self, idx):
+    def _load_entry(self, idx):
         entry = self.index[idx]
         nf = self.num_frames_per_video
 
@@ -93,6 +103,8 @@ class SpatialVidDataset(Dataset):
             entry["num_frames"], nf,
             temporal_jitter=self.temporal_jitter,
             max_frame_span=self.max_frame_span,
+            fps=entry["fps"],
+            clip_duration_seconds=self.clip_duration_seconds,
         )
 
         frames = read_video_frames(
@@ -113,6 +125,34 @@ class SpatialVidDataset(Dataset):
             "depth": depth,           # [S, H, W] or None
         }
 
+    def __getitem__(self, idx):
+        if not self.index:
+            raise IndexError("SpatialVidDataset is empty")
+
+        requested_idx = int(idx)
+        last_error = None
+        # A large odd stride avoids repeatedly selecting neighboring rows,
+        # which are often produced by the same source and can fail together.
+        retry_stride = 104729
+        for attempt in range(self.decode_retries + 1):
+            candidate_idx = (
+                requested_idx + attempt * retry_stride) % len(self.index)
+            try:
+                sample = self._load_entry(candidate_idx)
+                sample["requested_video_id"] = self.index[
+                    requested_idx]["video_id"]
+                sample["decode_replacement"] = int(candidate_idx != requested_idx)
+                sample["decode_error"] = "" if last_error is None else str(last_error)
+                return sample
+            except VideoDecodeError as exc:
+                last_error = exc
+
+        requested_path = self.index[requested_idx]["video_path"]
+        raise VideoDecodeError(
+            f"Unable to load {requested_path} or any of "
+            f"{self.decode_retries} deterministic replacements. "
+            f"Last error: {last_error}")
+
 
 def collate_fn(batch):
     frames = torch.stack([b["frames"] for b in batch], dim=0)  # [B, S, 3, H, W]
@@ -132,6 +172,16 @@ def collate_fn(batch):
         "frames": frames,
         "caption": captions,
         "video_id": video_ids,
+        "requested_video_id": [
+            b.get("requested_video_id", b["video_id"]) for b in batch
+        ],
+        "decode_replacements": sum(
+            int(b.get("decode_replacement", 0)) for b in batch
+        ),
+        "decode_errors": [
+            b.get("decode_error", "") for b in batch
+            if b.get("decode_error", "")
+        ],
         "depth": depth_tensor,
         "depth_valid": depth_valid,
     }

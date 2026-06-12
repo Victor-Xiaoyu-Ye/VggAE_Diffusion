@@ -18,6 +18,7 @@ WEIGHT_DECAY=1e-2
 WARMUP_STEPS=5000
 EMA_DECAY=0.9999
 NUM_WORKERS=8
+CLIP_DURATION_SECONDS=1.0
 # -----------------------------------------------------------------------------
 
 NUM_GPUS=${NUM_GPUS:-8}
@@ -34,7 +35,7 @@ if [[ -n "${RESUME}" ]]; then
   EXTRA_ARGS+=(--resume "${RESUME}")
 fi
 
-torchrun --nnodes="${NNODES}" --node_rank="${NODE_RANK}" \
+"${TORCHRUN_BIN}" --nnodes="${NNODES}" --node_rank="${NODE_RANK}" \
   --nproc_per_node="${NUM_GPUS}" --master_addr="${MASTER_ADDR}" \
   --master_port="${MASTER_PORT}" \
   "${PROJECT}/train_autoencoder.py" \
@@ -48,6 +49,7 @@ torchrun --nnodes="${NNODES}" --node_rank="${NODE_RANK}" \
   --max_videos "${REPRESENTATION_MAX_VIDEOS}" \
   --latent_dim 512 --latent_grid 18 \
   --levels 4 11 17 23 \
+  --disable_temporal_mixer \
   --decoder_base_dim 384 --decoder_num_resblocks 2 \
   --output_depth --lambda_depth 0.2 \
   --latent_noise_std 0.05 --latent_noise_warmup 5000 \
@@ -62,6 +64,7 @@ torchrun --nnodes="${NNODES}" --node_rank="${NODE_RANK}" \
   --warmup_steps "${WARMUP_STEPS}" \
   --ema_decay "${EMA_DECAY}" \
   --seq_len 8 --target_size 518 --max_frame_span 32 \
+  --clip_duration_seconds "${CLIP_DURATION_SECONDS}" \
   --num_workers "${NUM_WORKERS}" --dtype bf16 \
   --log_every 100 --eval_every 1 --save_every 1 \
   "${EXTRA_ARGS[@]}"

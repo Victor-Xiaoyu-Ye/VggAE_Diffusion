@@ -8,8 +8,9 @@ source "${SCRIPT_DIR}/../spatialvid_config.sh"
 REPORT_DIR="${RUN_ROOT}/reports"
 # -----------------------------------------------------------------------------
 
-python3 "${PROJECT}/collect_experiment_results.py" \
+"${PYTHON_BIN}" "${PROJECT}/collect_experiment_results.py" \
   --latent_contract "${RUN_ROOT}/diagnostics/latent_contract.json" \
+  --compact_stats "${RUN_ROOT}/diagnostics/compact_latent_stats.json" \
   --run "geometry_autoencoder=${RUN_ROOT}/10k/geometry_autoencoder" \
   --run "i0_decoder_overfit=${RUN_ROOT}/validation/i0_decoder_overfit" \
   --run "diffusion_overfit=${RUN_ROOT}/validation/compact_diffusion_overfit" \

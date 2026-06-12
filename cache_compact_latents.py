@@ -22,6 +22,13 @@ from data.video_dataset import SpatialVidDataset, collate_fn
 from models.generative_tokenizer import GenerativeTokenizer
 from streamvggt.models.streamvggt import StreamVGGT
 from utils.distributed import is_main_process, setup_ddp
+from utils.file_signature import sampled_file_signature
+from utils.latent_stats import (
+    create_moments,
+    finalize_moments,
+    reduce_moments,
+    update_moments,
+)
 
 
 def parse_args():
@@ -50,6 +57,8 @@ def parse_args():
     parser.add_argument("--target_size", type=int, default=518)
     parser.add_argument("--num_frames_per_video", type=int, default=8)
     parser.add_argument("--max_frame_span", type=int, default=32)
+    parser.add_argument("--clip_duration_seconds", type=float, default=0.0)
+    parser.add_argument("--disable_temporal_mixer", action="store_true")
 
     parser.add_argument("--batch_size", type=int, default=1)
     parser.add_argument("--num_workers", type=int, default=4)
@@ -149,28 +158,15 @@ def load_models(args, device):
     checkpoint = torch.load(
         args.autoencoder_ckpt, map_location="cpu", weights_only=False)
     tokenizer.load_state_dict(checkpoint["tokenizer"])
+    tokenizer.disable_temporal_mixer = (
+        args.disable_temporal_mixer
+        or bool(checkpoint.get("args", {}).get(
+            "disable_temporal_mixer", False))
+    )
     tokenizer.eval()
     for parameter in tokenizer.parameters():
         parameter.requires_grad_(False)
     return encoder, tokenizer
-
-
-def update_stats(stats, tensor):
-    values = tensor.float().reshape(-1, tensor.shape[-1]).double()
-    stats["sum"] += values.sum(dim=0)
-    stats["sum_sq"] += values.square().sum(dim=0)
-    stats["count"] += values.shape[0]
-
-
-def finalize_stats(stats):
-    count = stats["count"].clamp_min(1)
-    mean = stats["sum"] / count
-    variance = stats["sum_sq"] / count - mean.square()
-    return {
-        "mean": mean.float().cpu(),
-        "std": variance.clamp_min(1e-12).sqrt().float().cpu(),
-        "count": int(stats["count"].item()),
-    }
 
 
 def count_failure_records(paths):
@@ -181,12 +177,10 @@ def count_failure_records(paths):
     return count
 
 
-def file_signature(path):
-    stat = os.stat(path)
+def moments_to_cpu(moments):
     return {
-        "path": os.path.abspath(path),
-        "size": stat.st_size,
-        "mtime_ns": stat.st_mtime_ns,
+        key: value.detach().cpu()
+        for key, value in moments.items()
     }
 
 
@@ -226,6 +220,7 @@ def main():
         index_num_shards=args.index_num_shards,
         check_files=args.check_files,
         max_frame_span=args.max_frame_span,
+        clip_duration_seconds=args.clip_duration_seconds,
     )
     rank_indices = range(rank, len(dataset), world_size)
     rank_dataset = Subset(SafeDataset(dataset), rank_indices)
@@ -243,16 +238,9 @@ def main():
     writer = TarShardWriter(
         partition_dir, f"latents-r{rank:04d}", args.samples_per_tar)
 
-    target_stats = {
-        "sum": torch.zeros(args.latent_dim, device=device, dtype=torch.float64),
-        "sum_sq": torch.zeros(args.latent_dim, device=device, dtype=torch.float64),
-        "count": torch.zeros((), device=device, dtype=torch.float64),
-    }
-    cond_stats = {
-        "sum": torch.zeros(args.latent_dim, device=device, dtype=torch.float64),
-        "sum_sq": torch.zeros(args.latent_dim, device=device, dtype=torch.float64),
-        "count": torch.zeros((), device=device, dtype=torch.float64),
-    }
+    target_stats = create_moments(
+        args.seq_len - 1, args.latent_dim, device)
+    cond_stats = create_moments(1, args.latent_dim, device)
 
     sample_index = 0
     failed_samples = []
@@ -283,8 +271,8 @@ def main():
                     - i0_flat.expand(-1, video_flat.shape[1] - 1, -1, -1)
                 )
 
-                update_stats(target_stats, target)
-                update_stats(cond_stats, i0_flat)
+                update_moments(target_stats, target)
+                update_moments(cond_stats, i0_flat)
 
                 for batch_index in range(target.shape[0]):
                     key = (
@@ -305,9 +293,7 @@ def main():
 
     if use_ddp:
         for stats in (target_stats, cond_stats):
-            dist.all_reduce(stats["sum"], op=dist.ReduceOp.SUM)
-            dist.all_reduce(stats["sum_sq"], op=dist.ReduceOp.SUM)
-            dist.all_reduce(stats["count"], op=dist.ReduceOp.SUM)
+            reduce_moments(stats)
         dist.all_reduce(successful_samples, op=dist.ReduceOp.SUM)
         dist.barrier()
 
@@ -328,20 +314,28 @@ def main():
 
         stats_path = os.path.join(partition_dir, "stats.pt")
         torch.save({
-            "target": finalize_stats(target_stats),
-            "cond": finalize_stats(cond_stats),
+            "normalization_version": 2,
+            "target": finalize_moments(target_stats),
+            "cond": finalize_moments(cond_stats),
+            "moments": {
+                "target": moments_to_cpu(target_stats),
+                "cond": moments_to_cpu(cond_stats),
+            },
             "num_samples": int(successful_samples.item()),
             "num_failed": count_failure_records(glob.glob(
                 os.path.join(partition_dir, "failures-r*.jsonl"))),
             "representation": {
-                "encoder": file_signature(args.encoder_ckpt),
-                "autoencoder": file_signature(args.autoencoder_ckpt),
+                "encoder": sampled_file_signature(args.encoder_ckpt),
+                "autoencoder": sampled_file_signature(args.autoencoder_ckpt),
                 "latent_dim": args.latent_dim,
                 "latent_grid": args.latent_grid,
                 "levels": args.levels,
                 "seq_len": args.seq_len,
                 "target_size": args.target_size,
                 "max_frame_span": args.max_frame_span,
+                "clip_duration_seconds": args.clip_duration_seconds,
+                "disable_temporal_mixer": (
+                    tokenizer.disable_temporal_mixer),
             },
             "config": vars(args),
         }, stats_path)

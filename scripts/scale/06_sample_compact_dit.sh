@@ -23,7 +23,7 @@ require_file "${AUTOENCODER_CKPT}" "scale geometry autoencoder checkpoint"
 require_file "${I0_CKPT}" "scale I0 decoder checkpoint"
 require_file "${GENERATOR_CKPT}" "scale diffusion checkpoint"
 
-python3 "${PROJECT}/sample_compact_i0.py" \
+"${PYTHON_BIN}" "${PROJECT}/sample_compact_i0.py" \
   --i0_path "${REFERENCE_PATH}" \
   --encoder_ckpt "${STREAMVGGT_CKPT}" \
   --autoencoder_ckpt "${AUTOENCODER_CKPT}" \
