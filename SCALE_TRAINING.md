@@ -32,8 +32,10 @@ shards and exact raw normalization moments are written under the persistent
 `obs://yw-ads-training-gy1/data/external/personal/g00833899/y50046448/cache_latents`
 directory.
 The `/cache/yexiaoyu/vggae_runtime` tree is only staging and may disappear
-between jobs. Diffusion resume therefore reads the manifest, statistics, and
-tar shards from OBS rather than relying on local latent files.
+between jobs. Diffusion reads manifest/statistics through `moxing.file.read`
+and streams tar shards through `moxing.file.File`, so resume never relies on
+local latent files. Source MP4 is the exception: OpenCV needs a seekable local
+path, so each requested video is copied into a bounded disposable cache.
 
 Cache progress is transactional per rank. Every closed tar is uploaded before
 the rank progress checkpoint advances. The progress checkpoint contains the

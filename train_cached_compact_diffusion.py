@@ -3,6 +3,7 @@
 
 import argparse
 import contextlib
+import io
 import os
 import random
 
@@ -40,7 +41,7 @@ from utils.latent_stats import (
     normalize_latent,
     validate_latent_stats,
 )
-from utils.moxing_io import stage_remote_file
+from utils.moxing_io import is_remote_path, read_bytes
 
 
 def parse_args():
@@ -399,11 +400,9 @@ def main():
     set_seed(args.seed + rank)
     os.makedirs(args.output_dir, exist_ok=True)
 
-    metadata_cache = os.environ.get(
-        "MOX_METADATA_CACHE_DIR",
-        "/cache/yexiaoyu/vggae_runtime/cache/metadata")
-    stats_path = stage_remote_file(
-        args.stats, metadata_cache, max_cache_bytes=10 * 1024 ** 3)
+    stats_path = (
+        io.BytesIO(read_bytes(args.stats))
+        if is_remote_path(args.stats) else args.stats)
     cache_stats = torch.load(
         stats_path, map_location="cpu", weights_only=False)
     validate_latent_stats(
@@ -439,9 +438,9 @@ def main():
                 "[WARN] --eval_manifest not set; preview metrics use "
                 "a fixed training-cache sample")
         if args.eval_stats:
-            eval_stats_path = stage_remote_file(
-                args.eval_stats, metadata_cache,
-                max_cache_bytes=10 * 1024 ** 3)
+            eval_stats_path = (
+                io.BytesIO(read_bytes(args.eval_stats))
+                if is_remote_path(args.eval_stats) else args.eval_stats)
             eval_stats = torch.load(
                 eval_stats_path, map_location="cpu", weights_only=False)
             if eval_stats.get("representation") != representation:

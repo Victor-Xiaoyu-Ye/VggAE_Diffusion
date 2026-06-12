@@ -35,9 +35,9 @@ from utils.moxing_io import (
     copy_file,
     is_remote_path,
     join_remote,
+    read_bytes,
     read_text,
     remote_exists,
-    stage_remote_file,
     write_text,
 )
 
@@ -105,8 +105,7 @@ class TarShardWriter:
         remote_path = (
             join_remote(self.remote_output_dir, os.path.basename(path))
             if self.remote_output_dir else "")
-        if os.path.exists(path) or (
-                remote_path and remote_exists(remote_path)):
+        if os.path.exists(path):
             raise FileExistsError(
                 f"Refusing to overwrite existing cache shard: "
                 f"{remote_path or path}")
@@ -140,15 +139,14 @@ class TarShardWriter:
                 try:
                     copy_file(local_path, remote_path)
                 except Exception:
-                    if not remote_exists(remote_path):
-                        try:
-                            os.unlink(local_path)
-                        except FileNotFoundError:
-                            pass
-                        self.current_output_path = ""
-                        self.shard_index -= 1
-                        self.samples_in_shard = 0
-                        raise
+                    try:
+                        os.unlink(local_path)
+                    except FileNotFoundError:
+                        pass
+                    self.current_output_path = ""
+                    self.shard_index -= 1
+                    self.samples_in_shard = 0
+                    raise
                 os.unlink(local_path)
             self.paths.append(self.current_output_path)
             self.current_output_path = ""
@@ -359,11 +357,9 @@ def main():
     progress = None
     if args.resume_cache and progress_remote_path and remote_exists(
             progress_remote_path):
-        progress_local_path = os.path.join(
-            partition_dir, f"progress-r{rank:05d}.pt")
-        copy_file(progress_remote_path, progress_local_path)
         progress = torch.load(
-            progress_local_path, map_location="cpu", weights_only=False)
+            io.BytesIO(read_bytes(progress_remote_path)),
+            map_location="cpu", weights_only=False)
         if progress.get("contract") != contract:
             raise RuntimeError(
                 f"Cache resume contract mismatch for rank {rank}. "
@@ -585,15 +581,9 @@ def main():
                 remote_moments_path = join_remote(
                     remote_partition_dir,
                     f"moments-r{source_rank:05d}.pt")
-                local_moments_path = stage_remote_file(
-                    remote_moments_path,
-                    os.environ.get(
-                        "MOX_METADATA_CACHE_DIR",
-                        "/cache/yexiaoyu/vggae_runtime/cache/metadata"),
-                    max_cache_bytes=10 * 1024 ** 3,
-                )
                 rank_moments = torch.load(
-                    local_moments_path, map_location="cpu",
+                    io.BytesIO(read_bytes(remote_moments_path)),
+                    map_location="cpu",
                     weights_only=False)
                 target_rank_moments.append(rank_moments["target"])
                 cond_rank_moments.append(rank_moments["cond"])

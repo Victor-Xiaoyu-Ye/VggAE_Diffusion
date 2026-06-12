@@ -3,6 +3,7 @@
 
 import argparse
 import glob
+import io
 import os
 import re
 
@@ -12,9 +13,9 @@ from utils.moxing_io import (
     copy_file,
     is_remote_path,
     join_remote,
+    read_bytes,
     read_text,
     remote_exists,
-    stage_remote_file,
     write_text,
 )
 
@@ -159,10 +160,15 @@ def main():
         success_path = (
             join_remote(partition_dir, "_SUCCESS")
             if remote_cache else os.path.join(partition_dir, "_SUCCESS"))
-        success_exists = (
-            remote_exists(success_path)
-            if remote_cache else os.path.exists(success_path))
-        if not success_exists:
+        if remote_cache:
+            try:
+                if not remote_exists(success_path):
+                    raise FileNotFoundError(success_path)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Cache partition is incomplete (cannot copy _SUCCESS): "
+                    f"{partition_dir}") from exc
+        elif not os.path.exists(success_path):
             raise RuntimeError(
                 f"Cache partition is incomplete (missing _SUCCESS): "
                 f"{partition_dir}")
@@ -171,15 +177,11 @@ def main():
             if remote_cache else os.path.join(partition_dir, "stats.pt"))
         if not remote_cache and not os.path.exists(stats_path):
             raise FileNotFoundError(f"Missing partition stats: {stats_path}")
-        local_stats_path = stage_remote_file(
-            stats_path,
-            os.environ.get(
-                "MOX_METADATA_CACHE_DIR",
-                "/cache/yexiaoyu/vggae_runtime/cache/metadata"),
-            max_cache_bytes=10 * 1024 ** 3,
-        )
+        stats_source = (
+            io.BytesIO(read_bytes(stats_path))
+            if remote_cache else stats_path)
         stats = torch.load(
-            local_stats_path, map_location="cpu", weights_only=False)
+            stats_source, map_location="cpu", weights_only=False)
         target_entries.append(stats["target"])
         cond_entries.append(stats["cond"])
         raw_moments = stats.get("moments")

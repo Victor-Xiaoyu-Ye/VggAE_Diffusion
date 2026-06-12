@@ -10,8 +10,8 @@ from torch.utils.data import IterableDataset, get_worker_info
 from utils.moxing_io import (
     is_remote_path,
     join_remote,
+    open_file,
     read_text,
-    stage_remote_file,
 )
 
 
@@ -54,14 +54,6 @@ class LatentShardDataset(IterableDataset):
         self.repeat = repeat
         self.rank = rank
         self.world_size = world_size
-        self.remote_cache_dir = os.environ.get(
-            "MOX_LATENT_CACHE_DIR",
-            "/cache/yexiaoyu/vggae_runtime/cache/latent_shards")
-        self.remote_cache_max_bytes = int(
-            float(os.environ.get("MOX_LATENT_CACHE_GB", "800"))
-            * 1024 ** 3)
-        self.remote_download_retries = int(
-            os.environ.get("MOX_DOWNLOAD_RETRIES", "3"))
 
     def _consumer_info(self):
         rank = self.rank
@@ -82,13 +74,10 @@ class LatentShardDataset(IterableDataset):
         return consumer_id, num_consumers
 
     def _iter_shard(self, path):
-        local_path = stage_remote_file(
-            path,
-            self.remote_cache_dir,
-            max_cache_bytes=self.remote_cache_max_bytes,
-            retries=self.remote_download_retries,
-        )
-        with tarfile.open(local_path, mode="r:*") as archive:
+        remote = is_remote_path(path)
+        source = open_file(path, "rb")
+        tar_mode = "r|*" if remote else "r:*"
+        with source, tarfile.open(fileobj=source, mode=tar_mode) as archive:
             for member in archive:
                 if not member.isfile() or not member.name.endswith(".pt"):
                     continue
