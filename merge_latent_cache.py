@@ -13,6 +13,7 @@ from utils.moxing_io import (
     is_remote_path,
     join_remote,
     read_text,
+    remote_exists,
     stage_remote_file,
     write_text,
 )
@@ -155,6 +156,16 @@ def main():
     config = None
     representation = None
     for partition_dir in partition_dirs:
+        success_path = (
+            join_remote(partition_dir, "_SUCCESS")
+            if remote_cache else os.path.join(partition_dir, "_SUCCESS"))
+        success_exists = (
+            remote_exists(success_path)
+            if remote_cache else os.path.exists(success_path))
+        if not success_exists:
+            raise RuntimeError(
+                f"Cache partition is incomplete (missing _SUCCESS): "
+                f"{partition_dir}")
         stats_path = (
             join_remote(partition_dir, "stats.pt")
             if remote_cache else os.path.join(partition_dir, "stats.pt"))

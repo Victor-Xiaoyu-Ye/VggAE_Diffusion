@@ -14,6 +14,12 @@ if [[ "${NODE_RANK}" -ne 0 ]]; then
   exit 0
 fi
 
+LOG_DIR="${SCALE_ROOT}/cache_generation/merge"
+REMOTE_LOG_DIR="${SCALE_REMOTE_ROOT}/cache_generation/merge"
+start_output_sync "${LOG_DIR}" "${REMOTE_LOG_DIR}"
+trap 'stop_output_sync "${LOG_DIR}" "${REMOTE_LOG_DIR}"' EXIT
+exec > >(tee -a "${STAGE_LOG_FILE}") 2>&1
+
 "${PYTHON_BIN}" "${PROJECT}/merge_latent_cache.py" \
   --cache_dir "${SCALE_TRAIN_CACHE_DIR}" \
   --expected_partitions "${CACHE_NUM_PARTITIONS}" \

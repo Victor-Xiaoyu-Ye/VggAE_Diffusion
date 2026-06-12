@@ -24,11 +24,13 @@ VGGAE_REF_ROOT="${VGGAE_REF_ROOT:-/cache/yexiaoyu/vggae_ref}"
 STREAMVGGT_CKPT="${STREAMVGGT_CKPT:-${VGGAE_REF_ROOT}/StreamVGGT/checkpoints.pth}"
 GEOMETRY_AE_CKPT="${GEOMETRY_AE_CKPT:-${VGGAE_REF_ROOT}/checkpoints/geometry_autoencoder.pt}"
 
-# ModelArts injects OUTPUT_URL. It is the only persistent output root:
-# checkpoints, metrics, samples, manifests, statistics, and latent tar shards
-# are all stored below it.
+# ModelArts injects OUTPUT_URL for run outputs: checkpoints, metrics, samples,
+# TensorBoard, stdout, and NPU logs. Latent datasets use the fixed owner OBS
+# root declared below. Outside ModelArts, use the owner's output directory.
+PERSISTENT_OBS_ROOT="obs://yw-ads-training-gy1/data/external/personal/g00833899/y50046448"
 OUTPUT_URL="${OUTPUT_URL:-}"
-REMOTE_RUN_ROOT="${OUTPUT_URL%/}"
+REMOTE_RUN_ROOT="${OUTPUT_URL:-${PERSISTENT_OBS_ROOT}/output}"
+REMOTE_RUN_ROOT="${REMOTE_RUN_ROOT%/}"
 
 # The cluster runtime prepares PATH before invoking bash.
 PYTHON_BIN="${PYTHON_BIN:-python}"
@@ -43,7 +45,7 @@ export MOX_CACHE_WRITER_DIR="${LOCAL_CACHE_ROOT}/cache/latent_writer"
 export MOX_VIDEO_CACHE_GB="${MOX_VIDEO_CACHE_GB:-1400}"
 export MOX_LATENT_CACHE_GB="${MOX_LATENT_CACHE_GB:-1400}"
 export MOX_DOWNLOAD_RETRIES=4
-export OUTPUT_SYNC_SECONDS=300
+export OUTPUT_SYNC_SECONDS=60
 
 # Automatic deterministic split sizes.
 SPLIT_SEED=42
@@ -81,11 +83,15 @@ SPATIALVID_FULL_TRAIN_CSV="${SPATIALVID_SPLIT_DIR}/train_full.csv"
 SCALE_ROOT="${RUN_ROOT}/scale"
 SCALE_CSV_SHARD_ROOT="${SCALE_ROOT}/csv_shards"
 
-# Large latent caches live under OUTPUT_URL and are streamed through the local
-# MOX_LATENT_CACHE_DIR.
+# Latent cache is a durable dataset artifact, independent of a particular
+# ModelArts OUTPUT_URL. Bump the version whenever the representation contract
+# changes, and never mix shards from different versions.
+LATENT_CACHE_VERSION="vggae_streamvggt_256x18_v1"
+LATENT_CACHE_OBS_ROOT="${PERSISTENT_OBS_ROOT}/cache_latents/${LATENT_CACHE_VERSION}"
+
 SCALE_REMOTE_ROOT="${REMOTE_RUN_ROOT}/scale"
 SCALE_GEOMETRY_AE_CKPT_URL="${SCALE_REMOTE_ROOT}/geometry_autoencoder/checkpoint_final.pt"
 SCALE_I0_DECODER_CKPT_URL="${SCALE_REMOTE_ROOT}/i0_decoder/checkpoint_final.pt"
 SCALE_DIFFUSION_CKPT_URL="${SCALE_REMOTE_ROOT}/compact_dit/checkpoint_final.pt"
-SCALE_TRAIN_CACHE_DIR="${SCALE_REMOTE_ROOT}/latent_cache/train"
-SCALE_EVAL_CACHE_DIR="${SCALE_REMOTE_ROOT}/latent_cache/eval"
+SCALE_TRAIN_CACHE_DIR="${LATENT_CACHE_OBS_ROOT}/train"
+SCALE_EVAL_CACHE_DIR="${LATENT_CACHE_OBS_ROOT}/eval"

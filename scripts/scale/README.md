@@ -28,8 +28,22 @@ at:
 ```
 
 There is no `veggie_ref` directory. The geometry autoencoder, I0 decoder,
-latent statistics, and Compact DiT are produced by this pipeline and persisted
-below `$OUTPUT_URL`.
+latent statistics, and Compact DiT are produced by this pipeline.
+
+Persistent OBS layout:
+
+```text
+obs://yw-ads-training-gy1/data/external/personal/g00833899/y50046448/
+├── cache_latents/
+│   └── vggae_streamvggt_256x18_v1/
+│       ├── train/
+│       └── eval/
+└── output/                         # fallback when OUTPUT_URL is absent
+```
+
+ModelArts training outputs use `$OUTPUT_URL` when it is provided. The latent
+cache always uses the fixed `cache_latents` path above so a new training job can
+reuse it independently of its output directory.
 
 The SpatialVID-HQ root is already set to:
 
@@ -52,8 +66,10 @@ SpatialVID CSV. No manually prepared evaluation CSV is required.
    - By default, one 6x8 job partitions the full CSV across 48 ranks.
    - For multiple cache jobs, edit `CACHE_PARTITION_ID` and
      `CACHE_NUM_PARTITIONS`.
-   - Each completed tar shard is uploaded immediately to
-     `$OUTPUT_URL/scale/latent_cache/train`, then removed from local staging.
+   - Each completed tar shard is uploaded immediately to the persistent
+     `cache_latents/.../train` directory, then removed from local staging.
+   - `progress-rXXXXX.pt` is the exact resume cursor and raw-moment state.
+     `status-rXXXXX.json` is the human-readable progress report.
 5. `03_cache_eval_latents.sh`
    - Run once to cache the automatically selected held-out split.
 6. `04_merge_latent_cache.sh`
@@ -72,8 +88,9 @@ SpatialVID CSV. No manually prepared evaluation CSV is required.
 At 256 channels, each eight-frame fp16 cache sample is about 1.27 MiB. The
 1,461,448-clip cache therefore needs roughly 1.8 TiB before tar overhead and
 metadata. The configured `/cache` budget is used only as a bounded staging
-area. Persistent checkpoints, metrics, samples, manifests, statistics, and
-latent shards remain under `$OUTPUT_URL`.
+area. Persistent latent shards remain under the fixed `cache_latents` OBS
+directory. Training checkpoints, metrics, samples, TensorBoard events, stdout,
+and NPU process logs remain under `$OUTPUT_URL`.
 
 Distributed launch uses HCCL. ModelArts variables are read automatically:
 `VC_WORKER_NUM`, `VC_TASK_INDEX`, and `VC_WORKER_HOSTS`. The scale scripts
@@ -88,15 +105,18 @@ The representation checkpoint is a data contract. Do not continue changing the
 tokenizer after latent caching starts. If the tokenizer changes, rebuild the
 cache and its statistics.
 
-For cache-job fault isolation, use multiple `CACHE_NUM_PARTITIONS` jobs in
-production. A partition writes its final moments and manifest only after all
-ranks finish. If one partition fails, its already uploaded tar files are
-partial output and that partition must be cleared and rerun; completed
-partitions are unaffected. Diffusion training restarts never depend on local
-latent files and always read the persistent OBS manifest.
+Cache generation uses shard-level transactional resume. Re-running the same
+`03_cache_latents.sh` with the same 6x8 topology loads each rank's progress
+checkpoint and continues after its last uploaded tar. A partition writes
+`_SUCCESS`, final moments, and its manifest only after all ranks finish.
+`04_merge_latent_cache.sh` rejects partitions without `_SUCCESS`. Diffusion
+training restarts never depend on local latent files and always read the
+persistent OBS manifest.
 
-All stage 00, 01, and 05 training checkpoints are resumable. `RESUME` accepts
-either a local path or an `obs://` checkpoint. Stage 05 restores model, FP32 EMA, optimizer,
+All stage 00, 01, and 05 training checkpoints are resumable. Every periodic
+save also updates `checkpoint_latest.pt`, and the scale scripts automatically
+resume it when rerun. `RESUME` can still override this with a local or `obs://`
+checkpoint. Stage 05 restores model, FP32 EMA, optimizer,
 schedule, global step, normalization contract, and RNG state. The streaming
 shard iterator restarts rather than resuming at an exact tar byte offset, so
 sample order after recovery is not bit-identical.
@@ -109,3 +129,15 @@ DiT baseline first, then compare Wan initialization on the same cached latents.
 Outputs are written under local `RUN_ROOT`, then global rank 0 mirrors them
 every `OUTPUT_SYNC_SECONDS` to
 `$OUTPUT_URL/scale/<stage>`.
+
+Each stage contains:
+
+```text
+checkpoint_latest.pt
+checkpoint_*.pt
+metrics.jsonl
+tb/
+samples/
+logs/train_node*.log
+logs/node-*/npu/
+```

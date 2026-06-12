@@ -10,6 +10,7 @@ source "${SCRIPT_DIR}/../lib/modelarts.sh"
 OUTPUT_DIR="${SCALE_ROOT}/geometry_autoencoder"
 REMOTE_OUTPUT_DIR="${SCALE_REMOTE_ROOT}/geometry_autoencoder"
 RESUME=""
+AUTO_RESUME=1
 REPRESENTATION_MAX_VIDEOS=0
 ENABLE_DEPTH=0
 
@@ -30,9 +31,15 @@ require_scale_cluster
 ensure_spatialvid_scale_splits
 
 EXTRA_ARGS=()
+if [[ "${AUTO_RESUME}" -eq 1 || -n "${RESUME}" ]]; then
+  RESUME=$(resolve_resume_checkpoint \
+    "${RESUME}" \
+    "${OUTPUT_DIR}/checkpoint_latest.pt" \
+    "${REMOTE_OUTPUT_DIR}/checkpoint_latest.pt" \
+    "${LOCAL_CACHE_ROOT}/resume/geometry_autoencoder.pt")
+fi
 if [[ -n "${RESUME}" ]]; then
-  RESUME=$(stage_resume_checkpoint \
-    "${RESUME}" "${LOCAL_CACHE_ROOT}/resume/geometry_autoencoder.pt")
+  echo "Resuming geometry autoencoder from ${RESUME}"
   EXTRA_ARGS+=(--resume "${RESUME}")
 fi
 if [[ "${ENABLE_DEPTH}" -eq 1 ]]; then

@@ -28,10 +28,18 @@ Frame 0 is observed and must not be diffused.
 Changing the tokenizer invalidates all cached latents and diffusion checkpoints.
 On ModelArts, videos remain on OBS and are staged per sample into a bounded
 node-local cache. Raw StreamVGGT features are never persisted. Compact latent
-shards and exact raw normalization moments are written under `$OUTPUT_URL`.
+shards and exact raw normalization moments are written under the persistent
+`obs://yw-ads-training-gy1/data/external/personal/g00833899/y50046448/cache_latents`
+directory.
 The `/cache/yexiaoyu/vggae_runtime` tree is only staging and may disappear
 between jobs. Diffusion resume therefore reads the manifest, statistics, and
 tar shards from OBS rather than relying on local latent files.
+
+Cache progress is transactional per rank. Every closed tar is uploaded before
+the rank progress checkpoint advances. The progress checkpoint contains the
+dataset cursor, shard list, failure records, and exact raw normalization
+moments. Re-running the same cache script with the same world size resumes from
+that cursor. Final merge requires a partition `_SUCCESS` marker.
 
 The active six-node configuration uses a 256-channel, 18x18 latent. Four
 deterministic one-second windows per source video produce 1,461,448 cached
@@ -57,6 +65,10 @@ Every checkpoint save triggers a visual preview. Online training saves decoded
 RGB comparisons. Cached training always saves target/generated residual-energy
 maps; with an aligned held-out I0 image and I0 decoder checkpoint it also saves
 decoded target-latent versus generated-latent RGB grids.
+
+Every node writes stdout and Ascend process logs under `logs/`; rank-0 output
+sync and per-node log sync upload them every 60 seconds. Periodic saves update
+`checkpoint_latest.pt`, which scale scripts detect and resume automatically.
 
 ## Representation Gate
 
