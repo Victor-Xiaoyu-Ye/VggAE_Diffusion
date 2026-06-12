@@ -16,6 +16,7 @@ import tempfile
 
 
 REQUIRED_FIELDS = ("id", "video path", "num frames")
+ALGORITHM_VERSION = 2
 
 
 def parse_args():
@@ -65,6 +66,7 @@ def resolve_video_path(video_root, metadata_path):
 
 def expected_manifest(args):
     return {
+        "algorithm_version": ALGORITHM_VERSION,
         "source": file_signature(args.csv),
         "video_root": os.path.abspath(args.video_root),
         "train_count": args.train_count,
@@ -167,6 +169,45 @@ def select_rows(args):
         selected.append(row)
         if len(selected) == requested:
             break
+
+    # A local SpatialVID copy may contain a sparse subset of a much larger
+    # metadata CSV. In that case a bounded metadata candidate pool can miss
+    # most files that are actually present. Fall back to hashing all existing
+    # local videos so the requested split is filled deterministically.
+    if len(selected) < requested:
+        print(
+            f"[INFO] Candidate pool found only {len(selected)}/{requested} "
+            "existing videos; scanning the local subset.")
+        existing_heap = []
+        missing_files = 0
+        with open(args.csv, newline="") as source:
+            reader = csv.DictReader(source)
+            for row_index, row in enumerate(reader):
+                try:
+                    num_frames = int(float(row["num frames"]))
+                except (TypeError, ValueError):
+                    continue
+                if num_frames < args.min_frames:
+                    continue
+                video_path = resolve_video_path(
+                    args.video_root, row["video path"])
+                if not os.path.isfile(video_path):
+                    missing_files += 1
+                    continue
+                score = stable_score(args.seed, row_index, row)
+                item = (-score, row_index, row)
+                if len(existing_heap) < requested:
+                    heapq.heappush(existing_heap, item)
+                elif score < -existing_heap[0][0]:
+                    heapq.heapreplace(existing_heap, item)
+        selected = [
+            row for _, _, row in sorted(
+                [(-negative_score, row_index, row)
+                 for negative_score, row_index, row in existing_heap],
+                key=lambda item: (item[0], item[1]),
+            )
+        ]
+
     minimum_required = args.overfit_count + args.eval_count + 1
     if len(selected) < minimum_required:
         raise RuntimeError(

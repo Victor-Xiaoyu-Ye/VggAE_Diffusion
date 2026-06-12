@@ -14,18 +14,21 @@ EPOCHS=50
 BATCH_SIZE=1
 ACCUM_STEPS=4
 LEARNING_RATE=1e-4
+PRETRAINED_LR_SCALE=0.1
 WEIGHT_DECAY=1e-2
 WARMUP_STEPS=500
 EMA_DECAY=0.999
 LPIPS_WEIGHT=1.0
-NUM_WORKERS=2
+NUM_WORKERS=4
+DECODE_RETRIES=8
+CLIP_DURATION_SECONDS=1.0
 SAVE_EVERY=5
 EVAL_EVERY=5
 LOG_EVERY=50
 # -----------------------------------------------------------------------------
 
-NUM_GPUS=${NUM_GPUS:-4}
-GPU_IDS=${GPU_IDS:-0,1,2,3}
+NUM_GPUS=${NUM_GPUS:-7}
+GPU_IDS=${GPU_IDS:-1,2,3,4,5,6,7}
 MASTER_PORT=${MASTER_PORT:-29530}
 
 ensure_spatialvid_splits
@@ -36,7 +39,7 @@ if [[ -n "${RESUME}" ]]; then
   EXTRA_ARGS+=(--resume "${RESUME}")
 fi
 
-CUDA_VISIBLE_DEVICES="${GPU_IDS}" torchrun \
+CUDA_VISIBLE_DEVICES="${GPU_IDS}" "${TORCHRUN_BIN}" \
   --nproc_per_node="${NUM_GPUS}" --master_port="${MASTER_PORT}" \
   "${PROJECT}/train_i0_autoencoder.py" \
   --csv "${SPATIALVID_TRAIN_10K_CSV}" \
@@ -52,13 +55,17 @@ CUDA_VISIBLE_DEVICES="${GPU_IDS}" torchrun \
   --batch_size "${BATCH_SIZE}" \
   --accum_steps "${ACCUM_STEPS}" \
   --lr "${LEARNING_RATE}" \
+  --pretrained_lr_scale "${PRETRAINED_LR_SCALE}" \
   --wd "${WEIGHT_DECAY}" \
   --warmup_steps "${WARMUP_STEPS}" \
   --max_grad_norm 1.0 \
   --ema_decay "${EMA_DECAY}" \
   --lambda_lpips "${LPIPS_WEIGHT}" \
   --dtype bf16 --seq_len 8 --target_size 518 --max_frame_span 32 \
+  --clip_duration_seconds "${CLIP_DURATION_SECONDS}" \
+  --disable_temporal_mixer \
   --num_workers "${NUM_WORKERS}" \
+  --decode_retries "${DECODE_RETRIES}" \
   --log_every "${LOG_EVERY}" \
   --save_every "${SAVE_EVERY}" \
   --eval_every "${EVAL_EVERY}" \

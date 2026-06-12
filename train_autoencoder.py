@@ -83,6 +83,7 @@ def parse_args():
     p.add_argument('--decoder_base_dim', type=int, default=384,
                    help='Decoder channel width (384=high quality, 256=speed)')
     p.add_argument('--decoder_num_resblocks', type=int, default=2)
+    p.add_argument('--disable_temporal_mixer', action='store_true')
     p.add_argument('--output_depth', action='store_true', default=False)
     p.add_argument('--depth_root', type=str, default='')
     p.add_argument('--lambda_depth', type=float, default=0.1)
@@ -118,6 +119,8 @@ def parse_args():
     p.add_argument('--num_frames_per_video', type=int, default=8)
     p.add_argument('--max_frame_span', type=int, default=0,
                    help='Sample frames within at most this many source frames')
+    p.add_argument('--clip_duration_seconds', type=float, default=0.0,
+                   help='Fixed clip duration; takes precedence over frame span')
     p.add_argument('--num_workers', type=int, default=4)
 
     # Eval
@@ -257,10 +260,19 @@ def validate_resume_args(saved_args, args):
     for key in (
             'latent_dim', 'latent_grid', 'token_dim', 'levels', 'seq_len',
             'target_size', 'decoder_base_dim', 'decoder_num_resblocks',
-            'output_depth'):
+            'output_depth', 'disable_temporal_mixer', 'max_frame_span',
+            'clip_duration_seconds'):
         if key not in saved_args:
-            continue
-        saved = saved_args[key]
+            if key not in (
+                    'disable_temporal_mixer', 'max_frame_span',
+                    'clip_duration_seconds'):
+                continue
+            if key == 'disable_temporal_mixer':
+                saved = False
+            else:
+                saved = 0 if key == 'max_frame_span' else 0.0
+        else:
+            saved = saved_args[key]
         current = getattr(args, key)
         if isinstance(saved, (list, tuple)):
             matches = list(saved) == list(current)
@@ -353,6 +365,7 @@ def main():
         token_dim=args.token_dim, latent_dim=args.latent_dim,
         latent_grid=args.latent_grid, levels=args.levels,
         seq_len=args.seq_len, input_grid=args.target_size // 14,
+        disable_temporal_mixer=args.disable_temporal_mixer,
     ).to(device=device)
 
     decoder = CompactDecoder(
@@ -388,6 +401,7 @@ def main():
         num_frames_per_video=args.num_frames_per_video,
         depth_root=args.depth_root,
         max_frame_span=args.max_frame_span,
+        clip_duration_seconds=args.clip_duration_seconds,
     )
     sampler = torch.utils.data.distributed.DistributedSampler(dataset) if use_ddp else None
     dataloader = DataLoader(
@@ -416,6 +430,7 @@ def main():
             depth_root=args.depth_root,
             temporal_jitter=False,
             max_frame_span=args.max_frame_span,
+            clip_duration_seconds=args.clip_duration_seconds,
         )
         eval_loader = DataLoader(
             eval_dataset, batch_size=1, shuffle=False, num_workers=0,

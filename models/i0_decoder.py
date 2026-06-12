@@ -31,6 +31,54 @@ def load_i0_decoder_state_dict(decoder, state_dict):
     return load_info
 
 
+def initialize_i0_decoder_from_compact(decoder, state_dict):
+    """Initialize the shared rendering path from a CompactDecoder checkpoint."""
+    target_state = decoder.state_dict()
+    loaded = {}
+    shape_mismatches = []
+
+    for source_key, value in state_dict.items():
+        target_key = source_key
+        parts = source_key.split(".")
+        if len(parts) >= 4 and parts[0].startswith("up"):
+            if parts[1:3] == ["upsample", "conv"]:
+                target_key = ".".join([parts[0], "0", "0", *parts[3:]])
+            elif parts[1] == "resblocks":
+                target_key = ".".join(
+                    [parts[0], str(int(parts[2]) + 1), *parts[3:]])
+
+        if target_key not in target_state:
+            continue
+        if target_state[target_key].shape != value.shape:
+            shape_mismatches.append(
+                (source_key, target_key, value.shape,
+                 target_state[target_key].shape))
+            continue
+        loaded[target_key] = value
+
+    if shape_mismatches:
+        raise RuntimeError(
+            f"Compact decoder initialization shape mismatch: "
+            f"{shape_mismatches[:5]}")
+
+    required_prefixes = (
+        "stem.", "up0.", "up1.", "up2.", "up3.", "up4.",
+        "temporal_low.", "final_refine.", "rgb_head.",
+    )
+    missing_prefixes = [
+        prefix for prefix in required_prefixes
+        if not any(key.startswith(prefix) for key in loaded)
+    ]
+    if missing_prefixes:
+        raise RuntimeError(
+            "Compact decoder checkpoint is missing shared I0 decoder blocks: "
+            f"{missing_prefixes}")
+
+    target_state.update(loaded)
+    decoder.load_state_dict(target_state)
+    return len(loaded)
+
+
 def _gn(ch):
     for g in [32, 16, 8, 4, 1]:
         if ch % g == 0: return nn.GroupNorm(g, ch)
@@ -74,6 +122,8 @@ class CrossAttnBlock(nn.Module):
         self.k_proj = nn.Linear(app_ch, geo_ch)
         self.v_proj = nn.Linear(app_ch, geo_ch)
         self.out_proj = nn.Linear(geo_ch, geo_ch)
+        nn.init.zeros_(self.out_proj.weight)
+        nn.init.zeros_(self.out_proj.bias)
 
     def forward(self, z_geo_flat, I_0_feat):
         """z_geo_flat: [B*S, N_g, C_g], I_0_feat: [B*S, N_f, C_a]"""

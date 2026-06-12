@@ -56,7 +56,7 @@ if [[ -n "${EVAL_I0_PATH}" ]]; then
   )
 fi
 
-torchrun --nnodes="${NNODES}" --node_rank="${NODE_RANK}" \
+"${TORCHRUN_BIN}" --nnodes="${NNODES}" --node_rank="${NODE_RANK}" \
   --nproc_per_node="${NUM_GPUS}" --master_addr="${MASTER_ADDR}" \
   --master_port="${MASTER_PORT}" \
   "${PROJECT}/train_cached_compact_diffusion.py" \

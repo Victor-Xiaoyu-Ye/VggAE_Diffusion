@@ -5,16 +5,21 @@
 # ============================================================================
 
 # SpatialVID layout. Usually only SPATIALVID_ROOT needs to change.
-SPATIALVID_ROOT="/path/to/spatial-vid-hq-oft"
+SPATIALVID_ROOT="/public2/LiZhen/yexiaoyu/dataset/spatial-vid-hq-oft"
 SPATIALVID_METADATA="${SPATIALVID_ROOT}/data/train/SpatialVID_HQ_metadata.csv"
 SPATIALVID_VIDEO_ROOT="${SPATIALVID_ROOT}/videos/SpatialVID/videos"
 SPATIALVID_DEPTH_ROOT="${SPATIALVID_ROOT}/depths/SpatialVID/depths"
 
 # Frozen StreamVGGT checkpoint.
-STREAMVGGT_CKPT="/path/to/streamvggt/checkpoints.pth"
+STREAMVGGT_CKPT="/home/yexiaoyu/work/4DLangVGGT/ckpt/streamvggt/checkpoints.pth"
 
 # All generated splits, checkpoints, previews, and reports are kept here.
-RUN_ROOT="/path/to/vggae-runs"
+RUN_ROOT="/home/yexiaoyu/work/VggAE-Diffusion/outputs/spatialvid_runs"
+
+# Use the project environment explicitly so scripts do not depend on the
+# interactive shell's currently activated Conda environment.
+PYTHON_BIN="/home/yexiaoyu/miniconda3/envs/rae/bin/python"
+TORCHRUN_BIN="/home/yexiaoyu/miniconda3/envs/rae/bin/torchrun"
 
 # Automatic deterministic split sizes.
 SPLIT_SEED=42
@@ -25,7 +30,7 @@ MIN_VIDEO_FRAMES=8
 
 # Checkpoints consumed by downstream stages. Change these when selecting a
 # different experiment checkpoint.
-GEOMETRY_AE_CKPT="${RUN_ROOT}/10k/geometry_autoencoder/checkpoint_final.pt"
+GEOMETRY_AE_CKPT="/home/yexiaoyu/work/VggAE-Diffusion/ckpts/autoencoder/exp-1-big/checkpoint_final.pt"
 I0_DECODER_CKPT="${RUN_ROOT}/10k/i0_decoder/checkpoint_final.pt"
 OVERFIT_I0_DECODER_CKPT="${RUN_ROOT}/validation/i0_decoder_overfit/checkpoint_final.pt"
 OVERFIT_DIFFUSION_CKPT="${RUN_ROOT}/validation/compact_diffusion_overfit/checkpoint_final.pt"

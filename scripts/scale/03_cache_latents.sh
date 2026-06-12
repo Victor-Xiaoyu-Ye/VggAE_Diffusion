@@ -13,6 +13,7 @@ INDEX_NUM_SHARDS=256
 SAMPLES_PER_TAR=512
 BATCH_SIZE=1
 NUM_WORKERS=8
+CLIP_DURATION_SECONDS=1.0
 # -----------------------------------------------------------------------------
 
 INDEX_SHARD_ID=${INDEX_SHARD_ID:?Cluster array must set INDEX_SHARD_ID}
@@ -27,7 +28,7 @@ printf -v CSV_PART "part-%05d.csv" "${INDEX_SHARD_ID}"
 CSV_PATH="${SCALE_CSV_SHARD_ROOT}/train/${CSV_PART}"
 require_file "${CSV_PATH}" "training metadata shard"
 
-torchrun --nnodes="${NNODES}" --node_rank="${NODE_RANK}" \
+"${TORCHRUN_BIN}" --nnodes="${NNODES}" --node_rank="${NODE_RANK}" \
   --nproc_per_node="${NUM_GPUS}" --master_addr="${MASTER_ADDR}" \
   --master_port="${MASTER_PORT}" \
   "${PROJECT}/cache_compact_latents.py" \
@@ -42,4 +43,5 @@ torchrun --nnodes="${NNODES}" --node_rank="${NODE_RANK}" \
   --latent_dim 512 --latent_grid 18 \
   --levels 4 11 17 23 \
   --seq_len 8 --target_size 518 --max_frame_span 32 \
+  --clip_duration_seconds "${CLIP_DURATION_SECONDS}" \
   --batch_size "${BATCH_SIZE}" --num_workers "${NUM_WORKERS}"

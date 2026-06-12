@@ -11,7 +11,7 @@ AUTOENCODER_CKPT="${GEOMETRY_AE_CKPT}"
 I0_CKPT="${I0_DECODER_CKPT}"
 GENERATOR_CKPT="${DIFFUSION_CKPT}"
 OUT_DIR="${RUN_ROOT}/samples/compact_i0"
-DEVICE_ID=0
+DEVICE_ID=6
 SEED=42
 NUM_STEPS=50
 SOLVER="midpoint"
@@ -24,7 +24,7 @@ require_file "${AUTOENCODER_CKPT}" "geometry autoencoder checkpoint"
 require_file "${I0_CKPT}" "I0 decoder checkpoint"
 require_file "${GENERATOR_CKPT}" "diffusion checkpoint"
 
-CUDA_VISIBLE_DEVICES="${DEVICE_ID}" python3 \
+CUDA_VISIBLE_DEVICES="${DEVICE_ID}" "${PYTHON_BIN}" \
   "${PROJECT}/sample_compact_i0.py" \
   --i0_path "${REFERENCE_PATH}" \
   --encoder_ckpt "${STREAMVGGT_CKPT}" \

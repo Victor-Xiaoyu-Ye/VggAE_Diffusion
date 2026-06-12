@@ -15,9 +15,11 @@ EPOCHS=3
 BATCH_SIZE=1
 ACCUM_STEPS=8
 LEARNING_RATE=1e-4
+PRETRAINED_LR_SCALE=0.1
 WEIGHT_DECAY=1e-2
 WARMUP_STEPS=5000
 NUM_WORKERS=8
+CLIP_DURATION_SECONDS=1.0
 # -----------------------------------------------------------------------------
 
 NUM_GPUS=${NUM_GPUS:-8}
@@ -34,7 +36,7 @@ if [[ -n "${RESUME}" ]]; then
   EXTRA_ARGS+=(--resume "${RESUME}")
 fi
 
-torchrun --nnodes="${NNODES}" --node_rank="${NODE_RANK}" \
+"${TORCHRUN_BIN}" --nnodes="${NNODES}" --node_rank="${NODE_RANK}" \
   --nproc_per_node="${NUM_GPUS}" --master_addr="${MASTER_ADDR}" \
   --master_port="${MASTER_PORT}" \
   "${PROJECT}/train_i0_autoencoder.py" \
@@ -47,15 +49,19 @@ torchrun --nnodes="${NNODES}" --node_rank="${NODE_RANK}" \
   --output_dir "${OUTPUT_DIR}" \
   --max_videos "${REPRESENTATION_MAX_VIDEOS}" \
   --latent_dim 512 --latent_grid 18 \
+  --disable_temporal_mixer \
   --decoder_base_dim 384 --decoder_num_resblocks 2 \
   --epochs "${EPOCHS}" \
   --batch_size "${BATCH_SIZE}" \
   --accum_steps "${ACCUM_STEPS}" \
-  --lr "${LEARNING_RATE}" \
+    --lr "${LEARNING_RATE}" \
+    --pretrained_lr_scale "${PRETRAINED_LR_SCALE}" \
   --wd "${WEIGHT_DECAY}" \
   --warmup_steps "${WARMUP_STEPS}" \
   --max_grad_norm 1.0 --lambda_lpips 1.0 \
   --dtype bf16 --seq_len 8 --target_size 518 \
-  --max_frame_span 32 --num_workers "${NUM_WORKERS}" \
+  --max_frame_span 32 \
+  --clip_duration_seconds "${CLIP_DURATION_SECONDS}" \
+  --num_workers "${NUM_WORKERS}" \
   --log_every 50 --save_every 1 --eval_every 1 \
   "${EXTRA_ARGS[@]}"

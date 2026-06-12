@@ -27,6 +27,11 @@ from utils.training import (
     capture_rng_state,
     restore_rng_state,
 )
+from utils.latent_stats import (
+    denormalize_latent,
+    normalize_latent,
+    validate_latent_stats,
+)
 
 
 def parse_args():
@@ -272,8 +277,10 @@ def evaluate_preview(model, preview_batch, target_mean, target_std,
         device=device, dtype=torch.float32)
     cond_raw = preview_batch["cond"].to(
         device=device, dtype=torch.float32)
-    target = ((target_raw - target_mean) / target_std).to(model_dtype)
-    cond = ((cond_raw - cond_mean) / cond_std).to(model_dtype)
+    target_stats = {"mean": target_mean, "std": target_std}
+    cond_stats = {"mean": cond_mean, "std": cond_std}
+    target = normalize_latent(target_raw, target_stats).to(model_dtype)
+    cond = normalize_latent(cond_raw, cond_stats).to(model_dtype)
 
     generator = torch.Generator(device=device)
     generator.manual_seed(args.seed + 17)
@@ -307,7 +314,7 @@ def evaluate_preview(model, preview_batch, target_mean, target_std,
             device=device, dtype=model_dtype)
         z = z + dt * model(z_mid, t_mid, cond=cond)
 
-    generated_raw = z.float() * target_std + target_mean
+    generated_raw = denormalize_latent(z, target_stats)
     save_latent_preview(
         target_raw, generated_raw,
         os.path.join(
@@ -358,17 +365,18 @@ def main():
 
     cache_stats = torch.load(
         args.stats, map_location="cpu", weights_only=False)
+    validate_latent_stats(
+        cache_stats["target"], args.seq_len, args.latent_dim, name="target")
+    validate_latent_stats(
+        cache_stats["cond"], 1, args.latent_dim, name="condition")
     target_mean = cache_stats["target"]["mean"].to(
-        device=device, dtype=torch.float32).view(1, 1, 1, -1)
+        device=device, dtype=torch.float32)
     target_std = cache_stats["target"]["std"].to(
-        device=device, dtype=torch.float32).clamp_min(1e-6).view(1, 1, 1, -1)
+        device=device, dtype=torch.float32).clamp_min(1e-6)
     cond_mean = cache_stats["cond"]["mean"].to(
-        device=device, dtype=torch.float32).view(1, 1, 1, -1)
+        device=device, dtype=torch.float32)
     cond_std = cache_stats["cond"]["std"].to(
-        device=device, dtype=torch.float32).clamp_min(1e-6).view(1, 1, 1, -1)
-    if target_mean.shape[-1] != args.latent_dim:
-        raise ValueError(
-            f"Stats latent dim {target_mean.shape[-1]} != {args.latent_dim}")
+        device=device, dtype=torch.float32).clamp_min(1e-6)
     representation = cache_stats.get("representation", {})
     if representation:
         if int(representation["latent_grid"]) != args.latent_grid:
@@ -494,8 +502,12 @@ def main():
                 raise ValueError(
                     f"Unexpected target shape {tuple(target_raw.shape)}")
 
-            target = ((target_raw - target_mean) / target_std).to(model_dtype)
-            cond = ((cond_raw - cond_mean) / cond_std).to(model_dtype)
+            target = normalize_latent(
+                target_raw, {"mean": target_mean, "std": target_std}
+            ).to(model_dtype)
+            cond = normalize_latent(
+                cond_raw, {"mean": cond_mean, "std": cond_std}
+            ).to(model_dtype)
 
             sync_context = contextlib.nullcontext()
             if use_ddp and micro_step < args.accum_steps - 1:
