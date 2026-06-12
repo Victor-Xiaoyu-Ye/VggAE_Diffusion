@@ -9,6 +9,7 @@ CACHE_NUM_PARTITIONS=1
 MAX_FAILURE_RATE=0.01
 
 configure_modelarts_distributed
+require_output_url
 if [[ "${NODE_RANK}" -ne 0 ]]; then
   exit 0
 fi

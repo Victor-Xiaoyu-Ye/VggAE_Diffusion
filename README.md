@@ -11,7 +11,8 @@ The scale scripts target 6 ModelArts workers with 8 NPUs each. They derive
 the distributed topology from `VC_WORKER_NUM`, `VC_TASK_INDEX`, and
 `VC_WORKER_HOSTS`. SpatialVID-HQ remains on OBS and each MP4 is staged on
 demand into a bounded node-local cache because OpenCV needs a seekable local
-file. Rank-0 checkpoints, metrics, and previews are periodically mirrored to
+file. External dependencies are read from `/cache/yexiaoyu/vggae_ref`.
+Checkpoints, metrics, previews, and compact latent shards are persisted below
 `$OUTPUT_URL`.
 
 ## Active Workflows

@@ -48,9 +48,11 @@ class SpatialVidDataset(Dataset):
         self.clips_per_video = max(1, int(clips_per_video))
         self.depth_root = depth_root
         self.remote_video_cache = os.environ.get(
-            "MOX_VIDEO_CACHE_DIR", "/cache/vggae/video_cache")
+            "MOX_VIDEO_CACHE_DIR",
+            "/cache/yexiaoyu/vggae_runtime/cache/videos")
         self.remote_depth_cache = os.environ.get(
-            "MOX_DEPTH_CACHE_DIR", "/cache/vggae/depth_cache")
+            "MOX_DEPTH_CACHE_DIR",
+            "/cache/yexiaoyu/vggae_runtime/cache/depth")
         self.remote_cache_max_bytes = int(
             float(os.environ.get("MOX_VIDEO_CACHE_GB", "800"))
             * 1024 ** 3)

@@ -10,20 +10,23 @@ SPATIALVID_METADATA_URL="${SPATIALVID_OBS_ROOT}/data/train/SpatialVID_HQ_metadat
 SPATIALVID_VIDEO_ROOT="${SPATIALVID_OBS_ROOT}/videos/SpatialVID/videos"
 SPATIALVID_DEPTH_ROOT="${SPATIALVID_OBS_ROOT}/depths/SpatialVID/depths"
 
-# The cluster provides about 3 TB under /cache. Keep all temporary downloads,
-# latent shard staging, checkpoints, and logs below it.
-LOCAL_CACHE_ROOT="${LOCAL_CACHE_ROOT:-/cache/vggae}"
+# The cluster provides about 3 TB under /cache. Keep temporary downloads,
+# latent shard staging, checkpoints, and logs below it. Nothing below this
+# directory is treated as persistent state.
+LOCAL_CACHE_ROOT="${LOCAL_CACHE_ROOT:-/cache/yexiaoyu/vggae_runtime}"
 RUN_ROOT="${LOCAL_CACHE_ROOT}/outputs"
 SPATIALVID_METADATA="${LOCAL_CACHE_ROOT}/metadata/SpatialVID_HQ_metadata.csv"
 
-# Model code and reference checkpoints are pulled with the repository. These
-# can still be overridden by exporting the variable before running the script.
-VEGGIE_REF_ROOT="${VEGGIE_REF_ROOT:-${PROJECT}/veggie_ref}"
-STREAMVGGT_CKPT="${STREAMVGGT_CKPT:-${VEGGIE_REF_ROOT}/streamvggt/checkpoints.pth}"
-GEOMETRY_AE_CKPT="${GEOMETRY_AE_CKPT:-${VEGGIE_REF_ROOT}/checkpoints/geometry_autoencoder.pt}"
+# External dependencies are copied by the ModelArts launch command before
+# entering this repository. VGGAE_REF_ROOT is read-only input, not an output
+# directory. The active scale path only requires the StreamVGGT checkpoint.
+VGGAE_REF_ROOT="${VGGAE_REF_ROOT:-/cache/yexiaoyu/vggae_ref}"
+STREAMVGGT_CKPT="${STREAMVGGT_CKPT:-${VGGAE_REF_ROOT}/StreamVGGT/checkpoints.pth}"
+GEOMETRY_AE_CKPT="${GEOMETRY_AE_CKPT:-${VGGAE_REF_ROOT}/checkpoints/geometry_autoencoder.pt}"
 
-# ModelArts normally injects OUTPUT_URL. All rank-0 outputs are periodically
-# mirrored here. Set it manually only outside ModelArts.
+# ModelArts injects OUTPUT_URL. It is the only persistent output root:
+# checkpoints, metrics, samples, manifests, statistics, and latent tar shards
+# are all stored below it.
 OUTPUT_URL="${OUTPUT_URL:-}"
 REMOTE_RUN_ROOT="${OUTPUT_URL%/}"
 

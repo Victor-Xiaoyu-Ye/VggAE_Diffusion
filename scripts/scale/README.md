@@ -19,7 +19,18 @@ Those online stages choose a new random one-second window on every dataset
 access. The cache stage instead uses four deterministic windows distributed
 from the beginning to the end of each raw video.
 
-Edit local checkpoint/environment paths once in `scripts/spatialvid_config.sh`.
+The launch command copies external dependencies to
+`/cache/yexiaoyu/vggae_ref`. The active scale path expects the frozen encoder
+at:
+
+```text
+/cache/yexiaoyu/vggae_ref/StreamVGGT/checkpoints.pth
+```
+
+There is no `veggie_ref` directory. The geometry autoencoder, I0 decoder,
+latent statistics, and Compact DiT are produced by this pipeline and persisted
+below `$OUTPUT_URL`.
+
 The SpatialVID-HQ root is already set to:
 
 ```text
@@ -41,6 +52,8 @@ SpatialVID CSV. No manually prepared evaluation CSV is required.
    - By default, one 6x8 job partitions the full CSV across 48 ranks.
    - For multiple cache jobs, edit `CACHE_PARTITION_ID` and
      `CACHE_NUM_PARTITIONS`.
+   - Each completed tar shard is uploaded immediately to
+     `$OUTPUT_URL/scale/latent_cache/train`, then removed from local staging.
 5. `03_cache_eval_latents.sh`
    - Run once to cache the automatically selected held-out split.
 6. `04_merge_latent_cache.sh`
@@ -59,7 +72,8 @@ SpatialVID CSV. No manually prepared evaluation CSV is required.
 At 256 channels, each eight-frame fp16 cache sample is about 1.27 MiB. The
 1,461,448-clip cache therefore needs roughly 1.8 TiB before tar overhead and
 metadata. The configured `/cache` budget is used only as a bounded staging
-area; persistent shards remain under `$OUTPUT_URL`.
+area. Persistent checkpoints, metrics, samples, manifests, statistics, and
+latent shards remain under `$OUTPUT_URL`.
 
 Distributed launch uses HCCL. ModelArts variables are read automatically:
 `VC_WORKER_NUM`, `VC_TASK_INDEX`, and `VC_WORKER_HOSTS`. The scale scripts
@@ -73,6 +87,13 @@ through `MOX_LATENT_CACHE_DIR`.
 The representation checkpoint is a data contract. Do not continue changing the
 tokenizer after latent caching starts. If the tokenizer changes, rebuild the
 cache and its statistics.
+
+For cache-job fault isolation, use multiple `CACHE_NUM_PARTITIONS` jobs in
+production. A partition writes its final moments and manifest only after all
+ranks finish. If one partition fails, its already uploaded tar files are
+partial output and that partition must be cleared and rerun; completed
+partitions are unaffected. Diffusion training restarts never depend on local
+latent files and always read the persistent OBS manifest.
 
 All stage 00, 01, and 05 training checkpoints are resumable. `RESUME` accepts
 either a local path or an `obs://` checkpoint. Stage 05 restores model, FP32 EMA, optimizer,

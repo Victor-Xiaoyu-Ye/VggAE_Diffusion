@@ -241,7 +241,8 @@ def main():
             args.output_dir,
             f"part-{partition_id:05d}-of-{num_partitions:05d}")
         local_root = os.environ.get(
-            "MOX_CACHE_WRITER_DIR", "/cache/vggae/cache_writer")
+            "MOX_CACHE_WRITER_DIR",
+            "/cache/yexiaoyu/vggae_runtime/cache/latent_writer")
     else:
         local_world_size = int(os.environ.get("LOCAL_WORLD_SIZE", world_size))
         if world_size > local_world_size:
@@ -423,7 +424,7 @@ def main():
                     remote_moments_path,
                     os.environ.get(
                         "MOX_METADATA_CACHE_DIR",
-                        "/cache/vggae/metadata_cache"),
+                        "/cache/yexiaoyu/vggae_runtime/cache/metadata"),
                     max_cache_bytes=10 * 1024 ** 3,
                 )
                 rank_moments = torch.load(

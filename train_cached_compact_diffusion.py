@@ -400,7 +400,8 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
 
     metadata_cache = os.environ.get(
-        "MOX_METADATA_CACHE_DIR", "/cache/vggae/metadata_cache")
+        "MOX_METADATA_CACHE_DIR",
+        "/cache/yexiaoyu/vggae_runtime/cache/metadata")
     stats_path = stage_remote_file(
         args.stats, metadata_cache, max_cache_bytes=10 * 1024 ** 3)
     cache_stats = torch.load(

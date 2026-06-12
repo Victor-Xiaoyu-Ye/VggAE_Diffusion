@@ -29,6 +29,9 @@ Changing the tokenizer invalidates all cached latents and diffusion checkpoints.
 On ModelArts, videos remain on OBS and are staged per sample into a bounded
 node-local cache. Raw StreamVGGT features are never persisted. Compact latent
 shards and exact raw normalization moments are written under `$OUTPUT_URL`.
+The `/cache/yexiaoyu/vggae_runtime` tree is only staging and may disappear
+between jobs. Diffusion resume therefore reads the manifest, statistics, and
+tar shards from OBS rather than relying on local latent files.
 
 The active six-node configuration uses a 256-channel, 18x18 latent. Four
 deterministic one-second windows per source video produce 1,461,448 cached
