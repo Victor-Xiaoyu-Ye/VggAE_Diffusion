@@ -16,6 +16,7 @@ import tempfile
 
 
 REQUIRED_FIELDS = ("id", "video path", "num frames")
+ALGORITHM_VERSION = 2
 
 
 def parse_args():
@@ -29,6 +30,9 @@ def parse_args():
     parser.add_argument("--min_frames", type=int, default=8)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--candidate_multiplier", type=int, default=2)
+    parser.add_argument(
+        "--skip_file_check", action="store_true",
+        help="Trust metadata paths (required for large remote OBS datasets)")
     parser.add_argument("--write_full_train", action="store_true")
     parser.add_argument("--force", action="store_true")
     return parser.parse_args()
@@ -65,6 +69,7 @@ def resolve_video_path(video_root, metadata_path):
 
 def expected_manifest(args):
     return {
+        "algorithm_version": ALGORITHM_VERSION,
         "source": file_signature(args.csv),
         "video_root": os.path.abspath(args.video_root),
         "train_count": args.train_count,
@@ -73,6 +78,7 @@ def expected_manifest(args):
         "min_frames": args.min_frames,
         "seed": args.seed,
         "candidate_multiplier": args.candidate_multiplier,
+        "skip_file_check": args.skip_file_check,
     }
 
 
@@ -160,13 +166,54 @@ def select_rows(args):
     selected = []
     missing_files = 0
     for _, _, row in candidates:
-        video_path = resolve_video_path(args.video_root, row["video path"])
-        if not os.path.isfile(video_path):
-            missing_files += 1
-            continue
+        if not args.skip_file_check:
+            video_path = resolve_video_path(
+                args.video_root, row["video path"])
+            if not os.path.isfile(video_path):
+                missing_files += 1
+                continue
         selected.append(row)
         if len(selected) == requested:
             break
+
+    # A local SpatialVID copy may contain a sparse subset of a much larger
+    # metadata CSV. In that case a bounded metadata candidate pool can miss
+    # most files that are actually present. Fall back to hashing all existing
+    # local videos so the requested split is filled deterministically.
+    if len(selected) < requested and not args.skip_file_check:
+        print(
+            f"[INFO] Candidate pool found only {len(selected)}/{requested} "
+            "existing videos; scanning the local subset.")
+        existing_heap = []
+        missing_files = 0
+        with open(args.csv, newline="") as source:
+            reader = csv.DictReader(source)
+            for row_index, row in enumerate(reader):
+                try:
+                    num_frames = int(float(row["num frames"]))
+                except (TypeError, ValueError):
+                    continue
+                if num_frames < args.min_frames:
+                    continue
+                video_path = resolve_video_path(
+                    args.video_root, row["video path"])
+                if not os.path.isfile(video_path):
+                    missing_files += 1
+                    continue
+                score = stable_score(args.seed, row_index, row)
+                item = (-score, row_index, row)
+                if len(existing_heap) < requested:
+                    heapq.heappush(existing_heap, item)
+                elif score < -existing_heap[0][0]:
+                    heapq.heapreplace(existing_heap, item)
+        selected = [
+            row for _, _, row in sorted(
+                [(-negative_score, row_index, row)
+                 for negative_score, row_index, row in existing_heap],
+                key=lambda item: (item[0], item[1]),
+            )
+        ]
+
     minimum_required = args.overfit_count + args.eval_count + 1
     if len(selected) < minimum_required:
         raise RuntimeError(

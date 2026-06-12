@@ -14,6 +14,7 @@ scikit-image>=0.21.0
 imageio>=2.34.0
 imageio-ffmpeg>=0.4.9
 OpenEXR>=3.2.0
+# MoXing is provided by the ModelArts runtime image.
 safetensors>=0.4.0
 huggingface_hub>=0.20.0
 ftfy>=6.1.0

@@ -16,6 +16,8 @@ selects existing SpatialVID videos into non-overlapping `train_10k.csv`,
 - `overfit_compact_diffusion.sh`: small-set diffusion sanity check.
 - `diagnose_latent_contract.sh`: compare independently encoded I0 with the
   first-frame latent produced inside a complete clip.
+- `diagnose_compact_latent_stats.sh`: audit frame/channel moments, heavy tails,
+  spatial energy, and channel-correlation effective rank.
 - `run_validation_suite.sh`: run latent diagnostics and both overfit gates.
 - `collect_results.sh`: print and save a combined metrics/checkpoint/preview
   report under `RUN_ROOT/reports`.
@@ -45,3 +47,10 @@ environment-driven so cluster launchers can control distributed execution.
 Active trainers use FP16 with gradient scaling on Ascend 910B.
 
 Do not use these scripts for the 10M run. Use `scripts/scale/` instead.
+
+The normalization contract and current measurements are documented in
+`TOKEN_STATS.md`.
+
+Active SpatialVID scripts sample 8 frames across a fixed 1.0 second interval,
+because the local dataset mixes 24-60 FPS videos. Keep this setting identical
+for representation training, latent caching, diagnostics, and diffusion.

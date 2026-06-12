@@ -47,6 +47,15 @@ from utils.device import (
     manual_seed_all,
     resolve_dtype,
 )
+from utils.latent_stats import (
+    create_moments,
+    denormalize_latent,
+    finalize_moments,
+    normalize_latent,
+    reduce_moments,
+    update_moments,
+    validate_latent_stats,
+)
 
 
 def parse_args():
@@ -115,17 +124,24 @@ def parse_args():
         '--dtype', type=str, default='fp16',
         choices=['fp16', 'bf16', 'fp32'])
     p.add_argument('--rescale', dest='rescale', action='store_true',
-                   help='Rescale z_g to std≈1 for stable flow matching')
+                   help='Apply frame/channel z-score normalization')
     p.add_argument('--no_rescale', dest='rescale', action='store_false')
     p.set_defaults(rescale=True)
+    p.add_argument(
+        '--normalization_batches', type=int, default=64,
+        help='Batches used to estimate frame/channel latent normalization')
 
     # Data loading
     p.add_argument('--seq_len', type=int, default=8)
     p.add_argument('--target_size', type=int, default=518)
     p.add_argument('--num_frames_per_video', type=int, default=8)
     p.add_argument('--max_frame_span', type=int, default=0)
+    p.add_argument('--clip_duration_seconds', type=float, default=0.0)
     p.add_argument('--num_workers', type=int, default=4)
     p.add_argument('--disable_temporal_jitter', action='store_true')
+    p.add_argument(
+        '--disable_temporal_mixer', action='store_true',
+        help='Bypass TemporalMixer in frozen Tokenizer A to preserve I0 latent contract')
 
     # Eval
     p.add_argument('--eval_every', type=int, default=5)
@@ -139,7 +155,7 @@ def parse_args():
 
 @torch.no_grad()
 def diffusion_sample(model, decoder, tokenizer, encoder, eval_frames, device,
-                     out_dir, step, latent_scale=1.0, num_steps=20,
+                     out_dir, step, normalization=None, num_steps=20,
                      i0_app_cnn=None, compute_dtype=torch.float32,
                      device_type='cpu'):
     """Generate samples via ODE integration + decode for visual tracking."""
@@ -158,7 +174,7 @@ def diffusion_sample(model, decoder, tokenizer, encoder, eval_frames, device,
         raise ValueError(f'num_tokens={num_tokens} is not a square grid')
 
     # Sample noise in z_g flat space (match model dtype: bf16)
-    model_dtype = compute_dtype
+    model_dtype = next(model.parameters()).dtype
     z = torch.randn(B, seq_len, num_tokens, latent_dim, device=device, dtype=model_dtype)
     cond = None
     i0_flat = None
@@ -171,26 +187,34 @@ def diffusion_sample(model, decoder, tokenizer, encoder, eval_frames, device,
             i0_tokens, i0_psi = encoder(i0_frames)
             i0_tokens = strip_special_tokens(i0_tokens, i0_psi)
             _, i0_flat = tokenizer(i0_tokens)
-        cond = (i0_flat * latent_scale).to(dtype=model_dtype)
+        cond = (
+            normalize_latent(i0_flat, normalization['cond'])
+            if normalization is not None else i0_flat.float()
+        ).to(dtype=model_dtype)
     dt = 1.0 / num_steps
 
     for i in range(num_steps):
         t_val = torch.full((B,), i / num_steps, device=device, dtype=model_dtype)
-        with autocast(
-                device_type=device_type, dtype=compute_dtype,
-                enabled=compute_dtype != torch.float32):
-            v = model(z, t_val, cond=cond)
+        v = model(z, t_val, cond=cond)
         z = (z + v * dt)
 
     if getattr(model, 'i0_residual', False):
-        future = z / latent_scale + i0_flat.expand(-1, seq_len, -1, -1)
+        residual = (
+            denormalize_latent(z, normalization['target'])
+            if normalization is not None else z.float()
+        )
+        future = residual + i0_flat.expand(-1, seq_len, -1, -1)
         future_grid = future.reshape(
             B, seq_len, latent_grid, latent_grid, latent_dim)
         i0_grid = i0_flat.reshape(
             B, 1, latent_grid, latent_grid, latent_dim)
         z_g = torch.cat([i0_grid, future_grid], dim=1).float()
     else:
-        z_g = (z / latent_scale).reshape(
+        decoded = (
+            denormalize_latent(z, normalization['target'])
+            if normalization is not None else z.float()
+        )
+        z_g = decoded.reshape(
             B, seq_len, latent_grid, latent_grid, latent_dim).float()
 
     if i0_app_cnn is not None:
@@ -266,9 +290,9 @@ def validate_saved_args(saved_args, current_args, keys, checkpoint_name):
 
 
 def checkpoint_payload(model, ema, optimizer, scheduler, scaler, global_step,
-                       epoch, latent_scale, args):
+                       epoch, normalization, args):
     return {
-        'checkpoint_version': 2,
+        'checkpoint_version': 3,
         'model': model.state_dict(),
         'ema': ema.state_dict(),
         'optimizer': optimizer.state_dict(),
@@ -276,7 +300,7 @@ def checkpoint_payload(model, ema, optimizer, scheduler, scaler, global_step,
         'scaler': scaler.state_dict(),
         'global_step': global_step,
         'epoch': epoch,
-        'latent_scale': latent_scale,
+        'normalization': normalization,
         'rng_state': capture_rng_state(),
         'args': vars(args),
     }
@@ -286,6 +310,8 @@ def main():
     args = parse_args()
     if min(args.log_every, args.save_every, args.eval_every) < 1:
         raise ValueError('log/save/eval intervals must be positive')
+    if args.rescale and args.normalization_batches < 1:
+        raise ValueError('--normalization_batches must be positive')
     if args.i0_residual and not args.i0_condition:
         raise ValueError('--i0_residual requires --i0_condition')
     if args.i0_residual and args.seq_len < 2:
@@ -297,14 +323,12 @@ def main():
     device_type = get_device_name()
     device = get_device(local_rank)
     main_process = is_main_process()
-
     dtype = resolve_dtype(args.dtype)
-    use_amp = dtype != torch.float32
     use_scaler = dtype == torch.float16
 
     if main_process:
         print(f'=== Phase 2: Compact Latent Diffusion ===')
-        print(f'Device: {device}, dtype: {dtype}, DDP: {use_ddp}')
+        print(f'Device: {device}, dtype={dtype}, DDP: {use_ddp}')
         print(f'DiT: dim={args.model_dim}, spatial={args.spatial_depth}, temporal={args.temporal_depth}')
         print(f'Latent: {args.latent_dim}dim × {args.latent_grid}×{args.latent_grid}')
 
@@ -349,6 +373,13 @@ def main():
          'target_size', 'decoder_base_dim', 'decoder_num_resblocks'),
         'Autoencoder checkpoint')
     tokenizer.load_state_dict(ae_ckpt['tokenizer'])
+    tokenizer.disable_temporal_mixer = (
+        args.disable_temporal_mixer
+        or bool(ae_ckpt.get('args', {}).get('disable_temporal_mixer', False))
+    )
+    if tokenizer.disable_temporal_mixer:
+        if main_process:
+            print('  TemporalMixer bypassed for I0 latent contract')
     decoder.load_state_dict(ae_ckpt['decoder'], strict=False)
     # Match checkpoint's actual depth_head status
     has_depth = any('depth_head' in k for k in ae_ckpt['decoder'].keys())
@@ -402,7 +433,7 @@ def main():
         temporal_depth=args.temporal_depth, num_heads=args.num_heads,
         seq_len=args.generated_seq_len, text_cond=args.text_cond,
         i0_condition=args.i0_condition, time_scale=args.time_scale,
-    ).to(device=device)
+    ).to(device=device, dtype=dtype)
     model.i0_residual = args.i0_residual
 
     total_p = sum(p.numel() for p in model.parameters())
@@ -431,6 +462,7 @@ def main():
         num_frames_per_video=args.num_frames_per_video,
         temporal_jitter=not args.disable_temporal_jitter,
         max_frame_span=args.max_frame_span,
+        clip_duration_seconds=args.clip_duration_seconds,
     )
     sampler = torch.utils.data.distributed.DistributedSampler(dataset) if use_ddp else None
     dataloader = DataLoader(
@@ -456,7 +488,7 @@ def main():
     # Resume
     global_step = 0
     start_epoch = 0
-    restored_latent_scale = None
+    restored_normalization = None
     if args.resume:
         if not os.path.exists(args.resume):
             raise FileNotFoundError(f'Resume checkpoint not found: {args.resume}')
@@ -471,7 +503,15 @@ def main():
              'temporal_depth', 'num_heads', 'token_dim', 'levels',
              'seq_len', 'target_size'),
             'Diffusion resume checkpoint')
-        for key in ('i0_condition', 'i0_residual'):
+        for key, default in (
+                ('max_frame_span', 0), ('clip_duration_seconds', 0.0)):
+            saved = saved_args.get(key, default)
+            if saved != getattr(args, key):
+                raise ValueError(
+                    f'Resume mismatch for {key}: checkpoint={saved}, '
+                    f'current={getattr(args, key)}')
+        for key in (
+                'i0_condition', 'i0_residual', 'disable_temporal_mixer'):
             if bool(saved_args.get(key, False)) != bool(getattr(args, key)):
                 raise ValueError(
                     f'Resume mismatch for {key}: checkpoint={saved_args.get(key, False)}, '
@@ -498,7 +538,11 @@ def main():
         print(f'  Restored optimizer/scheduler state')
         global_step = ckpt.get('global_step', 0)
         start_epoch = ckpt.get('epoch', 0) + 1
-        restored_latent_scale = ckpt.get('latent_scale')
+        restored_normalization = ckpt.get('normalization')
+        if restored_normalization is None:
+            raise ValueError(
+                'This checkpoint predates frame/channel latent normalization '
+                'and cannot be resumed by the current trainer.')
         if rank == 0:
             restore_rng_state(ckpt.get('rng_state'))
         else:
@@ -511,48 +555,87 @@ def main():
         )
         flow.model = model
 
-    # Eval frames
-    # Compute rescale factor from first few batches
-    latent_scale = float(restored_latent_scale or 1.0)
-    if args.rescale and restored_latent_scale is None:
-        if main_process: print('  Computing latent rescale factor...')
-        scale_stats = torch.zeros(2, device=device, dtype=torch.float32)
+    # Estimate frame/channel statistics for the exact diffusion target.
+    normalization = restored_normalization
+    if normalization is not None:
+        validate_latent_stats(
+            normalization['target'], args.generated_seq_len,
+            args.latent_dim, name='target')
+        validate_latent_stats(
+            normalization['cond'], 1, args.latent_dim, name='condition')
+    if args.rescale and normalization is None:
+        if main_process:
+            print(
+                '  Computing frame/channel latent normalization from '
+                f'{args.normalization_batches} batches...')
+        target_moments = create_moments(
+            args.generated_seq_len, args.latent_dim, device)
+        cond_moments = create_moments(1, args.latent_dim, device)
         with torch.no_grad():
             for i, eb in enumerate(dataloader):
-                if i >= 10: break
+                if i >= args.normalization_batches:
+                    break
                 frames = eb['frames'].to(device=device, dtype=dtype)
                 with autocast(
                         device_type=device_type, dtype=dtype,
-                        enabled=use_amp):
+                        enabled=dtype != torch.float32):
                     tokens_list, psi = encoder(frames)
                     tokens_list = strip_special_tokens(tokens_list, psi)
                     _, z_g_flat = tokenizer(tokens_list)
-                scale_target = z_g_flat
-                if args.i0_residual:
+                target_raw = z_g_flat
+                i0_flat = None
+                if args.i0_condition:
                     with autocast(
                             device_type=device_type, dtype=dtype,
-                            enabled=use_amp):
+                            enabled=dtype != torch.float32):
                         i0_tokens, i0_psi = encoder(frames[:, :1])
-                        i0_tokens = strip_special_tokens(i0_tokens, i0_psi)
+                        i0_tokens = strip_special_tokens(
+                            i0_tokens, i0_psi)
                         _, i0_flat = tokenizer(i0_tokens)
-                    scale_target = (
+                if args.i0_residual:
+                    target_raw = (
                         z_g_flat[:, 1:]
                         - i0_flat.expand(
                             -1, z_g_flat.shape[1] - 1, -1, -1))
-                scale_stats[0] += scale_target.float().std()
-                scale_stats[1] += 1
-        if use_ddp:
-            dist.all_reduce(scale_stats, op=dist.ReduceOp.SUM)
-        if scale_stats[1].item() == 0:
-            raise RuntimeError('Cannot compute latent scale from an empty dataloader')
-        latent_std = (scale_stats[0] / scale_stats[1]).item()
-        latent_scale = 1.0 / max(latent_std, 1e-8)
+                update_moments(target_moments, target_raw)
+                if args.i0_condition:
+                    update_moments(cond_moments, i0_flat)
+        reduce_moments(target_moments)
+        reduce_moments(cond_moments)
+        if torch.any(target_moments['count'] == 0):
+            raise RuntimeError(
+                'Cannot compute latent normalization from an empty dataloader')
+        normalization = {
+            'normalization_version': 2,
+            'target': finalize_moments(target_moments),
+            'cond': finalize_moments(cond_moments),
+        }
         if main_process:
-            print(f'  Latent scale: {latent_scale:.2f} '
-                  f'(diffusion target std={1.0/latent_scale:.4f} → 1.0)')
+            frame_std = normalization['target']['std'].mean(dim=1)
+            print(
+                '  Target mean channel std by future frame: '
+                + ', '.join(f'{value:.4f}' for value in frame_std))
     elif args.rescale and main_process:
-        print(f'  Restored latent scale: {latent_scale:.6f}')
+        print('  Restored frame/channel latent normalization.')
+    elif not args.rescale:
+        normalization = {
+            'normalization_version': 2,
+            'target': {
+                'mean': torch.zeros(
+                    args.generated_seq_len, args.latent_dim),
+                'std': torch.ones(
+                    args.generated_seq_len, args.latent_dim),
+                'count': torch.zeros(
+                    args.generated_seq_len, dtype=torch.long),
+            },
+            'cond': {
+                'mean': torch.zeros(1, args.latent_dim),
+                'std': torch.ones(1, args.latent_dim),
+                'count': torch.zeros(1, dtype=torch.long),
+            },
+        }
 
+    # Eval frames
     eval_frames = None
     if main_process:
         eval_csv = args.eval_csv or args.csv
@@ -568,6 +651,7 @@ def main():
             num_frames_per_video=args.num_frames_per_video,
             temporal_jitter=False,
             max_frame_span=args.max_frame_span,
+            clip_duration_seconds=args.clip_duration_seconds,
         )
         eval_loader = DataLoader(
             eval_dataset, batch_size=1, shuffle=False, num_workers=0,
@@ -597,26 +681,33 @@ def main():
             frames = batch['frames'].to(device=device, dtype=dtype)
 
             # ---- Encode → Tokenize → z_g ----
-            with torch.no_grad():
-                with autocast(
-                        device_type=device_type, dtype=dtype,
-                        enabled=use_amp):
-                    tokens_list, psi = encoder(frames)
-                    tokens_list = strip_special_tokens(tokens_list, psi)
-                    z_g, z_g_flat = tokenizer(tokens_list)
-                    i0_cond = None
-                    if args.i0_condition:
-                        i0_tokens, i0_psi = encoder(frames[:, :1])
-                        i0_tokens = strip_special_tokens(i0_tokens, i0_psi)
-                        _, i0_flat = tokenizer(i0_tokens)
-                        i0_cond = (i0_flat * latent_scale).to(dtype=dtype)
+            with torch.no_grad(), autocast(
+                    device_type=device_type, dtype=dtype,
+                    enabled=dtype != torch.float32):
+                tokens_list, psi = encoder(frames)
+                tokens_list = strip_special_tokens(tokens_list, psi)
+                z_g, z_g_flat = tokenizer(tokens_list)
+                i0_cond = None
+                if args.i0_condition:
+                    i0_tokens, i0_psi = encoder(frames[:, :1])
+                    i0_tokens = strip_special_tokens(i0_tokens, i0_psi)
+                    _, i0_flat = tokenizer(i0_tokens)
+                    i0_cond = (
+                        normalize_latent(i0_flat, normalization['cond'])
+                        if normalization is not None else i0_flat.float()
+                    ).to(dtype=dtype)
                 diffusion_target = z_g_flat
                 if args.i0_residual:
                     diffusion_target = (
                         z_g_flat[:, 1:]
                         - i0_flat.expand(
                             -1, z_g_flat.shape[1] - 1, -1, -1))
-                x1 = (diffusion_target * latent_scale).to(dtype=dtype)
+                x1 = (
+                    normalize_latent(
+                        diffusion_target, normalization['target'])
+                    if normalization is not None
+                    else diffusion_target.float()
+                ).to(dtype=dtype)
 
             # Text conditioning
             text_emb = None
@@ -629,19 +720,21 @@ def main():
             # Decoder auxiliary loss
             dec_loss = x1.new_zeros(())
             use_decoder_aux = args.decoder_aux and (batch_idx % args.recon_every == 0)
-            with autocast(
-                    device_type=device_type, dtype=dtype, enabled=use_amp):
-                flow_out = flow.compute_loss(
-                    x1, cond=i0_cond, text_emb=text_emb,
-                    return_outputs=use_decoder_aux)
+            flow_out = flow.compute_loss(
+                x1, cond=i0_cond, text_emb=text_emb, return_outputs=use_decoder_aux)
             if use_decoder_aux:
                 flow_loss = flow_out['loss']
                 loss = flow_loss
                 x1_pred = flow_out['x1_pred']
                 # Decode predicted z_g (decoder is float32)
                 if args.i0_residual:
+                    predicted_residual = (
+                        denormalize_latent(
+                            x1_pred, normalization['target'])
+                        if normalization is not None else x1_pred.float()
+                    )
                     future_flat = (
-                        x1_pred / latent_scale
+                        predicted_residual
                         + i0_flat.expand_as(x1_pred))
                     future_grid = future_flat.reshape(
                         z_g.shape[0], args.generated_seq_len,
@@ -652,20 +745,24 @@ def main():
                     z_g_pred = torch.cat(
                         [i0_grid, future_grid], dim=1).float()
                 else:
-                    z_g_pred = (
-                        x1_pred / latent_scale).reshape(*z_g.shape).float()
+                    predicted_latent = (
+                        denormalize_latent(
+                            x1_pred, normalization['target'])
+                        if normalization is not None else x1_pred.float()
+                    )
+                    z_g_pred = predicted_latent.reshape(*z_g.shape).float()
                 if i0_decoder is not None:
                     with torch.no_grad():
                         i0_feats = i0_app_cnn(frames[:, 0])
                     with autocast(
                             device_type=device_type, dtype=dtype,
-                            enabled=use_amp):
+                            enabled=dtype != torch.float32):
                         result = i0_decoder(z_g_pred, i0_feats)
                     preds, _ = result
                 else:
                     with autocast(
                             device_type=device_type, dtype=dtype,
-                            enabled=use_amp):
+                            enabled=dtype != torch.float32):
                         result = decoder(z_g_pred)
                     if decoder.output_depth:
                         preds, _, _, _ = result
@@ -760,7 +857,7 @@ def main():
             atomic_torch_save(
                 checkpoint_payload(
                     base_model, ema, optimizer, scheduler, scaler,
-                    global_step, epoch, latent_scale, args),
+                    global_step, epoch, normalization, args),
                 save_path,
             )
             print(f'  Saved: {save_path}')
@@ -778,7 +875,7 @@ def main():
                                 i0_decoder if i0_decoder is not None else decoder,
                                 tokenizer, encoder, eval_frames, device,
                                 os.path.join(args.output_dir, 'samples'),
-                                global_step, latent_scale,
+                                global_step, normalization,
                                 i0_app_cnn=i0_app_cnn,
                                 compute_dtype=dtype,
                                 device_type=device_type)
@@ -814,7 +911,7 @@ def main():
         atomic_torch_save(
             checkpoint_payload(
                 base_model, ema, optimizer, scheduler, scaler,
-                global_step, args.epochs - 1, latent_scale, args),
+                global_step, args.epochs - 1, normalization, args),
             final_path,
         )
         print(f'\nDone. Final: {final_path}')

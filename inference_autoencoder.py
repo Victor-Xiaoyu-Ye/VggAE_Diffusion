@@ -35,6 +35,7 @@ def parse_args():
     p.add_argument('--video_root', type=str, default='')
     p.add_argument('--num_videos', type=int, default=10)
     p.add_argument('--seq_len', type=int, default=8)
+    p.add_argument('--clip_duration_seconds', type=float, default=0.0)
     p.add_argument('--target_size', type=int, default=518)
     p.add_argument('--output_dir', type=str, default='outputs/autoencoder_inference')
     p.add_argument('--compute_psnr', dest='compute_psnr', action='store_true')
@@ -193,6 +194,7 @@ def main():
             csv_path=args.csv, video_root=args.video_root,
             seq_len=args.seq_len, target_size=args.target_size,
             max_videos=args.num_videos, num_frames_per_video=args.seq_len,
+            clip_duration_seconds=args.clip_duration_seconds,
         )
         loader = torch.utils.data.DataLoader(
             dataset, batch_size=1, shuffle=False, num_workers=2, collate_fn=collate_fn,

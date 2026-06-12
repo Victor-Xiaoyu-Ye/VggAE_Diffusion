@@ -4,9 +4,11 @@ set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source "${SCRIPT_DIR}/../spatialvid_config.sh"
 source "${SCRIPT_DIR}/../lib/spatialvid.sh"
+source "${SCRIPT_DIR}/../lib/modelarts.sh"
 
 # ----------------------------- editable settings -----------------------------
 OUTPUT_DIR="${SCALE_ROOT}/compact_dit"
+REMOTE_OUTPUT_DIR="${SCALE_REMOTE_ROOT}/compact_dit"
 I0_CKPT="${SCALE_I0_DECODER_CKPT}"
 EVAL_I0_PATH=""
 RESUME=""
@@ -27,25 +29,20 @@ SAVE_EVERY=10000
 EVAL_EVERY=10000
 LOG_EVERY=50
 SAMPLE_STEPS=20
+MASTER_PORT=29604
 # -----------------------------------------------------------------------------
 
-NUM_NPUS=${NUM_NPUS:-8}
-ASCEND_DEVICE_IDS=${ASCEND_DEVICE_IDS:-0,1,2,3,4,5,6,7}
-NNODES=${NNODES:-1}
-NODE_RANK=${NODE_RANK:-0}
-MASTER_ADDR=${MASTER_ADDR:-127.0.0.1}
-MASTER_PORT=${MASTER_PORT:-29604}
-
-require_file "${SCALE_TRAIN_CACHE_DIR}/manifest.txt" "training cache manifest"
-require_file "${SCALE_TRAIN_CACHE_DIR}/stats.pt" "training cache statistics"
-require_file "${SCALE_EVAL_CACHE_DIR}/manifest.txt" "evaluation cache manifest"
-require_file "${SCALE_EVAL_CACHE_DIR}/stats.pt" "evaluation cache statistics"
+configure_modelarts_distributed
+require_scale_cluster
+require_output_url
 
 EXTRA_ARGS=(
   --eval_manifest "${SCALE_EVAL_CACHE_DIR}/manifest.txt"
   --eval_stats "${SCALE_EVAL_CACHE_DIR}/stats.pt"
 )
 if [[ -n "${RESUME}" ]]; then
+  RESUME=$(stage_resume_checkpoint \
+    "${RESUME}" "${LOCAL_CACHE_ROOT}/resume/compact_dit.pt")
   EXTRA_ARGS+=(--resume "${RESUME}")
 fi
 if [[ -n "${EVAL_I0_PATH}" ]]; then
@@ -57,11 +54,10 @@ if [[ -n "${EVAL_I0_PATH}" ]]; then
   )
 fi
 
-ASCEND_RT_VISIBLE_DEVICES="${ASCEND_DEVICE_IDS}" torchrun \
-  --nnodes="${NNODES}" --node_rank="${NODE_RANK}" \
-  --nproc_per_node="${NUM_NPUS}" --master_addr="${MASTER_ADDR}" \
-  --master_port="${MASTER_PORT}" \
-  "${PROJECT}/train_cached_compact_diffusion.py" \
+start_output_sync "${OUTPUT_DIR}" "${REMOTE_OUTPUT_DIR}"
+trap 'stop_output_sync "${OUTPUT_DIR}" "${REMOTE_OUTPUT_DIR}"' EXIT
+
+run_torchrun "${PROJECT}/train_cached_compact_diffusion.py" \
   --manifest "${SCALE_TRAIN_CACHE_DIR}/manifest.txt" \
   --stats "${SCALE_TRAIN_CACHE_DIR}/stats.pt" \
   --output_dir "${OUTPUT_DIR}" \

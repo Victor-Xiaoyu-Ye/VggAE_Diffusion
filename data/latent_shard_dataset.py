@@ -7,18 +7,31 @@ import torch
 import torch.distributed as dist
 from torch.utils.data import IterableDataset, get_worker_info
 
+from utils.moxing_io import (
+    is_remote_path,
+    join_remote,
+    read_text,
+    stage_remote_file,
+)
+
 
 def read_shard_manifest(manifest_path):
-    base_dir = os.path.dirname(os.path.abspath(manifest_path))
+    remote_manifest = is_remote_path(manifest_path)
+    base_dir = (
+        manifest_path.rsplit("/", 1)[0]
+        if remote_manifest else os.path.dirname(os.path.abspath(manifest_path))
+    )
     shards = []
-    with open(manifest_path) as f:
-        for line in f:
-            path = line.strip()
-            if not path or path.startswith("#"):
-                continue
-            if not os.path.isabs(path):
-                path = os.path.join(base_dir, path)
-            shards.append(path)
+    for line in read_text(manifest_path).splitlines():
+        path = line.strip()
+        if not path or path.startswith("#"):
+            continue
+        if not is_remote_path(path) and not os.path.isabs(path):
+            path = (
+                join_remote(base_dir, path)
+                if remote_manifest else os.path.join(base_dir, path)
+            )
+        shards.append(path)
     if not shards:
         raise ValueError(f"No latent shards found in {manifest_path}")
     return shards
@@ -41,6 +54,13 @@ class LatentShardDataset(IterableDataset):
         self.repeat = repeat
         self.rank = rank
         self.world_size = world_size
+        self.remote_cache_dir = os.environ.get(
+            "MOX_LATENT_CACHE_DIR", "/cache/vggae/latent_shards")
+        self.remote_cache_max_bytes = int(
+            float(os.environ.get("MOX_LATENT_CACHE_GB", "800"))
+            * 1024 ** 3)
+        self.remote_download_retries = int(
+            os.environ.get("MOX_DOWNLOAD_RETRIES", "3"))
 
     def _consumer_info(self):
         rank = self.rank
@@ -60,9 +80,14 @@ class LatentShardDataset(IterableDataset):
         num_consumers = world_size * num_workers
         return consumer_id, num_consumers
 
-    @staticmethod
-    def _iter_shard(path):
-        with tarfile.open(path, mode="r:*") as archive:
+    def _iter_shard(self, path):
+        local_path = stage_remote_file(
+            path,
+            self.remote_cache_dir,
+            max_cache_bytes=self.remote_cache_max_bytes,
+            retries=self.remote_download_retries,
+        )
+        with tarfile.open(local_path, mode="r:*") as archive:
             for member in archive:
                 if not member.isfile() or not member.name.endswith(".pt"):
                     continue

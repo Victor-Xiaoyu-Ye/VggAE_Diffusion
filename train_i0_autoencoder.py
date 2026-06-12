@@ -19,14 +19,17 @@ from PIL import Image
 from streamvggt.models.streamvggt import StreamVGGT
 from models.generative_tokenizer import GenerativeTokenizer
 from models.appearance_cnn import AppearanceCNN
-from models.i0_decoder import I0ConditionalDecoder, load_i0_decoder_state_dict
+from models.i0_decoder import (
+    I0ConditionalDecoder,
+    initialize_i0_decoder_from_compact,
+    load_i0_decoder_state_dict,
+)
 from data.video_dataset import SpatialVidDataset, collate_fn
 from data.token_utils import strip_special_tokens
 from utils.training import (
     EMA,
     append_metrics,
     atomic_torch_save,
-    build_optimizer,
     build_scheduler,
     capture_rng_state,
     restore_rng_state,
@@ -67,6 +70,9 @@ def parse_args():
     p.add_argument('--epochs', type=int, default=50); p.add_argument('--batch_size', type=int, default=1)
     p.add_argument('--accum_steps', type=int, default=4); p.add_argument('--lr', type=float, default=1e-4)
     p.add_argument('--wd', type=float, default=1e-2); p.add_argument('--warmup_steps', type=int, default=500)
+    p.add_argument(
+        '--pretrained_lr_scale', type=float, default=0.1,
+        help='Learning-rate multiplier for decoder blocks inherited from the geometry AE')
     p.add_argument('--max_grad_norm', type=float, default=1.0)
     p.add_argument('--ema_decay', type=float, default=0.999)
     p.add_argument('--lambda_lpips', type=float, default=1.0)
@@ -75,8 +81,15 @@ def parse_args():
         choices=['fp16', 'bf16', 'fp32'])
     p.add_argument('--seq_len', type=int, default=8)
     p.add_argument('--target_size', type=int, default=518); p.add_argument('--num_workers', type=int, default=2)
+    p.add_argument(
+        '--decode_retries', type=int, default=8,
+        help='Number of deterministic replacement videos tried after a decode failure')
     p.add_argument('--max_frame_span', type=int, default=0)
+    p.add_argument('--clip_duration_seconds', type=float, default=0.0)
     p.add_argument('--disable_temporal_jitter', action='store_true')
+    p.add_argument(
+        '--disable_temporal_mixer', action='store_true',
+        help='Bypass TemporalMixer in frozen Tokenizer A to preserve I0 latent contract')
     p.add_argument('--save_every', type=int, default=5); p.add_argument('--eval_every', type=int, default=5)
     p.add_argument('--log_every', type=int, default=50)
     p.add_argument('--seed', type=int, default=42); p.add_argument('--local_rank', type=int, default=0)
@@ -102,17 +115,22 @@ def eval_samples(enc, tok, dec, app_cnn, eval_video, device, out_dir, epoch,
     B, S = frames.shape[:2]
 
     # Get z_geo for all frames
+    tl, psi = enc(frames); tl = strip_special_tokens(tl, psi)
+    z_g, _ = tok(tl)  # [1, S, 18, 18, 512]
+    i0_tokens, i0_psi = enc(frames[:, :1])
+    i0_tokens = strip_special_tokens(i0_tokens, i0_psi)
+    i0_z, _ = tok(i0_tokens)
+    z_g = z_g.clone()
+    z_g[:, 0] = i0_z[:, 0]
+
+    # I_0 features
+    I_0 = frames[:, 0:1, :, :, :]  # [1, 1, 3, H, W]
+    I_0_feats = app_cnn(I_0.reshape(1, 3, 518, 518))
+
+    # Decode all S frames conditioned on I_0
     with autocast(
             device_type=device_type, dtype=compute_dtype,
             enabled=compute_dtype != torch.float32):
-        tl, psi = enc(frames); tl = strip_special_tokens(tl, psi)
-        z_g, _ = tok(tl)
-        i0_tokens, i0_psi = enc(frames[:, :1])
-        i0_tokens = strip_special_tokens(i0_tokens, i0_psi)
-        i0_z, _ = tok(i0_tokens)
-        z_g = z_g.clone()
-        z_g[:, 0] = i0_z[:, 0]
-        I_0_feats = app_cnn(frames[:, 0])
         result = dec(z_g, I_0_feats)
     preds = result[0] if isinstance(result, tuple) else result
     recon = preds[..., :3].clamp(0, 1)  # [1, S, 518, 518, 3]
@@ -155,11 +173,24 @@ def eval_samples(enc, tok, dec, app_cnn, eval_video, device, out_dir, epoch,
 def validate_resume_args(saved_args, args):
     for key in (
             'latent_dim', 'latent_grid', 'seq_len', 'target_size',
-            'decoder_base_dim', 'decoder_num_resblocks'):
-        if key in saved_args and saved_args[key] != getattr(args, key):
+            'decoder_base_dim', 'decoder_num_resblocks',
+            'pretrained_lr_scale', 'max_frame_span',
+            'clip_duration_seconds', 'disable_temporal_mixer'):
+        if key in saved_args:
+            saved = saved_args[key]
+        elif key in (
+                'disable_temporal_mixer', 'max_frame_span',
+                'clip_duration_seconds'):
+            if key == 'disable_temporal_mixer':
+                saved = False
+            else:
+                saved = 0 if key == 'max_frame_span' else 0.0
+        else:
+            continue
+        if saved != getattr(args, key):
             raise ValueError(
                 f'Resume mismatch for {key}: '
-                f'checkpoint={saved_args[key]}, current={getattr(args, key)}')
+                f'checkpoint={saved}, current={getattr(args, key)}')
 
 
 def checkpoint_payload(app_cnn, decoder, ema, optimizer, scheduler, scaler,
@@ -179,6 +210,56 @@ def checkpoint_payload(app_cnn, decoder, ema, optimizer, scheduler, scaler,
     }
 
 
+def build_i0_optimizer(app_cnn, decoder, lr, wd, pretrained_lr_scale):
+    if pretrained_lr_scale < 0:
+        raise ValueError('--pretrained_lr_scale must be non-negative')
+    adapter_prefixes = (
+        'cross_attn0.', 'cross_attn1.', 'spade2.', 'app144_proj.')
+    groups = {
+        ('adapter', 'decay'): [],
+        ('adapter', 'no_decay'): [],
+        ('pretrained', 'decay'): [],
+        ('pretrained', 'no_decay'): [],
+    }
+
+    named_parameters = [
+        (f'app_cnn.{name}', parameter, True)
+        for name, parameter in app_cnn.named_parameters()
+    ]
+    named_parameters.extend(
+        (f'decoder.{name}', parameter, name.startswith(adapter_prefixes))
+        for name, parameter in decoder.named_parameters()
+    )
+    for name, parameter, is_adapter in named_parameters:
+        if not parameter.requires_grad:
+            continue
+        decay_group = (
+            'no_decay'
+            if parameter.ndim < 2 or 'norm' in name or 'bias' in name
+            else 'decay'
+        )
+        groups[
+            ('adapter' if is_adapter else 'pretrained', decay_group)
+        ].append(parameter)
+
+    optimizer_groups = []
+    for role in ('adapter', 'pretrained'):
+        group_lr = lr if role == 'adapter' else lr * pretrained_lr_scale
+        for decay_group in ('decay', 'no_decay'):
+            parameters = groups[(role, decay_group)]
+            if not parameters:
+                continue
+            optimizer_groups.append({
+                'params': parameters,
+                'lr': group_lr,
+                'initial_lr': group_lr,
+                'weight_decay': wd if decay_group == 'decay' else 0.0,
+                'group_name': f'{role}_{decay_group}',
+            })
+    return torch.optim.AdamW(
+        optimizer_groups, betas=(0.9, 0.95), eps=1e-8)
+
+
 def main():
     args = parse_args()
     if min(args.log_every, args.save_every, args.eval_every) < 1:
@@ -188,7 +269,6 @@ def main():
     device = get_device(local_rank)
     main_process = is_main_process()
     dtype = resolve_dtype(args.dtype)
-    use_amp = dtype != torch.float32
     use_scaler = dtype == torch.float16
 
     if main_process:
@@ -213,6 +293,13 @@ def main():
     ae_ckpt = torch.load(
         args.autoencoder_ckpt, map_location='cpu', weights_only=False)
     tokenizer.load_state_dict(ae_ckpt['tokenizer']); tokenizer.eval()
+    tokenizer.disable_temporal_mixer = (
+        args.disable_temporal_mixer
+        or bool(ae_ckpt.get('args', {}).get('disable_temporal_mixer', False))
+    )
+    if tokenizer.disable_temporal_mixer:
+        if main_process:
+            print('  TemporalMixer bypassed for I0 latent contract')
     for p in tokenizer.parameters(): p.requires_grad_(False)
 
     # ---- Build Appearance CNN + I_0 Decoder ----
@@ -222,6 +309,12 @@ def main():
         latent_dim=args.latent_dim, base_dim=args.decoder_base_dim, img_size=args.target_size,
         latent_grid=args.latent_grid, num_resblocks=args.decoder_num_resblocks, use_checkpoint=True,
     ).to(device)
+    initialized_keys = initialize_i0_decoder_from_compact(
+        decoder, ae_ckpt['decoder'])
+    if main_process:
+        print(
+            f'  Initialized {initialized_keys} shared decoder tensors '
+            'from geometry autoencoder.')
     tp = sum(p.numel() for p in app_cnn.parameters()) + sum(p.numel() for p in decoder.parameters())
     if main_process: print(f'  AppCNN: {sum(p.numel() for p in app_cnn.parameters())/1e6:.1f}M, Decoder: {sum(p.numel() for p in decoder.parameters())/1e6:.1f}M, Total: {tp/1e6:.1f}M')
 
@@ -235,7 +328,9 @@ def main():
                                  target_size=args.target_size, max_videos=args.max_videos,
                                  num_frames_per_video=args.seq_len,
                                  temporal_jitter=not args.disable_temporal_jitter,
-                                 max_frame_span=args.max_frame_span)
+                                 max_frame_span=args.max_frame_span,
+                                 clip_duration_seconds=args.clip_duration_seconds,
+                                 decode_retries=args.decode_retries)
     sampler = torch.utils.data.distributed.DistributedSampler(dataset) if use_ddp else None
     loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=(sampler is None), sampler=sampler,
                         num_workers=args.num_workers, collate_fn=collate_fn,
@@ -252,7 +347,8 @@ def main():
             csv_path=eval_csv, video_root=eval_video_root,
             seq_len=args.seq_len, target_size=args.target_size,
             max_videos=1, num_frames_per_video=args.seq_len,
-            temporal_jitter=False, max_frame_span=args.max_frame_span)
+            temporal_jitter=False, max_frame_span=args.max_frame_span,
+            clip_duration_seconds=args.clip_duration_seconds)
         eval_loader = DataLoader(
             eval_dataset, batch_size=1, shuffle=False, num_workers=0,
             collate_fn=collate_fn)
@@ -260,8 +356,18 @@ def main():
 
     # ---- Optimizer ----
     if main_process: print('[4/4] Building optimizer...')
-    trainable = list(app_cnn.parameters()) + list(decoder.parameters())
-    optimizer = build_optimizer(nn.ModuleList([app_cnn, decoder]), lr=args.lr, wd=args.wd)
+    optimizer = build_i0_optimizer(
+        app_cnn, decoder, args.lr, args.wd, args.pretrained_lr_scale)
+    # Zero-LR pretrained groups remain in the optimizer for a stable resume
+    # contract, but must not dilute adapter gradients during global clipping.
+    trainable = [
+        parameter
+        for group in optimizer.param_groups
+        if group['initial_lr'] > 0
+        for parameter in group['params']
+    ]
+    if not trainable:
+        raise ValueError('No parameters have a positive learning rate')
     steps_per_epoch = (len(loader) + args.accum_steps - 1) // args.accum_steps
     total_steps = args.epochs * steps_per_epoch
     if args.warmup_steps >= max(total_steps, 1):
@@ -309,12 +415,14 @@ def main():
 
     for epoch in range(start_epoch, args.epochs):
         app_cnn.train(); decoder.train()
-        epoch_loss, n_batches = 0.0, 0
+        epoch_loss, n_batches, epoch_decode_replacements = 0.0, 0, 0
         if use_ddp: sampler.set_epoch(epoch)
         optimizer.zero_grad()
 
         pbar = tqdm(loader, desc=f'Epoch {epoch}/{args.epochs}', dynamic_ncols=True)
         for batch_idx, batch in enumerate(pbar):
+            epoch_decode_replacements += batch.get(
+                'decode_replacements', 0)
             frames = batch['frames'].to(device, dtype=dtype)
             # Keep the conditioning distribution identical at train and inference.
             I_A = frames[:, 0:1]  # [B, 1, 3, H, W]
@@ -322,7 +430,8 @@ def main():
 
             # ---- Encode geometry from I_B (all frames) ----
             with autocast(
-                    device_type=device_type, dtype=dtype, enabled=use_amp):
+                    device_type=device_type, dtype=dtype,
+                    enabled=dtype != torch.float32):
                 with torch.no_grad():
                     tl, psi = encoder(I_B_frames)
                     tl = strip_special_tokens(tl, psi)
@@ -332,6 +441,7 @@ def main():
                     i0_z, _ = tokenizer(i0_tokens)
                     z_g = z_g.clone()
                     z_g[:, 0] = i0_z[:, 0]
+                # Call DDP wrappers so gradients synchronize across ranks.
                 I_0_feats = app_cnn(I_A[:, 0])
                 result = decoder(z_g, I_0_feats)
             preds = result[0] if isinstance(result, tuple) else result
@@ -367,8 +477,7 @@ def main():
                 grad_norm = torch.nn.utils.clip_grad_norm_(
                     trainable, args.max_grad_norm)
                 if use_scaler:
-                    scaler.step(optimizer)
-                    scaler.update()
+                    scaler.step(optimizer); scaler.update()
                 else:
                     optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
@@ -381,7 +490,12 @@ def main():
                         'train/l1': l1.item(),
                         'train/lpips': lpips_loss.item(),
                         'train/grad_norm': float(grad_norm),
-                        'train/lr': optimizer.param_groups[0]['lr'],
+                        'train/lr_adapter': next(
+                            group['lr'] for group in optimizer.param_groups
+                            if group['group_name'].startswith('adapter_')),
+                        'train/lr_pretrained': next(
+                            group['lr'] for group in optimizer.param_groups
+                            if group['group_name'].startswith('pretrained_')),
                     }
                     if writer:
                         for name, value in train_metrics.items():
@@ -395,21 +509,33 @@ def main():
                 scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(trainable, args.max_grad_norm)
             if use_scaler:
-                scaler.step(optimizer)
-                scaler.update()
+                scaler.step(optimizer); scaler.update()
             else:
                 optimizer.step()
             optimizer.zero_grad(set_to_none=True)
             ema.update(ema_modules); scheduler.step(); global_step += 1
 
+        decode_replacements = torch.tensor(
+            epoch_decode_replacements, device=device, dtype=torch.long)
+        if use_ddp:
+            torch.distributed.all_reduce(
+                decode_replacements, op=torch.distributed.ReduceOp.SUM)
+        total_decode_replacements = int(decode_replacements.item())
         avg_loss = epoch_loss / max(n_batches, 1)
         if main_process:
-            print(f'  Epoch {epoch} | avg_loss={avg_loss:.4f} | step={global_step}')
+            print(
+                f'  Epoch {epoch} | avg_loss={avg_loss:.4f} | '
+                f'decode_replacements={total_decode_replacements} | '
+                f'step={global_step}')
             writer.add_scalar('train/epoch_loss', avg_loss, epoch)
+            writer.add_scalar(
+                'data/decode_replacements',
+                total_decode_replacements, epoch)
             append_metrics(metrics_path, {
                 'step': global_step,
                 'epoch': epoch,
                 'train/epoch_loss': avg_loss,
+                'data/decode_replacements': total_decode_replacements,
             })
 
         ac = app_cnn.module if use_ddp else app_cnn

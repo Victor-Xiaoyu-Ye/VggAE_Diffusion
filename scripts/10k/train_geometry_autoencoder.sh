@@ -4,9 +4,11 @@ set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source "${SCRIPT_DIR}/../spatialvid_config.sh"
 source "${SCRIPT_DIR}/../lib/spatialvid.sh"
+source "${SCRIPT_DIR}/../lib/modelarts.sh"
 
 # ----------------------------- editable settings -----------------------------
 OUTPUT_DIR="${RUN_ROOT}/10k/geometry_autoencoder"
+REMOTE_OUTPUT_DIR="${REMOTE_RUN_ROOT}/10k/geometry_autoencoder"
 RESUME=""
 
 EPOCHS=120
@@ -17,25 +19,25 @@ WEIGHT_DECAY=1e-2
 WARMUP_STEPS=500
 EMA_DECAY=0.999
 NUM_WORKERS=10
+CLIP_DURATION_SECONDS=1.0
 SAVE_EVERY=5
 EVAL_EVERY=5
 LOG_EVERY=100
 # -----------------------------------------------------------------------------
 
-# Distributed launch settings are intentionally read from the cluster.
-NUM_NPUS=${NUM_NPUS:-4}
-ASCEND_DEVICE_IDS=${ASCEND_DEVICE_IDS:-0,1,2,3}
 MASTER_PORT=${MASTER_PORT:-29510}
 
+configure_modelarts_distributed
 ensure_spatialvid_splits
 EXTRA_ARGS=()
 if [[ -n "${RESUME}" ]]; then
   EXTRA_ARGS+=(--resume "${RESUME}")
 fi
 
-ASCEND_RT_VISIBLE_DEVICES="${ASCEND_DEVICE_IDS}" torchrun \
-  --nproc_per_node="${NUM_NPUS}" --master_port="${MASTER_PORT}" \
-  "${PROJECT}/train_autoencoder.py" \
+start_output_sync "${OUTPUT_DIR}" "${REMOTE_OUTPUT_DIR}"
+trap 'stop_output_sync "${OUTPUT_DIR}" "${REMOTE_OUTPUT_DIR}"' EXIT
+
+run_torchrun "${PROJECT}/train_autoencoder.py" \
   --csv "${SPATIALVID_TRAIN_10K_CSV}" \
   --video_root "${SPATIALVID_VIDEO_ROOT}" \
   --eval_csv "${SPATIALVID_EVAL_CSV}" \
@@ -57,6 +59,7 @@ ASCEND_RT_VISIBLE_DEVICES="${ASCEND_DEVICE_IDS}" torchrun \
   --warmup_steps "${WARMUP_STEPS}" \
   --ema_decay "${EMA_DECAY}" \
   --seq_len 8 --target_size 518 --max_frame_span 32 \
+  --clip_duration_seconds "${CLIP_DURATION_SECONDS}" \
   --num_workers "${NUM_WORKERS}" --dtype fp16 \
   --log_every "${LOG_EVERY}" \
   --eval_every "${EVAL_EVERY}" \

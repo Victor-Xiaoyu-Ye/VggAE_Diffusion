@@ -24,7 +24,7 @@ require_file "${AUTOENCODER_CKPT}" "geometry autoencoder checkpoint"
 require_file "${I0_CKPT}" "I0 decoder checkpoint"
 require_file "${GENERATOR_CKPT}" "diffusion checkpoint"
 
-ASCEND_RT_VISIBLE_DEVICES="${DEVICE_ID}" python3 \
+ASCEND_RT_VISIBLE_DEVICES="${DEVICE_ID}" "${PYTHON_BIN}" \
   "${PROJECT}/sample_compact_i0.py" \
   --i0_path "${REFERENCE_PATH}" \
   --encoder_ckpt "${STREAMVGGT_CKPT}" \
@@ -35,4 +35,5 @@ ASCEND_RT_VISIBLE_DEVICES="${DEVICE_ID}" python3 \
   --num_steps "${NUM_STEPS}" \
   --solver "${SOLVER}" \
   --seed "${SEED}" \
-  --fps "${FPS}"
+  --fps "${FPS}" \
+  --dtype fp16

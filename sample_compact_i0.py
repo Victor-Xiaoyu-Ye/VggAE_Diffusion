@@ -21,6 +21,12 @@ from utils.device import (
     manual_seed_all,
     resolve_dtype,
 )
+from utils.file_signature import validate_file_signature
+from utils.latent_stats import (
+    denormalize_latent,
+    normalize_latent,
+    validate_latent_stats,
+)
 
 
 def parse_args():
@@ -35,6 +41,8 @@ def parse_args():
     parser.add_argument("--solver", choices=["euler", "midpoint"], default="midpoint")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--fps", type=int, default=8)
+    parser.add_argument(
+        "--dtype", choices=["fp16", "bf16", "fp32"], default="fp16")
     parser.add_argument("--no_anchor_first_latent", action="store_true")
     return parser.parse_args()
 
@@ -91,23 +99,17 @@ def validate_representation_files(normalization, encoder_path, autoencoder_path)
         signature = representation.get(key)
         if signature is None:
             continue
-        actual_size = os.path.getsize(path)
-        if actual_size != signature.get("size"):
-            raise ValueError(
-                f"{key} checkpoint size does not match the cached "
-                f"representation: {actual_size} != {signature.get('size')}")
+        validate_file_signature(path, signature, f"{key} checkpoint")
 
 
 @torch.no_grad()
 def main():
     args = parse_args()
-    device_type = get_device_name()
-    if device_type == "cpu":
-        raise RuntimeError("Sampling requires an accelerator for StreamVGGT")
-
     torch.manual_seed(args.seed)
     manual_seed_all(args.seed)
-    device = get_device(0)
+    device_type = get_device_name()
+    device = get_device()
+    dtype = resolve_dtype(args.dtype)
 
     diffusion_ckpt = torch.load(
         args.diffusion_ckpt, map_location="cpu", weights_only=False)
@@ -116,7 +118,7 @@ def main():
     cached_training = normalization is not None
     future_only_checkpoint = (
         cached_training or "generated_seq_len" in diffusion_args)
-    if cached_training:
+    if cached_training and normalization.get("representation"):
         validate_representation_files(
             normalization, args.encoder_ckpt, args.autoencoder_ckpt)
     if diffusion_args.get("text_cond", False):
@@ -133,7 +135,11 @@ def main():
     latent_grid = int(diffusion_args.get("latent_grid", 18))
     levels = diffusion_args.get("levels", [4, 11, 17, 23])
     latent_scale = float(diffusion_ckpt.get("latent_scale", 1.0))
-    dtype = resolve_dtype("fp16")
+    if normalization is not None:
+        validate_latent_stats(
+            normalization["target"], seq_len, latent_dim, name="target")
+        validate_latent_stats(
+            normalization["cond"], 1, latent_dim, name="condition")
 
     encoder = StreamVGGT(img_size=target_size, patch_size=14, embed_dim=1024)
     load_info = encoder.load_state_dict(
@@ -150,7 +156,8 @@ def main():
         latent_grid=latent_grid,
         levels=levels,
         seq_len=(
-            int(normalization["representation"]["seq_len"])
+            int(normalization.get("representation", {}).get(
+                "seq_len", clip_seq_len))
             if cached_training else clip_seq_len),
         input_grid=target_size // 14,
     ).to(device).eval()
@@ -167,6 +174,13 @@ def main():
         "Autoencoder checkpoint",
     )
     tokenizer.load_state_dict(autoencoder_ckpt["tokenizer"])
+    tokenizer.disable_temporal_mixer = bool(
+        diffusion_args.get(
+            "disable_temporal_mixer",
+            autoencoder_ckpt.get("args", {}).get(
+                "disable_temporal_mixer", False),
+        )
+    )
 
     i0_ckpt = torch.load(
         args.i0_decoder_ckpt, map_location="cpu", weights_only=False)
@@ -211,22 +225,12 @@ def main():
     model.load_state_dict(model_state)
 
     reference = load_reference(args.i0_path, target_size).to(device=device, dtype=dtype)
-    with torch.autocast(
-            device_type=device_type, dtype=dtype,
-            enabled=dtype != torch.float32):
-        tokens, psi = encoder(reference)
-        tokens = strip_special_tokens(tokens, psi)
-        i0_grid, i0_flat = tokenizer(tokens)
+    tokens, psi = encoder(reference)
+    tokens = strip_special_tokens(tokens, psi)
+    i0_grid, i0_flat = tokenizer(tokens)
     if cached_training:
-        cond_mean = normalization["cond"]["mean"].to(
-            device=device, dtype=torch.float32).view(1, 1, 1, -1)
-        cond_std = normalization["cond"]["std"].to(
-            device=device, dtype=torch.float32).clamp_min(1e-6).view(1, 1, 1, -1)
-        target_mean = normalization["target"]["mean"].to(
-            device=device, dtype=torch.float32).view(1, 1, 1, -1)
-        target_std = normalization["target"]["std"].to(
-            device=device, dtype=torch.float32).clamp_min(1e-6).view(1, 1, 1, -1)
-        cond = ((i0_flat.float() - cond_mean) / cond_std).to(dtype=dtype)
+        cond = normalize_latent(
+            i0_flat, normalization["cond"]).to(dtype=dtype)
     else:
         cond = (i0_flat * latent_scale).to(dtype=dtype)
 
@@ -244,7 +248,7 @@ def main():
         z = z + dt * velocity
 
     if cached_training:
-        residual = z.float() * target_std + target_mean
+        residual = denormalize_latent(z, normalization["target"])
         future = residual + i0_flat.float().expand(
             -1, seq_len, -1, -1)
         future_grid = future.reshape(
@@ -274,8 +278,10 @@ def main():
             if not args.no_anchor_first_latent:
                 z_grid[:, 0] = i0_grid[:, 0].float()
 
-    with torch.autocast(device_type=device_type, dtype=dtype):
-        appearance = app_cnn(reference[:, 0])
+    appearance = app_cnn(reference[:, 0])
+    with torch.autocast(
+            device_type=device_type, dtype=dtype,
+            enabled=dtype != torch.float32):
         predictions, _ = decoder(z_grid, appearance)
     rgb = predictions[0].permute(0, 3, 1, 2).contiguous()
     save_outputs(rgb, args.out_dir, args.fps)

@@ -131,7 +131,8 @@ class GenerativeTokenizer(nn.Module):
     """
 
     def __init__(self, token_dim=2048, latent_dim=512, latent_grid=18,
-                 levels=(4, 11, 17, 23), seq_len=8, input_grid=37):
+                 levels=(4, 11, 17, 23), seq_len=8, input_grid=37,
+                 disable_temporal_mixer=False):
         super().__init__()
         self.latent_dim = latent_dim
         self.latent_grid = latent_grid
@@ -141,6 +142,7 @@ class GenerativeTokenizer(nn.Module):
         self.input_grid = input_grid
         self.num_tokens = input_grid ** 2  # 1369
         self.num_latent_tokens = latent_grid ** 2  # 324
+        self.disable_temporal_mixer = disable_temporal_mixer
 
         # Per-level normalization + projection
         self.level_norms = nn.ModuleDict({
@@ -203,7 +205,8 @@ class GenerativeTokenizer(nn.Module):
         # 5. Temporal mixing (per-position)
         z_reshaped = z.reshape(B, S, self.num_latent_tokens, self.latent_dim)
         z_temporal = z_reshaped.permute(0, 2, 1, 3).contiguous().reshape(B * self.num_latent_tokens, S, self.latent_dim)
-        z_temporal = self.temporal_mixer(z_temporal)
+        if not self.disable_temporal_mixer:
+            z_temporal = self.temporal_mixer(z_temporal)
         z_temporal = z_temporal.reshape(B, self.num_latent_tokens, S, self.latent_dim).permute(0, 2, 1, 3).contiguous()
         z = z_temporal.reshape(B, S, self.latent_grid, self.latent_grid, self.latent_dim)
 

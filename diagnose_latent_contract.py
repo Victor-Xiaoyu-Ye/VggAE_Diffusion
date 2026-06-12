@@ -11,6 +11,7 @@ import json
 import os
 
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -33,11 +34,17 @@ def parse_args():
     parser.add_argument("--seq_len", type=int, default=8)
     parser.add_argument("--target_size", type=int, default=518)
     parser.add_argument("--max_frame_span", type=int, default=32)
+    parser.add_argument("--clip_duration_seconds", type=float, default=0.0)
     parser.add_argument("--latent_dim", type=int, default=512)
     parser.add_argument("--latent_grid", type=int, default=18)
     parser.add_argument(
         "--levels", type=int, nargs="+", default=[4, 11, 17, 23])
     parser.add_argument("--num_workers", type=int, default=2)
+    parser.add_argument(
+        "--disable_temporal_mixer",
+        action="store_true",
+        help="Replace the tokenizer temporal mixer with identity for ablation.",
+    )
     return parser.parse_args()
 
 
@@ -93,6 +100,7 @@ def main():
         num_frames_per_video=args.seq_len,
         temporal_jitter=False,
         max_frame_span=args.max_frame_span,
+        clip_duration_seconds=args.clip_duration_seconds,
     )
     if not dataset:
         raise RuntimeError("No valid videos found")
@@ -121,6 +129,8 @@ def main():
     checkpoint = torch.load(
         args.autoencoder_ckpt, map_location="cpu", weights_only=False)
     tokenizer.load_state_dict(checkpoint["tokenizer"])
+    if args.disable_temporal_mixer:
+        tokenizer.disable_temporal_mixer = True
     tokenizer.eval()
 
     metrics = {}
@@ -176,9 +186,11 @@ def main():
             "seq_len": args.seq_len,
             "target_size": args.target_size,
             "max_frame_span": args.max_frame_span,
+            "clip_duration_seconds": args.clip_duration_seconds,
             "latent_dim": args.latent_dim,
             "latent_grid": args.latent_grid,
             "levels": args.levels,
+            "disable_temporal_mixer": args.disable_temporal_mixer,
             "encoder_ckpt": os.path.abspath(args.encoder_ckpt),
             "autoencoder_ckpt": os.path.abspath(args.autoencoder_ckpt),
         },

@@ -4,11 +4,13 @@ set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source "${SCRIPT_DIR}/../spatialvid_config.sh"
 source "${SCRIPT_DIR}/../lib/spatialvid.sh"
+source "${SCRIPT_DIR}/../lib/modelarts.sh"
 
 # ----------------------------- editable settings -----------------------------
 AUTOENCODER_CKPT="${GEOMETRY_AE_CKPT}"
 I0_CKPT="${I0_DECODER_CKPT}"
 OUTPUT_DIR="${RUN_ROOT}/10k/compact_diffusion"
+REMOTE_OUTPUT_DIR="${REMOTE_RUN_ROOT}/10k/compact_diffusion"
 RESUME=""
 
 EPOCHS=50
@@ -23,15 +25,16 @@ SPATIAL_DEPTH=8
 TEMPORAL_DEPTH=4
 NUM_HEADS=12
 NUM_WORKERS=4
+CLIP_DURATION_SECONDS=1.0
+NORMALIZATION_BATCHES=64
 SAVE_EVERY=5
 EVAL_EVERY=5
 LOG_EVERY=50
 # -----------------------------------------------------------------------------
 
-NUM_NPUS=${NUM_NPUS:-4}
-ASCEND_DEVICE_IDS=${ASCEND_DEVICE_IDS:-0,1,2,3}
 MASTER_PORT=${MASTER_PORT:-29540}
 
+configure_modelarts_distributed
 ensure_spatialvid_splits
 require_file "${AUTOENCODER_CKPT}" "geometry autoencoder checkpoint"
 require_file "${I0_CKPT}" "I0 decoder checkpoint"
@@ -41,9 +44,10 @@ if [[ -n "${RESUME}" ]]; then
   EXTRA_ARGS+=(--resume "${RESUME}")
 fi
 
-ASCEND_RT_VISIBLE_DEVICES="${ASCEND_DEVICE_IDS}" torchrun \
-  --nproc_per_node="${NUM_NPUS}" --master_port="${MASTER_PORT}" \
-  "${PROJECT}/train_compact_diffusion.py" \
+start_output_sync "${OUTPUT_DIR}" "${REMOTE_OUTPUT_DIR}"
+trap 'stop_output_sync "${OUTPUT_DIR}" "${REMOTE_OUTPUT_DIR}"' EXIT
+
+run_torchrun "${PROJECT}/train_compact_diffusion.py" \
   --csv "${SPATIALVID_TRAIN_10K_CSV}" \
   --video_root "${SPATIALVID_VIDEO_ROOT}" \
   --eval_csv "${SPATIALVID_EVAL_CSV}" \
@@ -63,6 +67,7 @@ ASCEND_RT_VISIBLE_DEVICES="${ASCEND_DEVICE_IDS}" torchrun \
   --decoder_base_dim 384 --decoder_num_resblocks 2 \
   --decoder_pixel_shuffle --decoder_temporal_blocks 2 \
   --rescale --no_decoder_aux \
+  --normalization_batches "${NORMALIZATION_BATCHES}" \
   --batch_size "${BATCH_SIZE}" \
   --accum_steps "${ACCUM_STEPS}" \
   --epochs "${EPOCHS}" \
@@ -71,6 +76,8 @@ ASCEND_RT_VISIBLE_DEVICES="${ASCEND_DEVICE_IDS}" torchrun \
   --warmup_steps "${WARMUP_STEPS}" \
   --ema_decay "${EMA_DECAY}" \
   --seq_len 8 --target_size 518 --max_frame_span 32 \
+  --clip_duration_seconds "${CLIP_DURATION_SECONDS}" \
+  --disable_temporal_mixer \
   --num_workers "${NUM_WORKERS}" --dtype fp16 \
   --log_every "${LOG_EVERY}" \
   --eval_every "${EVAL_EVERY}" \
