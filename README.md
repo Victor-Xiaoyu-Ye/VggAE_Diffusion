@@ -46,8 +46,8 @@ bash scripts/10k/run_validation_suite.sh
 bash scripts/10k/collect_results.sh
 ```
 
-This path decodes video and runs StreamVGGT inside the training loop. It is not
-intended for the 10M run.
+This path decodes video and runs StreamVGGT inside the training loop. The scale
+path is preferred when using the complete SpatialVID metadata CSV.
 
 ### Large-scale training
 

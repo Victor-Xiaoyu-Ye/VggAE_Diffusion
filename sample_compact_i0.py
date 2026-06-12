@@ -10,6 +10,7 @@ import torch
 from PIL import Image
 
 from data.token_utils import strip_special_tokens
+from data.video_dataset import SpatialVidDataset
 from models.appearance_cnn import AppearanceCNN
 from models.compact_dit import CompactLatentDiT
 from models.generative_tokenizer import GenerativeTokenizer
@@ -31,7 +32,11 @@ from utils.latent_stats import (
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--i0_path", required=True, help="Reference image or video")
+    parser.add_argument(
+        "--i0_path", default="", help="Optional reference image or video")
+    parser.add_argument(
+        "--csv", default="", help="Use the first dataset clip when i0_path is empty")
+    parser.add_argument("--video_root", default="")
     parser.add_argument("--encoder_ckpt", required=True)
     parser.add_argument("--autoencoder_ckpt", required=True)
     parser.add_argument("--i0_decoder_ckpt", required=True)
@@ -58,6 +63,25 @@ def load_reference(path, size):
     image = image.resize((size, size), Image.Resampling.BILINEAR)
     array = np.asarray(image, dtype=np.float32) / 255.0
     return torch.from_numpy(array).permute(2, 0, 1).unsqueeze(0).unsqueeze(0)
+
+
+def load_dataset_reference(csv_path, video_root, size):
+    if not csv_path or not video_root:
+        raise ValueError(
+            "Set --i0_path or provide both --csv and --video_root")
+    dataset = SpatialVidDataset(
+        csv_path=csv_path,
+        video_root=video_root,
+        seq_len=1,
+        target_size=size,
+        max_videos=1,
+        num_frames_per_video=1,
+        temporal_jitter=False,
+        check_files=False,
+    )
+    if not dataset:
+        raise RuntimeError(f"No sample found in {csv_path}")
+    return dataset[0]["frames"][:1].unsqueeze(0)
 
 
 def save_outputs(rgb, out_dir, fps):
@@ -224,7 +248,11 @@ def main():
     model_state = diffusion_ckpt.get("ema", diffusion_ckpt["model"])
     model.load_state_dict(model_state)
 
-    reference = load_reference(args.i0_path, target_size).to(device=device, dtype=dtype)
+    reference = (
+        load_reference(args.i0_path, target_size)
+        if args.i0_path else
+        load_dataset_reference(args.csv, args.video_root, target_size)
+    ).to(device=device, dtype=dtype)
     tokens, psi = encoder(reference)
     tokens = strip_special_tokens(tokens, psi)
     i0_grid, i0_flat = tokenizer(tokens)

@@ -6,12 +6,10 @@ source "${SCRIPT_DIR}/../spatialvid_config.sh"
 source "${SCRIPT_DIR}/../lib/spatialvid.sh"
 
 # ----------------------------- editable settings -----------------------------
-REFERENCE_PATH="${I0_PATH}"
 AUTOENCODER_CKPT="${GEOMETRY_AE_CKPT}"
 I0_CKPT="${I0_DECODER_CKPT}"
 GENERATOR_CKPT="${DIFFUSION_CKPT}"
 OUT_DIR="${RUN_ROOT}/samples/compact_i0"
-DEVICE_ID=0
 SEED=42
 NUM_STEPS=50
 SOLVER="midpoint"
@@ -19,14 +17,15 @@ FPS=8
 # -----------------------------------------------------------------------------
 
 validate_model_config
-require_file "${REFERENCE_PATH}" "reference image or video"
+ensure_spatialvid_splits
 require_file "${AUTOENCODER_CKPT}" "geometry autoencoder checkpoint"
 require_file "${I0_CKPT}" "I0 decoder checkpoint"
 require_file "${GENERATOR_CKPT}" "diffusion checkpoint"
 
-ASCEND_RT_VISIBLE_DEVICES="${DEVICE_ID}" "${PYTHON_BIN}" \
+"${PYTHON_BIN}" \
   "${PROJECT}/sample_compact_i0.py" \
-  --i0_path "${REFERENCE_PATH}" \
+  --csv "${SPATIALVID_EVAL_CSV}" \
+  --video_root "${SPATIALVID_VIDEO_ROOT}" \
   --encoder_ckpt "${STREAMVGGT_CKPT}" \
   --autoencoder_ckpt "${AUTOENCODER_CKPT}" \
   --i0_decoder_ckpt "${I0_CKPT}" \

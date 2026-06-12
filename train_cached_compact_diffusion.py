@@ -50,7 +50,9 @@ def parse_args():
     parser.add_argument("--stats", required=True)
     parser.add_argument("--eval_manifest", default="")
     parser.add_argument("--eval_stats", default="")
-    parser.add_argument("--eval_i0_path", default="")
+    parser.add_argument(
+        "--eval_i0_path", default="",
+        help="Legacy fallback; eval cache i0_rgb is preferred")
     parser.add_argument("--i0_decoder_ckpt", default="")
     parser.add_argument("--output_dir", required=True)
     parser.add_argument("--resume", default="")
@@ -189,12 +191,9 @@ def save_latent_preview(target_raw, generated_raw, path, latent_grid):
     ).save(path)
 
 
-def load_rgb_preview(args, representation):
-    if not args.eval_i0_path and not args.i0_decoder_ckpt:
+def load_rgb_preview(args, representation, preview_batch):
+    if not args.i0_decoder_ckpt:
         return None
-    if not args.eval_i0_path or not args.i0_decoder_ckpt:
-        raise ValueError(
-            "--eval_i0_path and --i0_decoder_ckpt must be set together")
 
     from models.appearance_cnn import AppearanceCNN
     from models.i0_decoder import (
@@ -213,11 +212,23 @@ def load_rgb_preview(args, representation):
     target_size = int(
         checkpoint_args.get(
             "target_size", representation.get("target_size", 518)))
-    image = Image.open(args.eval_i0_path).convert("RGB").resize(
-        (target_size, target_size), Image.Resampling.BILINEAR)
-    reference = torch.from_numpy(
-        np.asarray(image, dtype=np.float32) / 255.0
-    ).permute(2, 0, 1).unsqueeze(0)
+    if "i0_rgb" in preview_batch:
+        reference = preview_batch["i0_rgb"].float() / 255.0
+        if reference.shape[-2:] != (target_size, target_size):
+            reference = torch.nn.functional.interpolate(
+                reference, size=(target_size, target_size),
+                mode="bilinear", align_corners=False)
+    elif args.eval_i0_path:
+        image = Image.open(args.eval_i0_path).convert("RGB").resize(
+            (target_size, target_size), Image.Resampling.BILINEAR)
+        reference = torch.from_numpy(
+            np.asarray(image, dtype=np.float32) / 255.0
+        ).permute(2, 0, 1).unsqueeze(0)
+    else:
+        print(
+            "[WARN] Evaluation cache has no i0_rgb; skipping RGB preview. "
+            "Rebuild it with cache_compact_latents.py --store_i0_rgb.")
+        return None
 
     app_cnn = AppearanceCNN().eval()
     decoder = I0ConditionalDecoder(
@@ -439,7 +450,8 @@ def main():
         print(
             "Preview cache sample: "
             f"{preview_batch['video_id'][0] or '<unknown>'}")
-        rgb_preview = load_rgb_preview(args, representation)
+        rgb_preview = load_rgb_preview(
+            args, representation, preview_batch)
 
     dataset = LatentShardDataset(
         args.manifest,

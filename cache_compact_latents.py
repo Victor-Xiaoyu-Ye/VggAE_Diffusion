@@ -59,6 +59,9 @@ def parse_args():
     parser.add_argument("--max_videos", type=int, default=0)
     parser.add_argument("--check_files", action="store_true")
     parser.add_argument("--samples_per_tar", type=int, default=512)
+    parser.add_argument(
+        "--store_i0_rgb", action="store_true",
+        help="Store the observed first RGB frame for automatic previews")
 
     parser.add_argument("--latent_dim", type=int, default=512)
     parser.add_argument("--latent_grid", type=int, default=18)
@@ -334,14 +337,21 @@ def main():
                     key = (
                         f"p{partition_id:05d}-r{rank:04d}-"
                         f"{sample_index:09d}")
-                    writer.write(key, {
+                    sample = {
                         "target": target[batch_index].to(
                             device="cpu", dtype=torch.float16),
                         "cond": i0_flat[batch_index].to(
                             device="cpu", dtype=torch.float16),
                         "caption": batch["caption"][batch_index],
                         "video_id": batch["video_id"][batch_index],
-                    })
+                    }
+                    if args.store_i0_rgb:
+                        sample["i0_rgb"] = (
+                            frames[batch_index, 0].float()
+                            .clamp(0, 1).mul(255).round()
+                            .to(device="cpu", dtype=torch.uint8)
+                        )
+                    writer.write(key, sample)
                     sample_index += 1
                     successful_samples += 1
     finally:

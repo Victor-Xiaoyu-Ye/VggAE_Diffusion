@@ -8,7 +8,6 @@ source "${SCRIPT_DIR}/../lib/spatialvid.sh"
 # ----------------------------- editable settings -----------------------------
 OUTPUT="${RUN_ROOT}/diagnostics/latent_contract.json"
 NUM_VIDEOS=32
-DEVICE_ID=0
 SEQ_LEN=8
 TARGET_SIZE=518
 MAX_FRAME_SPAN=32
@@ -27,7 +26,7 @@ if [[ "${DISABLE_TEMPORAL_MIXER}" == "1" ]]; then
   EXTRA_ARGS+=(--disable_temporal_mixer)
 fi
 
-ASCEND_RT_VISIBLE_DEVICES="${DEVICE_ID}" "${PYTHON_BIN}" \
+"${PYTHON_BIN}" \
   "${PROJECT}/diagnose_latent_contract.py" \
   --csv "${SPATIALVID_EVAL_CSV}" \
   --video_root "${SPATIALVID_VIDEO_ROOT}" \
