@@ -26,6 +26,9 @@ Frame 0 is observed and must not be diffused.
 5. Decode generated latents with the frozen I0 decoder.
 
 Changing the tokenizer invalidates all cached latents and diffusion checkpoints.
+On ModelArts, videos remain on OBS and are staged per sample into a bounded
+node-local cache. Raw StreamVGGT features are never persisted. Compact latent
+shards and exact raw normalization moments are written under `$OUTPUT_URL`.
 
 ## Checkpoint and Monitoring Contract
 

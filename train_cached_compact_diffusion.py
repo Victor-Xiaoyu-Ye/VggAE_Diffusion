@@ -35,6 +35,12 @@ from utils.training import (
     capture_rng_state,
     restore_rng_state,
 )
+from utils.latent_stats import (
+    denormalize_latent,
+    normalize_latent,
+    validate_latent_stats,
+)
+from utils.moxing_io import stage_remote_file
 
 
 def parse_args():
@@ -284,8 +290,10 @@ def evaluate_preview(model, preview_batch, target_mean, target_std,
         device=device, dtype=torch.float32)
     cond_raw = preview_batch["cond"].to(
         device=device, dtype=torch.float32)
-    target = ((target_raw - target_mean) / target_std).to(model_dtype)
-    cond = ((cond_raw - cond_mean) / cond_std).to(model_dtype)
+    target_stats = {"mean": target_mean, "std": target_std}
+    cond_stats = {"mean": cond_mean, "std": cond_std}
+    target = normalize_latent(target_raw, target_stats).to(model_dtype)
+    cond = normalize_latent(cond_raw, cond_stats).to(model_dtype)
 
     generator = torch.Generator(device="cpu")
     generator.manual_seed(args.seed + 17)
@@ -329,7 +337,7 @@ def evaluate_preview(model, preview_batch, target_mean, target_std,
             midpoint_velocity = model(z_mid, t_mid, cond=cond)
         z = z + dt * midpoint_velocity
 
-    generated_raw = z.float() * target_std + target_mean
+    generated_raw = denormalize_latent(z, target_stats)
     save_latent_preview(
         target_raw, generated_raw,
         os.path.join(
@@ -380,19 +388,24 @@ def main():
     set_seed(args.seed + rank)
     os.makedirs(args.output_dir, exist_ok=True)
 
+    metadata_cache = os.environ.get(
+        "MOX_METADATA_CACHE_DIR", "/cache/vggae/metadata_cache")
+    stats_path = stage_remote_file(
+        args.stats, metadata_cache, max_cache_bytes=10 * 1024 ** 3)
     cache_stats = torch.load(
-        args.stats, map_location="cpu", weights_only=False)
+        stats_path, map_location="cpu", weights_only=False)
+    validate_latent_stats(
+        cache_stats["target"], args.seq_len, args.latent_dim, name="target")
+    validate_latent_stats(
+        cache_stats["cond"], 1, args.latent_dim, name="condition")
     target_mean = cache_stats["target"]["mean"].to(
-        device=device, dtype=torch.float32).view(1, 1, 1, -1)
+        device=device, dtype=torch.float32)
     target_std = cache_stats["target"]["std"].to(
-        device=device, dtype=torch.float32).clamp_min(1e-6).view(1, 1, 1, -1)
+        device=device, dtype=torch.float32).clamp_min(1e-6)
     cond_mean = cache_stats["cond"]["mean"].to(
-        device=device, dtype=torch.float32).view(1, 1, 1, -1)
+        device=device, dtype=torch.float32)
     cond_std = cache_stats["cond"]["std"].to(
-        device=device, dtype=torch.float32).clamp_min(1e-6).view(1, 1, 1, -1)
-    if target_mean.shape[-1] != args.latent_dim:
-        raise ValueError(
-            f"Stats latent dim {target_mean.shape[-1]} != {args.latent_dim}")
+        device=device, dtype=torch.float32).clamp_min(1e-6)
     representation = cache_stats.get("representation", {})
     if representation:
         if int(representation["latent_grid"]) != args.latent_grid:
@@ -414,8 +427,11 @@ def main():
                 "[WARN] --eval_manifest not set; preview metrics use "
                 "a fixed training-cache sample")
         if args.eval_stats:
+            eval_stats_path = stage_remote_file(
+                args.eval_stats, metadata_cache,
+                max_cache_bytes=10 * 1024 ** 3)
             eval_stats = torch.load(
-                args.eval_stats, map_location="cpu", weights_only=False)
+                eval_stats_path, map_location="cpu", weights_only=False)
             if eval_stats.get("representation") != representation:
                 raise ValueError(
                     "Evaluation cache uses a different representation")
@@ -521,8 +537,12 @@ def main():
                 raise ValueError(
                     f"Unexpected target shape {tuple(target_raw.shape)}")
 
-            target = ((target_raw - target_mean) / target_std).to(model_dtype)
-            cond = ((cond_raw - cond_mean) / cond_std).to(model_dtype)
+            target = normalize_latent(
+                target_raw, {"mean": target_mean, "std": target_std}
+            ).to(model_dtype)
+            cond = normalize_latent(
+                cond_raw, {"mean": cond_mean, "std": cond_std}
+            ).to(model_dtype)
 
             sync_context = contextlib.nullcontext()
             if use_ddp and micro_step < args.accum_steps - 1:

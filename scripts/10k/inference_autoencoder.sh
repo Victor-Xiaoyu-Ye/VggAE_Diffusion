@@ -14,12 +14,13 @@ SEQ_LEN=8
 TARGET_SIZE=518
 LATENT_DIM=512
 LATENT_GRID=18
+CLIP_DURATION_SECONDS=1.0
 # -----------------------------------------------------------------------------
 
 ensure_spatialvid_splits
 require_file "${CHECKPOINT}" "geometry autoencoder checkpoint"
 
-ASCEND_RT_VISIBLE_DEVICES="${DEVICE_ID}" python3 \
+ASCEND_RT_VISIBLE_DEVICES="${DEVICE_ID}" "${PYTHON_BIN}" \
   "${PROJECT}/inference_autoencoder.py" \
   --checkpoint "${CHECKPOINT}" \
   --encoder_ckpt "${STREAMVGGT_CKPT}" \
@@ -28,6 +29,7 @@ ASCEND_RT_VISIBLE_DEVICES="${DEVICE_ID}" python3 \
   --output_dir "${OUTPUT_DIR}" \
   --num_videos "${NUM_VIDEOS}" \
   --seq_len "${SEQ_LEN}" \
+  --clip_duration_seconds "${CLIP_DURATION_SECONDS}" \
   --target_size "${TARGET_SIZE}" \
   --latent_dim "${LATENT_DIM}" \
   --latent_grid "${LATENT_GRID}" \

@@ -7,6 +7,13 @@ flow matching.
 This branch targets Ascend 910B. Active training uses `torch_npu`, HCCL, and
 FP16 with gradient scaling.
 
+The scale scripts target 24 ModelArts workers with 8 NPUs each. They derive
+the distributed topology from `VC_WORKER_NUM`, `VC_TASK_INDEX`, and
+`VC_WORKER_HOSTS`. SpatialVID-HQ remains on OBS and each MP4 is staged on
+demand into a bounded node-local cache because OpenCV needs a seekable local
+file. Rank-0 checkpoints, metrics, and previews are periodically mirrored to
+`$OUTPUT_URL`.
+
 ## Active Workflows
 
 Before launching, edit the cluster paths once in:
@@ -18,8 +25,8 @@ scripts/spatialvid_config.sh
 The active scripts automatically create deterministic, non-overlapping
 SpatialVID CSV files under `RUN_ROOT/metadata/`. You do not need to extract
 overfit or validation CSV files manually. Experiment hyperparameters are
-grouped at the top of each `.sh`; only distributed launch settings are read
-from environment variables.
+grouped at the top of each `.sh`; only distributed launch settings and
+`$OUTPUT_URL` are read from environment variables.
 
 ### 10K experiments
 

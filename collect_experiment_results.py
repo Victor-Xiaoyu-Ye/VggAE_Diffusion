@@ -13,6 +13,7 @@ def parse_args():
         "--run", action="append", default=[],
         help="Run definition in NAME=PATH form; may be repeated")
     parser.add_argument("--latent_contract", default="")
+    parser.add_argument("--compact_stats", default="")
     parser.add_argument("--output_dir", required=True)
     return parser.parse_args()
 
@@ -122,6 +123,9 @@ def main():
     if args.latent_contract and os.path.exists(args.latent_contract):
         with open(args.latent_contract) as contract_file:
             report["latent_contract"] = json.load(contract_file)
+    if args.compact_stats and os.path.exists(args.compact_stats):
+        with open(args.compact_stats) as stats_file:
+            report["compact_stats"] = json.load(stats_file)
 
     os.makedirs(args.output_dir, exist_ok=True)
     json_path = os.path.join(args.output_dir, "results_summary.json")
@@ -142,6 +146,42 @@ def main():
             f"`{contract_metrics.get('compact_i0/drift_to_future_residual_rms', {}).get('mean', float('nan')):.6g}`",
             "",
         ])
+    compact_stats = report.get("compact_stats", {})
+    target_stats = compact_stats.get("target", {})
+    if target_stats:
+        correlation = target_stats.get("channel_correlation", {})
+        stats_config = compact_stats.get("configuration", {})
+        lines.extend([
+            "## Compact Latent Statistics",
+            "",
+            f"- Videos: `{compact_stats.get('num_videos', 'unknown')}`",
+            f"- Clip duration: "
+            f"`{stats_config.get('clip_duration_seconds', 'unknown')}`",
+            f"- Temporal mixer disabled: "
+            f"`{stats_config.get('disable_temporal_mixer', 'unknown')}`",
+            f"- Target global std: "
+            f"`{target_stats.get('global_std', float('nan')):.6g}`",
+            f"- Channel std p99/p01: "
+            f"`{target_stats.get('channel_std_p99_over_p01', float('nan')):.6g}`",
+            f"- Correlation effective rank: "
+            f"`{correlation.get('effective_rank', float('nan')):.6g}`",
+            f"- Future-frame std: "
+            f"`{target_stats.get('frame_std', [])}`",
+            "",
+            "### Normalization Convergence",
+            "",
+            "| videos | target std rel. MAE | target std rel. p95 |",
+            "|---:|---:|---:|",
+        ])
+        convergence = compact_stats.get(
+            "normalization_convergence_vs_final", {})
+        for count, values in sorted(
+                convergence.items(), key=lambda item: int(item[0])):
+            lines.append(
+                f"| {count} | "
+                f"{values['target_std_relative_mae']:.6g} | "
+                f"{values['target_std_relative_p95']:.6g} |")
+        lines.append("")
     lines.extend(["## Runs", ""])
     for run in runs:
         lines.extend([
@@ -155,6 +195,12 @@ def main():
             f"- Latest preview: `{run['preview'] or 'missing'}`",
             "",
         ])
+        if not stats_config.get("disable_temporal_mixer", False):
+            lines.extend([
+                "> Warning: these statistics use the legacy TemporalMixer "
+                "contract and must not be used for the active I0 diffusion.",
+                "",
+            ])
     with open(markdown_path, "w") as output:
         output.write("\n".join(lines))
 

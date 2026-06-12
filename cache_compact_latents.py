@@ -21,8 +21,25 @@ from data.token_utils import strip_special_tokens
 from data.video_dataset import SpatialVidDataset, collate_fn
 from models.generative_tokenizer import GenerativeTokenizer
 from streamvggt.models.streamvggt import StreamVGGT
-from utils.device import get_device, get_device_name, resolve_dtype
 from utils.distributed import is_main_process, setup_ddp
+from utils.device import get_device, get_device_name, resolve_dtype
+from utils.file_signature import sampled_file_signature
+from utils.latent_stats import (
+    create_moments,
+    finalize_moments,
+    merge_raw_moments,
+    reduce_moments,
+    update_moments,
+)
+from utils.moxing_io import (
+    copy_file,
+    is_remote_path,
+    join_remote,
+    read_text,
+    remote_exists,
+    stage_remote_file,
+    write_text,
+)
 
 
 def parse_args():
@@ -51,6 +68,8 @@ def parse_args():
     parser.add_argument("--target_size", type=int, default=518)
     parser.add_argument("--num_frames_per_video", type=int, default=8)
     parser.add_argument("--max_frame_span", type=int, default=32)
+    parser.add_argument("--clip_duration_seconds", type=float, default=0.0)
+    parser.add_argument("--disable_temporal_mixer", action="store_true")
 
     parser.add_argument("--batch_size", type=int, default=1)
     parser.add_argument("--num_workers", type=int, default=4)
@@ -61,8 +80,10 @@ def parse_args():
 
 
 class TarShardWriter:
-    def __init__(self, output_dir, prefix, samples_per_tar):
+    def __init__(self, output_dir, prefix, samples_per_tar,
+                 remote_output_dir=""):
         self.output_dir = output_dir
+        self.remote_output_dir = remote_output_dir
         self.prefix = prefix
         self.samples_per_tar = samples_per_tar
         self.shard_index = 0
@@ -73,11 +94,16 @@ class TarShardWriter:
     def _open_next(self):
         path = os.path.join(
             self.output_dir, f"{self.prefix}-{self.shard_index:06d}.tar")
-        if os.path.exists(path):
+        remote_path = (
+            join_remote(self.remote_output_dir, os.path.basename(path))
+            if self.remote_output_dir else "")
+        if os.path.exists(path) or (
+                remote_path and remote_exists(remote_path)):
             raise FileExistsError(
-                f"Refusing to overwrite existing cache shard: {path}")
+                f"Refusing to overwrite existing cache shard: "
+                f"{remote_path or path}")
         self.archive = tarfile.open(path, mode="w")
-        self.paths.append(path)
+        self.paths.append(remote_path or path)
         self.samples_in_shard = 0
         self.shard_index += 1
 
@@ -96,8 +122,15 @@ class TarShardWriter:
 
     def close_current(self):
         if self.archive is not None:
+            local_path = self.archive.name
             self.archive.close()
             self.archive = None
+            if self.remote_output_dir:
+                remote_path = join_remote(
+                    self.remote_output_dir,
+                    os.path.basename(local_path))
+                copy_file(local_path, remote_path)
+                os.unlink(local_path)
 
     def close(self):
         self.close_current()
@@ -152,28 +185,15 @@ def load_models(args, device, compute_dtype):
     checkpoint = torch.load(
         args.autoencoder_ckpt, map_location="cpu", weights_only=False)
     tokenizer.load_state_dict(checkpoint["tokenizer"])
+    tokenizer.disable_temporal_mixer = (
+        args.disable_temporal_mixer
+        or bool(checkpoint.get("args", {}).get(
+            "disable_temporal_mixer", False))
+    )
     tokenizer.eval()
     for parameter in tokenizer.parameters():
         parameter.requires_grad_(False)
     return encoder, tokenizer
-
-
-def update_stats(stats, tensor):
-    values = tensor.float().reshape(-1, tensor.shape[-1])
-    stats["sum"] += values.sum(dim=0)
-    stats["sum_sq"] += values.square().sum(dim=0)
-    stats["count"] += values.shape[0]
-
-
-def finalize_stats(stats):
-    count = stats["count"].clamp_min(1)
-    mean = stats["sum"] / count
-    variance = stats["sum_sq"] / count - mean.square()
-    return {
-        "mean": mean.float().cpu(),
-        "std": variance.clamp_min(1e-12).sqrt().float().cpu(),
-        "count": int(stats["count"].item()),
-    }
 
 
 def count_failure_records(paths):
@@ -184,12 +204,10 @@ def count_failure_records(paths):
     return count
 
 
-def file_signature(path):
-    stat = os.stat(path)
+def moments_to_cpu(moments):
     return {
-        "path": os.path.abspath(path),
-        "size": stat.st_size,
-        "mtime_ns": stat.st_mtime_ns,
+        key: value.detach().cpu()
+        for key, value in moments.items()
     }
 
 
@@ -212,9 +230,27 @@ def main():
         raise ValueError(
             f"partition_id must be in [0, {num_partitions}), "
             f"got {partition_id}")
-    partition_dir = os.path.join(
-        args.output_dir,
+    remote_partition_dir = ""
+    if is_remote_path(args.output_dir):
+        remote_partition_dir = join_remote(
+            args.output_dir,
+            f"part-{partition_id:05d}-of-{num_partitions:05d}")
+        local_root = os.environ.get(
+            "MOX_CACHE_WRITER_DIR", "/cache/vggae/cache_writer")
+    else:
+        local_world_size = int(os.environ.get("LOCAL_WORLD_SIZE", world_size))
+        if world_size > local_world_size:
+            raise ValueError(
+                "Multi-node caching requires an OBS --output_dir so every "
+                "rank's moments and manifest are visible to global rank 0")
+        local_root = args.output_dir
+    local_partition_root = os.path.join(
+        local_root,
         f"part-{partition_id:05d}-of-{num_partitions:05d}",
+    )
+    partition_dir = os.path.join(
+        local_partition_root,
+        f"rank-{rank:05d}",
     )
     os.makedirs(partition_dir, exist_ok=True)
 
@@ -231,6 +267,7 @@ def main():
         index_num_shards=args.index_num_shards,
         check_files=args.check_files,
         max_frame_span=args.max_frame_span,
+        clip_duration_seconds=args.clip_duration_seconds,
     )
     rank_indices = range(rank, len(dataset), world_size)
     rank_dataset = Subset(SafeDataset(dataset), rank_indices)
@@ -246,23 +283,21 @@ def main():
 
     encoder, tokenizer = load_models(args, device, compute_dtype)
     writer = TarShardWriter(
-        partition_dir, f"latents-r{rank:04d}", args.samples_per_tar)
+        partition_dir, f"latents-r{rank:05d}", args.samples_per_tar,
+        remote_output_dir=remote_partition_dir)
 
-    target_stats = {
-        "sum": torch.zeros(args.latent_dim, device=device, dtype=torch.float32),
-        "sum_sq": torch.zeros(args.latent_dim, device=device, dtype=torch.float32),
-        "count": torch.zeros((), device=device, dtype=torch.float32),
-    }
-    cond_stats = {
-        "sum": torch.zeros(args.latent_dim, device=device, dtype=torch.float32),
-        "sum_sq": torch.zeros(args.latent_dim, device=device, dtype=torch.float32),
-        "count": torch.zeros((), device=device, dtype=torch.float32),
-    }
+    # Long 10M runs cannot accumulate sum/sum_sq accurately in NPU FP32.
+    # Each batch is reduced on-device, then the tiny [S,D] arrays are added
+    # into CPU FP64 moments.
+    stats_device = torch.device("cpu") if remote_partition_dir else device
+    target_stats = create_moments(
+        args.seq_len - 1, args.latent_dim, stats_device)
+    cond_stats = create_moments(1, args.latent_dim, stats_device)
 
     sample_index = 0
     failed_samples = []
     successful_samples = torch.zeros(
-        (), device=device, dtype=torch.float32)
+        (), device=device, dtype=torch.long)
     progress = tqdm(
         dataloader, disable=not is_main_process(), desc="Caching compact latents")
     try:
@@ -292,8 +327,8 @@ def main():
                     - i0_flat.expand(-1, video_flat.shape[1] - 1, -1, -1)
                 )
 
-                update_stats(target_stats, target)
-                update_stats(cond_stats, i0_flat)
+                update_moments(target_stats, target)
+                update_moments(cond_stats, i0_flat)
 
                 for batch_index in range(target.shape[0]):
                     key = (
@@ -312,51 +347,129 @@ def main():
     finally:
         writer.close()
 
+    failed_count = torch.tensor(
+        len(failed_samples), device=device, dtype=torch.long)
     if use_ddp:
-        for stats in (target_stats, cond_stats):
-            dist.all_reduce(stats["sum"], op=dist.ReduceOp.SUM)
-            dist.all_reduce(stats["sum_sq"], op=dist.ReduceOp.SUM)
-            dist.all_reduce(stats["count"], op=dist.ReduceOp.SUM)
+        if not remote_partition_dir:
+            for stats in (target_stats, cond_stats):
+                reduce_moments(stats)
         dist.all_reduce(successful_samples, op=dist.ReduceOp.SUM)
-        dist.barrier()
+        dist.all_reduce(failed_count, op=dist.ReduceOp.SUM)
 
     failure_path = os.path.join(
         partition_dir, f"failures-r{rank:04d}.jsonl")
     with open(failure_path, "w") as failure_file:
         for failure in failed_samples:
             failure_file.write(json.dumps(failure) + "\n")
+    rank_manifest = "\n".join(writer.paths)
+    if rank_manifest:
+        rank_manifest += "\n"
+    if remote_partition_dir:
+        rank_moments_path = os.path.join(
+            partition_dir, f"moments-r{rank:05d}.pt")
+        torch.save({
+            "target": moments_to_cpu(target_stats),
+            "cond": moments_to_cpu(cond_stats),
+        }, rank_moments_path)
+        copy_file(
+            failure_path,
+            join_remote(
+                remote_partition_dir,
+                f"failures-r{rank:05d}.jsonl"))
+        write_text(
+            join_remote(
+                remote_partition_dir,
+                f"manifest-r{rank:05d}.txt"),
+            rank_manifest)
+        copy_file(
+            rank_moments_path,
+            join_remote(
+                remote_partition_dir,
+                f"moments-r{rank:05d}.pt"))
     if use_ddp:
         dist.barrier()
 
     if is_main_process():
-        shard_paths = sorted(glob.glob(os.path.join(partition_dir, "*.tar")))
+        if remote_partition_dir:
+            shard_paths = []
+            target_rank_moments = []
+            cond_rank_moments = []
+            for source_rank in range(world_size):
+                rank_manifest_path = join_remote(
+                    remote_partition_dir,
+                    f"manifest-r{source_rank:05d}.txt")
+                shard_paths.extend(
+                    path.strip()
+                    for path in read_text(rank_manifest_path).splitlines()
+                    if path.strip())
+                remote_moments_path = join_remote(
+                    remote_partition_dir,
+                    f"moments-r{source_rank:05d}.pt")
+                local_moments_path = stage_remote_file(
+                    remote_moments_path,
+                    os.environ.get(
+                        "MOX_METADATA_CACHE_DIR",
+                        "/cache/vggae/metadata_cache"),
+                    max_cache_bytes=10 * 1024 ** 3,
+                )
+                rank_moments = torch.load(
+                    local_moments_path, map_location="cpu",
+                    weights_only=False)
+                target_rank_moments.append(rank_moments["target"])
+                cond_rank_moments.append(rank_moments["cond"])
+            target_stats = merge_raw_moments(target_rank_moments)
+            cond_stats = merge_raw_moments(cond_rank_moments)
+        else:
+            shard_paths = sorted(
+                glob.glob(os.path.join(local_partition_root, "*.tar"))
+                + glob.glob(os.path.join(
+                    local_partition_root, "rank-*", "*.tar")))
         manifest_path = os.path.join(partition_dir, "manifest.txt")
         with open(manifest_path, "w") as manifest:
             for path in shard_paths:
-                manifest.write(os.path.basename(path) + "\n")
+                manifest.write(path + "\n")
 
         stats_path = os.path.join(partition_dir, "stats.pt")
         torch.save({
-            "target": finalize_stats(target_stats),
-            "cond": finalize_stats(cond_stats),
+            "normalization_version": 2,
+            "target": finalize_moments(target_stats),
+            "cond": finalize_moments(cond_stats),
+            "moments": {
+                "target": moments_to_cpu(target_stats),
+                "cond": moments_to_cpu(cond_stats),
+            },
             "num_samples": int(successful_samples.item()),
-            "num_failed": count_failure_records(glob.glob(
-                os.path.join(partition_dir, "failures-r*.jsonl"))),
+            "num_failed": int(failed_count.item()),
             "representation": {
-                "encoder": file_signature(args.encoder_ckpt),
-                "autoencoder": file_signature(args.autoencoder_ckpt),
+                "encoder": sampled_file_signature(args.encoder_ckpt),
+                "autoencoder": sampled_file_signature(args.autoencoder_ckpt),
                 "latent_dim": args.latent_dim,
                 "latent_grid": args.latent_grid,
                 "levels": args.levels,
                 "seq_len": args.seq_len,
                 "target_size": args.target_size,
                 "max_frame_span": args.max_frame_span,
+                "clip_duration_seconds": args.clip_duration_seconds,
+                "disable_temporal_mixer": (
+                    tokenizer.disable_temporal_mixer),
             },
             "config": vars(args),
         }, stats_path)
         with open(os.path.join(partition_dir, "config.json"), "w") as f:
             json.dump(vars(args), f, indent=2)
-        print(f"Wrote {len(shard_paths)} tar shards to {partition_dir}")
+        if remote_partition_dir:
+            copy_file(
+                manifest_path,
+                join_remote(remote_partition_dir, "manifest.txt"))
+            copy_file(
+                stats_path,
+                join_remote(remote_partition_dir, "stats.pt"))
+            copy_file(
+                os.path.join(partition_dir, "config.json"),
+                join_remote(remote_partition_dir, "config.json"))
+        print(
+            f"Wrote {len(shard_paths)} tar shards to "
+            f"{remote_partition_dir or partition_dir}")
 
     if use_ddp:
         dist.destroy_process_group()
