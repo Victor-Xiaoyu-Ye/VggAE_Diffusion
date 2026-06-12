@@ -163,7 +163,8 @@ def main():
         local_stats_path = stage_remote_file(
             stats_path,
             os.environ.get(
-                "MOX_METADATA_CACHE_DIR", "/cache/vggae/metadata_cache"),
+                "MOX_METADATA_CACHE_DIR",
+                "/cache/yexiaoyu/vggae_runtime/cache/metadata"),
             max_cache_bytes=10 * 1024 ** 3,
         )
         stats = torch.load(
@@ -255,7 +256,8 @@ def main():
     if remote_cache:
         local_output = os.path.join(
             os.environ.get(
-                "MOX_METADATA_CACHE_DIR", "/cache/vggae/metadata_cache"),
+                "MOX_METADATA_CACHE_DIR",
+                "/cache/yexiaoyu/vggae_runtime/cache/metadata"),
             "merged-stats.pt")
         os.makedirs(os.path.dirname(local_output), exist_ok=True)
         torch.save(merged_stats, local_output)

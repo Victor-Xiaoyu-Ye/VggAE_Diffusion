@@ -55,7 +55,8 @@ class LatentShardDataset(IterableDataset):
         self.rank = rank
         self.world_size = world_size
         self.remote_cache_dir = os.environ.get(
-            "MOX_LATENT_CACHE_DIR", "/cache/vggae/latent_shards")
+            "MOX_LATENT_CACHE_DIR",
+            "/cache/yexiaoyu/vggae_runtime/cache/latent_shards")
         self.remote_cache_max_bytes = int(
             float(os.environ.get("MOX_LATENT_CACHE_GB", "800"))
             * 1024 ** 3)

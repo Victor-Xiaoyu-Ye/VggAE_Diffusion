@@ -15,6 +15,7 @@ MASTER_PORT=29603
 
 configure_modelarts_distributed
 require_scale_cluster
+require_output_url
 ensure_spatialvid_scale_splits
 ensure_local_checkpoint \
   "${AUTOENCODER_CKPT}" "${SCALE_GEOMETRY_AE_CKPT_URL}" \
@@ -37,3 +38,8 @@ run_torchrun "${PROJECT}/cache_compact_latents.py" \
   --clip_duration_seconds "${CLIP_DURATION_SECONDS}" \
   --batch_size "${BATCH_SIZE}" --num_workers "${NUM_WORKERS}" \
   --dtype fp16
+
+if [[ "${NODE_RANK}" -eq 0 ]]; then
+  echo "Evaluation latent shards were uploaded incrementally to:"
+  echo "  ${SCALE_EVAL_CACHE_DIR}"
+fi
