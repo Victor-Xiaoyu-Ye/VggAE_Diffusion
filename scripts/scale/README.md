@@ -1,6 +1,6 @@
 # Large-scale training path
 
-The large-scale path freezes the representation before the 10M generator run.
+The scale path freezes the representation before the full SpatialVID run.
 It does not decode MP4 or run StreamVGGT inside the diffusion training loop.
 
 Edit local checkpoint/environment paths once in `scripts/spatialvid_config.sh`.
@@ -35,14 +35,16 @@ SpatialVID CSV. No manually prepared evaluation CSV is required.
    - Set `EVAL_CACHE_DIR` to a held-out cache for fixed validation metrics.
    - Every checkpoint writes TensorBoard/JSONL metrics and a target/generated
      latent preview.
-   - For RGB previews, set `EVAL_I0_PATH` and `I0_DECODER_CKPT`. The image must
-     correspond to the first sample in `EVAL_CACHE_DIR/manifest.txt`.
+   - The eval cache stores its first frame, so RGB previews automatically use
+     the I0 aligned with the first latent sample.
 8. `06_sample_compact_dit.sh`
    - Generate seven future frames from one observed RGB frame.
 
-At 512 channels, an eight-frame fp16 cache is about 2.65 MB/video, or about
-26.5 TB for 10M videos before filesystem replication. Do not cache the four raw
-StreamVGGT levels; that is roughly 1.8 PB for 10M videos.
+At 512 channels, an eight-frame fp16 cache is about 2.65 MB/video. The current
+365,362-row metadata CSV therefore needs roughly 1 TB for compact latents,
+before tar overhead and temporary files. The configured `/cache` budget is
+used only as a bounded staging area; persistent shards remain under
+`$OUTPUT_URL`.
 
 Distributed launch uses HCCL. ModelArts variables are read automatically:
 `VC_WORKER_NUM`, `VC_TASK_INDEX`, and `VC_WORKER_HOSTS`. The scale scripts
@@ -70,4 +72,4 @@ DiT baseline first, then compare Wan initialization on the same cached latents.
 
 Outputs are written under local `RUN_ROOT`, then global rank 0 mirrors them
 every `OUTPUT_SYNC_SECONDS` to
-`$OUTPUT_URL/VggAE-Diffusion/scale/<stage>`.
+`$OUTPUT_URL/scale/<stage>`.

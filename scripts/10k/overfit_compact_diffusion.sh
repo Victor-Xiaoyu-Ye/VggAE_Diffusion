@@ -10,7 +10,6 @@ AUTOENCODER_CKPT="${GEOMETRY_AE_CKPT}"
 I0_CKPT="${OVERFIT_I0_DECODER_CKPT}"
 OUTPUT_DIR="${RUN_ROOT}/validation/compact_diffusion_overfit"
 RESUME=""
-DEVICE_ID=0
 
 EPOCHS=3000
 BATCH_SIZE=1
@@ -39,7 +38,7 @@ if [[ -n "${RESUME}" ]]; then
   EXTRA_ARGS+=(--resume "${RESUME}")
 fi
 
-ASCEND_RT_VISIBLE_DEVICES="${DEVICE_ID}" "${PYTHON_BIN}" \
+"${PYTHON_BIN}" \
   "${PROJECT}/train_compact_diffusion.py" \
   --csv "${SPATIALVID_OVERFIT_CSV}" \
   --video_root "${SPATIALVID_VIDEO_ROOT}" \

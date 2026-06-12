@@ -1,8 +1,7 @@
 #!/bin/bash
 
 configure_modelarts_distributed() {
-  NUM_NPUS=${NUM_NPUS:-8}
-  ASCEND_DEVICE_IDS=${ASCEND_DEVICE_IDS:-0,1,2,3,4,5,6,7}
+  NUM_NPUS=${NUM_NPUS:-${LOCAL_WORLD_SIZE:-8}}
   NNODES=${NNODES:-${VC_WORKER_NUM:-1}}
   NODE_RANK=${NODE_RANK:-${VC_TASK_INDEX:-0}}
   if [[ -z "${MASTER_ADDR:-}" ]]; then
@@ -14,7 +13,7 @@ configure_modelarts_distributed() {
   fi
   MASTER_PORT=${MASTER_PORT:-29600}
   WORLD_SIZE=$((NNODES * NUM_NPUS))
-  export NUM_NPUS ASCEND_DEVICE_IDS NNODES NODE_RANK
+  export NUM_NPUS NNODES NODE_RANK
   export MASTER_ADDR MASTER_PORT WORLD_SIZE
 }
 
@@ -55,8 +54,7 @@ require_scale_cluster() {
     echo "[WARN] Scale job expected ${expected_nodes} nodes, got ${NNODES}." >&2
   fi
   if [[ "${NUM_NPUS}" -ne 8 ]]; then
-    echo "Scale job requires 8 NPUs per node, got ${NUM_NPUS}." >&2
-    exit 1
+    echo "[WARN] Scale job expected 8 NPUs per node, got ${NUM_NPUS}." >&2
   fi
 }
 
@@ -89,8 +87,7 @@ stop_output_sync() {
 }
 
 run_torchrun() {
-  ASCEND_RT_VISIBLE_DEVICES="${ASCEND_DEVICE_IDS}" \
-    PYTORCH_NPU_ALLOC_CONF="${PYTORCH_NPU_ALLOC_CONF:-expandable_segments:True}" \
+  PYTORCH_NPU_ALLOC_CONF="${PYTORCH_NPU_ALLOC_CONF:-expandable_segments:True}" \
     OMP_NUM_THREADS="${OMP_NUM_THREADS:-4}" \
     "${TORCHRUN_BIN}" \
       --nnodes="${NNODES}" \

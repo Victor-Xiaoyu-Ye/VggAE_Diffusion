@@ -25,6 +25,7 @@ run_torchrun "${PROJECT}/cache_compact_latents.py" \
   --autoencoder_ckpt "${AUTOENCODER_CKPT}" \
   --output_dir "${SCALE_EVAL_CACHE_DIR}" \
   --partition_id 0 --num_partitions 1 \
+  --store_i0_rgb \
   --samples_per_tar "${SAMPLES_PER_TAR}" \
   --latent_dim 512 --latent_grid 18 \
   --levels 4 11 17 23 \

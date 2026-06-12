@@ -147,9 +147,13 @@ class LatentShardDataset(IterableDataset):
 def latent_collate_fn(batch):
     target = torch.stack([sample["target"] for sample in batch])
     cond = torch.stack([sample["cond"] for sample in batch])
-    return {
+    result = {
         "target": target,
         "cond": cond,
         "caption": [sample.get("caption", "") for sample in batch],
         "video_id": [sample.get("video_id", "") for sample in batch],
     }
+    if all("i0_rgb" in sample for sample in batch):
+        result["i0_rgb"] = torch.stack(
+            [sample["i0_rgb"] for sample in batch])
+    return result

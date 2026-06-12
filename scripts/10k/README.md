@@ -46,7 +46,7 @@ script. `NUM_NPUS`, `ASCEND_DEVICE_IDS`, and `MASTER_PORT` remain
 environment-driven so cluster launchers can control distributed execution.
 Active trainers use FP16 with gradient scaling on Ascend 910B.
 
-Do not use these scripts for the 10M run. Use `scripts/scale/` instead.
+Use `scripts/scale/` for the complete SpatialVID metadata CSV.
 
 The normalization contract and current measurements are documented in
 `TOKEN_STATS.md`.

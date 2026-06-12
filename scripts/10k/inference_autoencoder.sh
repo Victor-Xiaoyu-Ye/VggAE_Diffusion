@@ -9,7 +9,6 @@ source "${SCRIPT_DIR}/../lib/spatialvid.sh"
 CHECKPOINT="${GEOMETRY_AE_CKPT}"
 OUTPUT_DIR="${RUN_ROOT}/evaluation/geometry_autoencoder"
 NUM_VIDEOS=20
-DEVICE_ID=0
 SEQ_LEN=8
 TARGET_SIZE=518
 LATENT_DIM=512
@@ -20,7 +19,7 @@ CLIP_DURATION_SECONDS=1.0
 ensure_spatialvid_splits
 require_file "${CHECKPOINT}" "geometry autoencoder checkpoint"
 
-ASCEND_RT_VISIBLE_DEVICES="${DEVICE_ID}" "${PYTHON_BIN}" \
+"${PYTHON_BIN}" \
   "${PROJECT}/inference_autoencoder.py" \
   --checkpoint "${CHECKPOINT}" \
   --encoder_ckpt "${STREAMVGGT_CKPT}" \

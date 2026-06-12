@@ -65,7 +65,7 @@ Required validation:
 - I0 ablation: geometry should change with the latent, appearance should change
   primarily with the RGB condition.
 
-Do not start the 10M cache if depth metrics do not improve over an RGB-only
+Do not start the full cache if depth metrics do not improve over an RGB-only
 tokenizer or if the decoder collapses to copying I0.
 
 ## Generator Bring-Up
@@ -75,7 +75,8 @@ Use this sequence before a full run:
 1. Overfit 8-32 clips. Samples must reproduce recognizable future frames.
 2. Train on 10K cached clips. Verify loss, latent mean/std, and decoded motion.
 3. Train on 100K-1M clips. Check diversity and geometry metrics.
-4. Start the 10M run only after the same sampler works at each smaller scale.
+4. Start the full SpatialVID run only after the same sampler works at each
+   smaller scale.
 
 The first production baseline is the compact DiT, I0-conditioned, generating
 seven residual latent frames. Keep text conditioning off until video generation
@@ -117,4 +118,5 @@ pipeline produces a valid baseline.
 - Track invalid-video rate per data shard; do not silently replace failures.
 
 At 512x18x18 fp16, I0 plus seven residual frames cost about 2.65 MB/video.
-Budget roughly 26.5 TB for 10M clips before replication and temporary files.
+Budget roughly 1 TB for the current 365K-clip compact cache before tar overhead
+and temporary files.

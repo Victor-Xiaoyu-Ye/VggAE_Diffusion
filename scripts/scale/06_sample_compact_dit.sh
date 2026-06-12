@@ -6,7 +6,6 @@ source "${SCRIPT_DIR}/../spatialvid_config.sh"
 source "${SCRIPT_DIR}/../lib/spatialvid.sh"
 source "${SCRIPT_DIR}/../lib/modelarts.sh"
 
-REFERENCE_PATH="${I0_PATH}"
 AUTOENCODER_CKPT="${SCALE_GEOMETRY_AE_CKPT}"
 I0_CKPT="${SCALE_I0_DECODER_CKPT}"
 GENERATOR_CKPT="${SCALE_DIFFUSION_CKPT}"
@@ -22,13 +21,14 @@ if [[ "${NODE_RANK}" -ne 0 ]]; then
   exit 0
 fi
 validate_model_config
-require_file "${REFERENCE_PATH}" "reference image or video"
+ensure_spatialvid_splits
 require_file "${AUTOENCODER_CKPT}" "scale geometry autoencoder checkpoint"
 require_file "${I0_CKPT}" "scale I0 decoder checkpoint"
 require_file "${GENERATOR_CKPT}" "scale diffusion checkpoint"
 
 "${PYTHON_BIN}" "${PROJECT}/sample_compact_i0.py" \
-  --i0_path "${REFERENCE_PATH}" \
+  --csv "${SPATIALVID_EVAL_CSV}" \
+  --video_root "${SPATIALVID_VIDEO_ROOT}" \
   --encoder_ckpt "${STREAMVGGT_CKPT}" \
   --autoencoder_ckpt "${AUTOENCODER_CKPT}" \
   --i0_decoder_ckpt "${I0_CKPT}" \

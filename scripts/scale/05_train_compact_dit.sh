@@ -10,7 +10,6 @@ source "${SCRIPT_DIR}/../lib/modelarts.sh"
 OUTPUT_DIR="${SCALE_ROOT}/compact_dit"
 REMOTE_OUTPUT_DIR="${SCALE_REMOTE_ROOT}/compact_dit"
 I0_CKPT="${SCALE_I0_DECODER_CKPT}"
-EVAL_I0_PATH=""
 RESUME=""
 
 MAX_STEPS=300000
@@ -45,14 +44,8 @@ if [[ -n "${RESUME}" ]]; then
     "${RESUME}" "${LOCAL_CACHE_ROOT}/resume/compact_dit.pt")
   EXTRA_ARGS+=(--resume "${RESUME}")
 fi
-if [[ -n "${EVAL_I0_PATH}" ]]; then
-  require_file "${EVAL_I0_PATH}" "aligned evaluation I0 image"
-  require_file "${I0_CKPT}" "scale I0 decoder checkpoint"
-  EXTRA_ARGS+=(
-    --eval_i0_path "${EVAL_I0_PATH}"
-    --i0_decoder_ckpt "${I0_CKPT}"
-  )
-fi
+require_file "${I0_CKPT}" "scale I0 decoder checkpoint"
+EXTRA_ARGS+=(--i0_decoder_ckpt "${I0_CKPT}")
 
 start_output_sync "${OUTPUT_DIR}" "${REMOTE_OUTPUT_DIR}"
 trap 'stop_output_sync "${OUTPUT_DIR}" "${REMOTE_OUTPUT_DIR}"' EXIT

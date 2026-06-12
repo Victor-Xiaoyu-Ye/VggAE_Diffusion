@@ -9,7 +9,6 @@ source "${SCRIPT_DIR}/../lib/spatialvid.sh"
 AUTOENCODER_CKPT="${GEOMETRY_AE_CKPT}"
 OUTPUT_DIR="${RUN_ROOT}/validation/i0_decoder_overfit"
 RESUME=""
-DEVICE_ID=0
 
 EPOCHS=500
 BATCH_SIZE=1
@@ -34,7 +33,7 @@ if [[ -n "${RESUME}" ]]; then
   EXTRA_ARGS+=(--resume "${RESUME}")
 fi
 
-ASCEND_RT_VISIBLE_DEVICES="${DEVICE_ID}" "${PYTHON_BIN}" \
+"${PYTHON_BIN}" \
   "${PROJECT}/train_i0_autoencoder.py" \
   --csv "${SPATIALVID_OVERFIT_CSV}" \
   --video_root "${SPATIALVID_VIDEO_ROOT}" \
