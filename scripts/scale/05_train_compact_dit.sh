@@ -11,6 +11,7 @@ OUTPUT_DIR="${SCALE_ROOT}/compact_dit"
 REMOTE_OUTPUT_DIR="${SCALE_REMOTE_ROOT}/compact_dit"
 I0_CKPT="${SCALE_I0_DECODER_CKPT}"
 RESUME=""
+AUTO_RESUME=1
 
 MAX_STEPS=40000
 BATCH_SIZE=1
@@ -39,9 +40,15 @@ EXTRA_ARGS=(
   --eval_manifest "${SCALE_EVAL_CACHE_DIR}/manifest.txt"
   --eval_stats "${SCALE_EVAL_CACHE_DIR}/stats.pt"
 )
+if [[ "${AUTO_RESUME}" -eq 1 || -n "${RESUME}" ]]; then
+  RESUME=$(resolve_resume_checkpoint \
+    "${RESUME}" \
+    "${OUTPUT_DIR}/checkpoint_latest.pt" \
+    "${REMOTE_OUTPUT_DIR}/checkpoint_latest.pt" \
+    "${LOCAL_CACHE_ROOT}/resume/compact_dit.pt")
+fi
 if [[ -n "${RESUME}" ]]; then
-  RESUME=$(stage_resume_checkpoint \
-    "${RESUME}" "${LOCAL_CACHE_ROOT}/resume/compact_dit.pt")
+  echo "Resuming Compact DiT from ${RESUME}"
   EXTRA_ARGS+=(--resume "${RESUME}")
 fi
 ensure_local_checkpoint \

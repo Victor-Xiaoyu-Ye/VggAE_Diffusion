@@ -694,11 +694,16 @@ def main():
 
         if main_process and save_due:
             save_path = os.path.join(args.output_dir, f'checkpoint_epoch{epoch:04d}.pt')
+            payload = checkpoint_payload(
+                tok, dec, ema, optimizer, scheduler, scaler,
+                global_step, epoch, args)
             atomic_torch_save(
-                checkpoint_payload(
-                    tok, dec, ema, optimizer, scheduler, scaler,
-                    global_step, epoch, args),
+                payload,
                 save_path,
+            )
+            atomic_torch_save(
+                payload,
+                os.path.join(args.output_dir, 'checkpoint_latest.pt'),
             )
             print(f'  Saved: {save_path}')
 

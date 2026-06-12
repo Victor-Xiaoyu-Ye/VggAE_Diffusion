@@ -61,6 +61,9 @@ def parse_args():
     parser.add_argument("--samples_per_tar", type=int, default=512)
     parser.add_argument("--clips_per_video", type=int, default=1)
     parser.add_argument(
+        "--resume_cache", action="store_true",
+        help="Resume this rank from its durable OBS progress checkpoint")
+    parser.add_argument(
         "--store_i0_rgb", action="store_true",
         help="Store the observed first RGB frame for automatic previews")
 
@@ -85,15 +88,16 @@ def parse_args():
 
 class TarShardWriter:
     def __init__(self, output_dir, prefix, samples_per_tar,
-                 remote_output_dir=""):
+                 remote_output_dir="", shard_index=0, paths=None):
         self.output_dir = output_dir
         self.remote_output_dir = remote_output_dir
         self.prefix = prefix
         self.samples_per_tar = samples_per_tar
-        self.shard_index = 0
+        self.shard_index = shard_index
         self.samples_in_shard = 0
         self.archive = None
-        self.paths = []
+        self.paths = list(paths or [])
+        self.current_output_path = ""
 
     def _open_next(self):
         path = os.path.join(
@@ -107,7 +111,7 @@ class TarShardWriter:
                 f"Refusing to overwrite existing cache shard: "
                 f"{remote_path or path}")
         self.archive = tarfile.open(path, mode="w")
-        self.paths.append(remote_path or path)
+        self.current_output_path = remote_path or path
         self.samples_in_shard = 0
         self.shard_index += 1
 
@@ -133,11 +137,40 @@ class TarShardWriter:
                 remote_path = join_remote(
                     self.remote_output_dir,
                     os.path.basename(local_path))
-                copy_file(local_path, remote_path)
+                try:
+                    copy_file(local_path, remote_path)
+                except Exception:
+                    if not remote_exists(remote_path):
+                        try:
+                            os.unlink(local_path)
+                        except FileNotFoundError:
+                            pass
+                        self.current_output_path = ""
+                        self.shard_index -= 1
+                        self.samples_in_shard = 0
+                        raise
                 os.unlink(local_path)
+            self.paths.append(self.current_output_path)
+            self.current_output_path = ""
+            self.samples_in_shard = 0
 
     def close(self):
         self.close_current()
+
+    def abort_current(self):
+        """Discard the uncommitted local shard after an interrupted batch."""
+        if self.archive is None:
+            return
+        local_path = self.archive.name
+        self.archive.close()
+        self.archive = None
+        try:
+            os.unlink(local_path)
+        except FileNotFoundError:
+            pass
+        self.current_output_path = ""
+        self.shard_index -= 1
+        self.samples_in_shard = 0
 
 
 class SafeDataset(Dataset):
@@ -164,9 +197,11 @@ def safe_collate_fn(batch):
     errors = [sample for sample in batch if "_error" in sample]
     valid = [sample for sample in batch if "_error" not in sample]
     if not valid:
-        return {"frames": None, "errors": errors}
+        return {
+            "frames": None, "errors": errors, "_batch_size": len(batch)}
     result = collate_fn(valid)
     result["errors"] = errors
+    result["_batch_size"] = len(batch)
     return result
 
 
@@ -216,8 +251,28 @@ def moments_to_cpu(moments):
     }
 
 
+def cache_contract(args):
+    return {
+        "encoder": sampled_file_signature(args.encoder_ckpt),
+        "autoencoder": sampled_file_signature(args.autoencoder_ckpt),
+        "latent_dim": args.latent_dim,
+        "latent_grid": args.latent_grid,
+        "levels": list(args.levels),
+        "seq_len": args.seq_len,
+        "target_size": args.target_size,
+        "max_frame_span": args.max_frame_span,
+        "clip_duration_seconds": args.clip_duration_seconds,
+        "clips_per_video": args.clips_per_video,
+        "disable_temporal_mixer": args.disable_temporal_mixer,
+    }
+
+
 def main():
     args = parse_args()
+    if args.resume_cache and args.batch_size != 1:
+        raise ValueError(
+            "--resume_cache currently requires --batch_size 1 so the "
+            "dataset cursor and uploaded shard transaction stay exact")
     use_ddp, rank, local_rank, world_size = setup_ddp()
     device_type = get_device_name()
     if device_type == "cpu":
@@ -260,6 +315,23 @@ def main():
     )
     os.makedirs(partition_dir, exist_ok=True)
 
+    success_path = (
+        join_remote(remote_partition_dir, "_SUCCESS")
+        if remote_partition_dir else os.path.join(
+            local_partition_root, "_SUCCESS"))
+    success_exists = (
+        remote_exists(success_path)
+        if is_remote_path(success_path) else os.path.exists(success_path))
+    if args.resume_cache and success_exists:
+        if is_main_process():
+            print(
+                f"Cache partition {partition_id} is already complete: "
+                f"{success_path}")
+        if use_ddp:
+            dist.barrier()
+            dist.destroy_process_group()
+        return
+
     dataset = SpatialVidDataset(
         csv_path=args.csv,
         video_root=args.video_root,
@@ -277,6 +349,42 @@ def main():
         clips_per_video=args.clips_per_video,
     )
     rank_indices = range(rank, len(dataset), world_size)
+    total_rank_items = len(rank_indices)
+
+    encoder, tokenizer = load_models(args, device, compute_dtype)
+    contract = cache_contract(args)
+    progress_remote_path = (
+        join_remote(remote_partition_dir, f"progress-r{rank:05d}.pt")
+        if remote_partition_dir else "")
+    progress = None
+    if args.resume_cache and progress_remote_path and remote_exists(
+            progress_remote_path):
+        progress_local_path = os.path.join(
+            partition_dir, f"progress-r{rank:05d}.pt")
+        copy_file(progress_remote_path, progress_local_path)
+        progress = torch.load(
+            progress_local_path, map_location="cpu", weights_only=False)
+        if progress.get("contract") != contract:
+            raise RuntimeError(
+                f"Cache resume contract mismatch for rank {rank}. "
+                "Use a new LATENT_CACHE_VERSION for changed representations.")
+        if progress.get("world_size") != world_size:
+            raise RuntimeError(
+                f"Cache resume world size changed from "
+                f"{progress.get('world_size')} to {world_size}. "
+                "Resume cache generation with the same 6x8 topology.")
+
+    processed_items = int(
+        progress.get("processed_items", 0) if progress else 0)
+    sample_index = int(
+        progress.get("sample_index", 0) if progress else 0)
+    failed_samples = list(
+        progress.get("failed_samples", []) if progress else [])
+    if processed_items > total_rank_items:
+        raise RuntimeError(
+            f"Invalid cache cursor {processed_items}/{total_rank_items} "
+            f"for rank {rank}")
+    rank_indices = rank_indices[processed_items:]
     rank_dataset = Subset(SafeDataset(dataset), rank_indices)
     dataloader = DataLoader(
         rank_dataset,
@@ -288,11 +396,6 @@ def main():
         drop_last=False,
     )
 
-    encoder, tokenizer = load_models(args, device, compute_dtype)
-    writer = TarShardWriter(
-        partition_dir, f"latents-r{rank:05d}", args.samples_per_tar,
-        remote_output_dir=remote_partition_dir)
-
     # Long 10M runs cannot accumulate sum/sum_sq accurately in NPU FP32.
     # Each batch is reduced on-device, then the tiny [S,D] arrays are added
     # into CPU FP64 moments.
@@ -300,11 +403,64 @@ def main():
     target_stats = create_moments(
         args.seq_len - 1, args.latent_dim, stats_device)
     cond_stats = create_moments(1, args.latent_dim, stats_device)
+    if progress:
+        target_stats = progress["moments"]["target"]
+        cond_stats = progress["moments"]["cond"]
 
-    sample_index = 0
-    failed_samples = []
+    writer = TarShardWriter(
+        partition_dir, f"latents-r{rank:05d}", args.samples_per_tar,
+        remote_output_dir=remote_partition_dir,
+        shard_index=int(progress.get("shard_index", 0) if progress else 0),
+        paths=progress.get("paths", []) if progress else None,
+    )
+
+    def save_rank_progress():
+        if not progress_remote_path:
+            return
+        local_progress_path = os.path.join(
+            partition_dir, f"progress-r{rank:05d}.pt")
+        torch.save({
+            "version": 1,
+            "rank": rank,
+            "world_size": world_size,
+            "processed_items": processed_items,
+            "sample_index": sample_index,
+            "shard_index": writer.shard_index,
+            "paths": writer.paths,
+            "moments": {
+                "target": moments_to_cpu(target_stats),
+                "cond": moments_to_cpu(cond_stats),
+            },
+            "failed_samples": failed_samples,
+            "contract": contract,
+        }, local_progress_path)
+        copy_file(local_progress_path, progress_remote_path)
+        status = {
+            "rank": rank,
+            "world_size": world_size,
+            "partition_id": partition_id,
+            "num_partitions": num_partitions,
+            "processed_items": processed_items,
+            "total_rank_items": total_rank_items,
+            "successful_samples": sample_index,
+            "failed_samples": len(failed_samples),
+            "completed_shards": writer.shard_index,
+            "last_shard": writer.paths[-1] if writer.paths else "",
+        }
+        write_text(
+            join_remote(
+                remote_partition_dir, f"status-r{rank:05d}.json"),
+            json.dumps(status, indent=2, sort_keys=True))
+        print(
+            f"[cache-progress] rank={rank} "
+            f"processed={processed_items}/{status['total_rank_items']} "
+            f"samples={sample_index} failed={len(failed_samples)} "
+            f"shards={writer.shard_index}",
+            flush=True,
+        )
+
     successful_samples = torch.zeros(
-        (), device=device, dtype=torch.long)
+        sample_index, device=device, dtype=torch.long)
     progress = tqdm(
         dataloader, disable=not is_main_process(), desc="Caching compact latents")
     try:
@@ -312,6 +468,7 @@ def main():
             for batch in progress:
                 failed_samples.extend(batch["errors"])
                 if batch["frames"] is None:
+                    processed_items += batch["_batch_size"]
                     continue
                 frames = batch["frames"].to(
                     device=device, dtype=compute_dtype, non_blocking=True)
@@ -334,9 +491,6 @@ def main():
                     - i0_flat.expand(-1, video_flat.shape[1] - 1, -1, -1)
                 )
 
-                update_moments(target_stats, target)
-                update_moments(cond_stats, i0_flat)
-
                 for batch_index in range(target.shape[0]):
                     key = (
                         f"p{partition_id:05d}-r{rank:04d}-"
@@ -357,10 +511,21 @@ def main():
                             .to(device="cpu", dtype=torch.uint8)
                         )
                     writer.write(key, sample)
+                    update_moments(
+                        target_stats, target[batch_index:batch_index + 1])
+                    update_moments(
+                        cond_stats, i0_flat[batch_index:batch_index + 1])
                     sample_index += 1
                     successful_samples += 1
-    finally:
-        writer.close()
+                    processed_items += 1
+                    if writer.samples_in_shard >= writer.samples_per_tar:
+                        writer.close_current()
+                        save_rank_progress()
+    except BaseException:
+        writer.abort_current()
+        raise
+    writer.close()
+    save_rank_progress()
 
     failed_count = torch.tensor(
         len(failed_samples), device=device, dtype=torch.long)
@@ -455,19 +620,7 @@ def main():
             },
             "num_samples": int(successful_samples.item()),
             "num_failed": int(failed_count.item()),
-            "representation": {
-                "encoder": sampled_file_signature(args.encoder_ckpt),
-                "autoencoder": sampled_file_signature(args.autoencoder_ckpt),
-                "latent_dim": args.latent_dim,
-                "latent_grid": args.latent_grid,
-                "levels": args.levels,
-                "seq_len": args.seq_len,
-                "target_size": args.target_size,
-                "max_frame_span": args.max_frame_span,
-                "clip_duration_seconds": args.clip_duration_seconds,
-                "disable_temporal_mixer": (
-                    tokenizer.disable_temporal_mixer),
-            },
+            "representation": contract,
             "config": vars(args),
         }, stats_path)
         with open(os.path.join(partition_dir, "config.json"), "w") as f:
@@ -482,6 +635,13 @@ def main():
             copy_file(
                 os.path.join(partition_dir, "config.json"),
                 join_remote(remote_partition_dir, "config.json"))
+            write_text(success_path, json.dumps({
+                "partition_id": partition_id,
+                "num_partitions": num_partitions,
+                "num_samples": int(successful_samples.item()),
+                "num_failed": int(failed_count.item()),
+                "contract": contract,
+            }, sort_keys=True))
         print(
             f"Wrote {len(shard_paths)} tar shards to "
             f"{remote_partition_dir or partition_dir}")

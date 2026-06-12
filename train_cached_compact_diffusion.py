@@ -612,9 +612,13 @@ def main():
         save_due = global_step % args.save_every == 0
         eval_due = global_step % args.eval_every == 0
         if is_main_process() and save_due:
+            step_checkpoint = os.path.join(
+                args.output_dir, f"checkpoint_step{global_step:08d}.pt")
             save_checkpoint(
-                os.path.join(
-                    args.output_dir, f"checkpoint_step{global_step:08d}.pt"),
+                step_checkpoint, base_model, ema, optimizer, scheduler,
+                scaler, global_step, cache_stats, args)
+            save_checkpoint(
+                os.path.join(args.output_dir, "checkpoint_latest.pt"),
                 base_model, ema, optimizer, scheduler, scaler, global_step,
                 cache_stats, args)
             print(f"Saved checkpoint at step {global_step}")

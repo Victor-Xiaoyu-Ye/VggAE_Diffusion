@@ -25,6 +25,11 @@ ensure_local_checkpoint \
   "${AUTOENCODER_CKPT}" "${SCALE_GEOMETRY_AE_CKPT_URL}" \
   "scale geometry autoencoder checkpoint"
 
+LOG_DIR="${SCALE_ROOT}/cache_generation/train"
+REMOTE_LOG_DIR="${SCALE_REMOTE_ROOT}/cache_generation/train"
+start_output_sync "${LOG_DIR}" "${REMOTE_LOG_DIR}"
+trap 'stop_output_sync "${LOG_DIR}" "${REMOTE_LOG_DIR}"' EXIT
+
 run_torchrun "${PROJECT}/cache_compact_latents.py" \
   --csv "${SPATIALVID_FULL_TRAIN_CSV}" \
   --video_root "${SPATIALVID_VIDEO_ROOT}" \
@@ -35,6 +40,7 @@ run_torchrun "${PROJECT}/cache_compact_latents.py" \
   --index_num_shards "${CACHE_NUM_PARTITIONS}" \
   --partition_id "${CACHE_PARTITION_ID}" \
   --num_partitions "${CACHE_NUM_PARTITIONS}" \
+  --resume_cache \
   --samples_per_tar "${SAMPLES_PER_TAR}" \
   --clips_per_video "${SCALE_CLIPS_PER_VIDEO}" \
   --latent_dim "${SCALE_LATENT_DIM}" \

@@ -11,6 +11,7 @@ AUTOENCODER_CKPT="${SCALE_GEOMETRY_AE_CKPT}"
 OUTPUT_DIR="${SCALE_ROOT}/i0_decoder"
 REMOTE_OUTPUT_DIR="${SCALE_REMOTE_ROOT}/i0_decoder"
 RESUME=""
+AUTO_RESUME=1
 REPRESENTATION_MAX_VIDEOS=0
 
 EPOCHS=6
@@ -33,9 +34,15 @@ ensure_local_checkpoint \
   "scale geometry autoencoder checkpoint"
 
 EXTRA_ARGS=()
+if [[ "${AUTO_RESUME}" -eq 1 || -n "${RESUME}" ]]; then
+  RESUME=$(resolve_resume_checkpoint \
+    "${RESUME}" \
+    "${OUTPUT_DIR}/checkpoint_latest.pt" \
+    "${REMOTE_OUTPUT_DIR}/checkpoint_latest.pt" \
+    "${LOCAL_CACHE_ROOT}/resume/i0_decoder.pt")
+fi
 if [[ -n "${RESUME}" ]]; then
-  RESUME=$(stage_resume_checkpoint \
-    "${RESUME}" "${LOCAL_CACHE_ROOT}/resume/i0_decoder.pt")
+  echo "Resuming I0 decoder from ${RESUME}"
   EXTRA_ARGS+=(--resume "${RESUME}")
 fi
 

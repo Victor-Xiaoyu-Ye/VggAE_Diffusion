@@ -20,8 +20,8 @@ require_dir() {
 }
 
 require_output_url() {
-  if [[ -z "${OUTPUT_URL:-}" ]]; then
-    echo "OUTPUT_URL is required on ModelArts." >&2
+  if [[ -z "${REMOTE_RUN_ROOT:-}" ]]; then
+    echo "A persistent REMOTE_RUN_ROOT is required." >&2
     exit 1
   fi
 }

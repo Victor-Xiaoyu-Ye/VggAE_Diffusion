@@ -12,8 +12,9 @@ the distributed topology from `VC_WORKER_NUM`, `VC_TASK_INDEX`, and
 `VC_WORKER_HOSTS`. SpatialVID-HQ remains on OBS and each MP4 is staged on
 demand into a bounded node-local cache because OpenCV needs a seekable local
 file. External dependencies are read from `/cache/yexiaoyu/vggae_ref`.
-Checkpoints, metrics, previews, and compact latent shards are persisted below
-`$OUTPUT_URL`.
+Checkpoints, metrics, previews, stdout, and NPU logs are persisted below
+`$OUTPUT_URL`. Compact latent shards use the fixed owner OBS directory
+`.../y50046448/cache_latents/` and support shard-level resume.
 
 ## Active Workflows
 

@@ -544,11 +544,16 @@ def main():
         eval_due = (epoch + 1) % args.eval_every == 0
         if main_process and save_due:
             save_path = os.path.join(args.output_dir, f'checkpoint_epoch{epoch:04d}.pt')
+            payload = checkpoint_payload(
+                ac, dc, ema, optimizer, scheduler, scaler,
+                global_step, epoch, args)
             atomic_torch_save(
-                checkpoint_payload(
-                    ac, dc, ema, optimizer, scheduler, scaler,
-                    global_step, epoch, args),
+                payload,
                 save_path,
+            )
+            atomic_torch_save(
+                payload,
+                os.path.join(args.output_dir, 'checkpoint_latest.pt'),
             )
             print(f'  Saved: {save_path}')
         should_eval = save_due or eval_due or epoch == args.epochs - 1
