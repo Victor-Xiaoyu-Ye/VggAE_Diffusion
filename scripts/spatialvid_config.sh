@@ -5,7 +5,7 @@ PROJECT=$(cd "${CONFIG_DIR}/.." && pwd)
 
 # SpatialVID-HQ stays on OBS. Video files are staged on demand into the
 # bounded node-local cache below; the full dataset is never copied locally.
-SPATIALVID_OBS_ROOT="obs://yw-pixelgeek-training-data-gy1/01.USERS/z00546255/data/yexiaoyu/dataset/SpatialVID-HQ"
+SPATIALVID_OBS_ROOT="obs://yw-ads-training-gy1/data/external/personal/g00833899/y50046448/dataset/SpatialVID-HQ"
 SPATIALVID_METADATA_URL="${SPATIALVID_OBS_ROOT}/data/train/SpatialVID_HQ_metadata.csv"
 SPATIALVID_VIDEO_ROOT="${SPATIALVID_OBS_ROOT}/videos/SpatialVID/videos"
 SPATIALVID_DEPTH_ROOT="${SPATIALVID_OBS_ROOT}/depths/SpatialVID/depths"

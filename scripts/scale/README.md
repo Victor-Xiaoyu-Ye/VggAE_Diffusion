@@ -48,7 +48,7 @@ reuse it independently of its output directory.
 The SpatialVID-HQ root is already set to:
 
 ```text
-obs://yw-pixelgeek-training-data-gy1/01.USERS/z00546255/data/yexiaoyu/dataset/SpatialVID-HQ
+obs://yw-ads-training-gy1/data/external/personal/g00833899/y50046448/dataset/SpatialVID-HQ
 ```
 
 Stage 02 automatically
