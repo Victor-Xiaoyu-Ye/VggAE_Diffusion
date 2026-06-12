@@ -17,7 +17,8 @@ class VideoDecodeError(RuntimeError):
 def _compute_frame_indices(total_frames, num_frames, temporal_jitter=True,
                             max_start_frac=0.3, stride_jitter_frac=0.15,
                             max_frame_span=0, fps=0.0,
-                            clip_duration_seconds=0.0):
+                            clip_duration_seconds=0.0,
+                            window_index=0, num_windows=1):
     """Compute frame indices for sampling. Shared by video and depth loading."""
     if total_frames <= num_frames:
         return np.linspace(0, total_frames - 1, num_frames, dtype=int)
@@ -35,6 +36,14 @@ def _compute_frame_indices(total_frames, num_frames, temporal_jitter=True,
         span = min(total_frames, max(span, num_frames))
         if temporal_jitter and total_frames > span:
             start_offset = random.randint(0, total_frames - span)
+        elif num_windows > 1 and total_frames > span:
+            if not 0 <= window_index < num_windows:
+                raise ValueError(
+                    f"window_index {window_index} is outside "
+                    f"[0, {num_windows})")
+            start_offset = round(
+                window_index * (total_frames - span)
+                / (num_windows - 1))
         else:
             start_offset = max(0, (total_frames - span) // 2)
         end_offset = min(total_frames - 1, start_offset + span - 1)

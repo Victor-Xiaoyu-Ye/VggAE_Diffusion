@@ -12,6 +12,10 @@ Statistics must be computed after freezing the exact StreamVGGT and tokenizer
 checkpoints, using only the training split. Evaluation uses the saved training
 statistics and must never recompute them.
 
+The active cache includes four deterministic windows per source video. All
+1,461,448 training clips contribute to the exact raw moments before the final
+FP32 mean/std tensors are produced.
+
 SpatialVID mixes roughly 24, 25, 30, 50, and 60 FPS videos. The active
 workflow therefore samples 8 frames over a fixed 1.0 second interval. A fixed
 source-frame span would make the same future-frame index represent different

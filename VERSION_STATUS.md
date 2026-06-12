@@ -18,7 +18,7 @@ All active shell arguments match their Python entry points. Python compilation
 and shell syntax checks pass. Ascend 910B forward and HCCL distributed runtime
 validation remain required on the training cluster.
 
-The active scale path supports 24 ModelArts workers x 8 NPUs, derives the HCCL
+The active scale path supports 6 ModelArts workers x 8 NPUs, derives the HCCL
 topology from `VC_WORKER_*`, stages SpatialVID MP4 files from OBS on demand,
 streams latent tar shards through a bounded local cache, and mirrors rank-0
 outputs to `$OUTPUT_URL`.

@@ -22,9 +22,15 @@ if [[ "${NODE_RANK}" -ne 0 ]]; then
 fi
 validate_model_config
 ensure_spatialvid_splits
-require_file "${AUTOENCODER_CKPT}" "scale geometry autoencoder checkpoint"
-require_file "${I0_CKPT}" "scale I0 decoder checkpoint"
-require_file "${GENERATOR_CKPT}" "scale diffusion checkpoint"
+ensure_local_checkpoint \
+  "${AUTOENCODER_CKPT}" "${SCALE_GEOMETRY_AE_CKPT_URL}" \
+  "scale geometry autoencoder checkpoint"
+ensure_local_checkpoint \
+  "${I0_CKPT}" "${SCALE_I0_DECODER_CKPT_URL}" \
+  "scale I0 decoder checkpoint"
+ensure_local_checkpoint \
+  "${GENERATOR_CKPT}" "${SCALE_DIFFUSION_CKPT_URL}" \
+  "scale diffusion checkpoint"
 
 "${PYTHON_BIN}" "${PROJECT}/sample_compact_i0.py" \
   --csv "${SPATIALVID_EVAL_CSV}" \

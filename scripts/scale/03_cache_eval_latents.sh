@@ -16,7 +16,9 @@ MASTER_PORT=29603
 configure_modelarts_distributed
 require_scale_cluster
 ensure_spatialvid_scale_splits
-require_file "${AUTOENCODER_CKPT}" "scale geometry autoencoder checkpoint"
+ensure_local_checkpoint \
+  "${AUTOENCODER_CKPT}" "${SCALE_GEOMETRY_AE_CKPT_URL}" \
+  "scale geometry autoencoder checkpoint"
 
 run_torchrun "${PROJECT}/cache_compact_latents.py" \
   --csv "${SPATIALVID_EVAL_CSV}" \
@@ -27,7 +29,8 @@ run_torchrun "${PROJECT}/cache_compact_latents.py" \
   --partition_id 0 --num_partitions 1 \
   --store_i0_rgb \
   --samples_per_tar "${SAMPLES_PER_TAR}" \
-  --latent_dim 512 --latent_grid 18 \
+  --latent_dim "${SCALE_LATENT_DIM}" \
+  --latent_grid "${SCALE_LATENT_GRID}" \
   --levels 4 11 17 23 \
   --disable_temporal_mixer \
   --seq_len 8 --target_size 518 --max_frame_span 32 \
