@@ -87,19 +87,23 @@ SpatialVID CSV. No manually prepared evaluation CSV is required.
 
 At 256 channels, each eight-frame fp16 cache sample is about 1.27 MiB. The
 1,461,448-clip cache therefore needs roughly 1.8 TiB before tar overhead and
-metadata. The configured `/cache` budget is used only as a bounded staging
-area. Persistent latent shards remain under the fixed `cache_latents` OBS
-directory. Training checkpoints, metrics, samples, TensorBoard events, stdout,
-and NPU process logs remain under `$OUTPUT_URL`.
+metadata. The configured `/cache` budget is used only for source MP4 files
+that OpenCV must access through a seekable local path, checkpoint staging, and
+local outputs. Manifest, statistics, progress metadata, and latent tar shards
+are read directly through `moxing.file.read/File`; latent tar files are
+streamed and are not downloaded into the local cache. Persistent latent shards
+remain under the fixed `cache_latents` OBS directory. Training checkpoints,
+metrics, samples, TensorBoard events, stdout, and NPU process logs remain under
+`$OUTPUT_URL`.
 
 Distributed launch uses HCCL. ModelArts variables are read automatically:
 `VC_WORKER_NUM`, `VC_TASK_INDEX`, and `VC_WORKER_HOSTS`. The scale scripts
 expect 6 workers and 8 NPUs per worker. `MASTER_PORT` remains editable at the
 top of each script.
 
-Video files are downloaded individually through MoXing into
-`MOX_VIDEO_CACHE_DIR`. Compact latent tar shards stay on OBS and are staged
-through `MOX_LATENT_CACHE_DIR`.
+Video files are copied individually through MoXing into
+`MOX_VIDEO_CACHE_DIR` because OpenCV requires a local seekable path. Compact
+latent tar shards stay on OBS and are streamed with `moxing.file.File`.
 
 The representation checkpoint is a data contract. Do not continue changing the
 tokenizer after latent caching starts. If the tokenizer changes, rebuild the

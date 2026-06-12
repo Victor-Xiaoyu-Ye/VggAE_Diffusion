@@ -16,36 +16,22 @@ def is_remote_path(path):
 
 def _mox():
     try:
-        import moxing as mox
+        import moxing
     except ImportError as exc:
         raise RuntimeError(
             "MoXing is required for OBS paths. Install the ModelArts moxing "
             "package in the Ascend environment.") from exc
-    return mox
-
-
-def _candidate_uris(path):
-    yield path
-    if path.startswith("obs://"):
-        yield "s3://" + path[len("obs://"):]
-    elif path.startswith("s3://"):
-        yield "obs://" + path[len("s3://"):]
+    return moxing
 
 
 def remote_exists(path):
-    last_error = None
-    checked = False
-    for candidate in _candidate_uris(path):
-        try:
-            exists = _mox().file.exists(candidate)
-            checked = True
-            if exists:
-                return True
-        except Exception as exc:
-            last_error = exc
-    if last_error is not None and not checked:
-        raise last_error
-    return False
+    """Check a local or OBS path without materializing it locally."""
+    if not is_remote_path(path):
+        return os.path.exists(path)
+    try:
+        return bool(_mox().file.exists(path))
+    except Exception:
+        return False
 
 
 def copy_file(source, destination):
@@ -59,21 +45,11 @@ def copy_file(source, destination):
         os.path.dirname(os.path.abspath(destination)),
         exist_ok=True,
     ) if not is_remote_path(destination) else None
-    last_error = None
-    source_candidates = list(_candidate_uris(source)) if is_remote_path(
-        source) else [source]
-    destination_candidates = list(
-        _candidate_uris(destination)) if is_remote_path(destination) else [
-            destination]
-    for source_candidate in source_candidates:
-        for destination_candidate in destination_candidates:
-            try:
-                _mox().file.copy(source_candidate, destination_candidate)
-                return
-            except Exception as exc:
-                last_error = exc
-    raise RuntimeError(
-        f"MoXing copy failed: {source} -> {destination}") from last_error
+    try:
+        _mox().file.copy(source, destination)
+    except Exception as exc:
+        raise RuntimeError(
+            f"MoXing copy failed: {source} -> {destination}") from exc
 
 
 def copy_directory(source, destination):
@@ -81,38 +57,38 @@ def copy_directory(source, destination):
     if not is_remote_path(source) and not is_remote_path(destination):
         shutil.copytree(source, destination, dirs_exist_ok=True)
         return
-    last_error = None
-    source_candidates = list(_candidate_uris(source)) if is_remote_path(
-        source) else [source]
-    destination_candidates = list(
-        _candidate_uris(destination)) if is_remote_path(destination) else [
-            destination]
-    for source_candidate in source_candidates:
-        for destination_candidate in destination_candidates:
-            try:
-                _mox().file.copy_parallel(
-                    source_candidate, destination_candidate)
-                return
-            except Exception as exc:
-                last_error = exc
-    raise RuntimeError(
-        f"MoXing directory copy failed: {source} -> {destination}"
-    ) from last_error
+    try:
+        _mox().file.copy_parallel(source, destination)
+    except Exception as exc:
+        raise RuntimeError(
+            f"MoXing directory copy failed: {source} -> {destination}"
+        ) from exc
 
 
 def read_text(path):
     if not is_remote_path(path):
         with open(path) as handle:
             return handle.read()
-    last_error = None
-    for candidate in _candidate_uris(path):
-        try:
-            payload = _mox().file.read(candidate, binary=False)
-            return payload.decode("utf-8") if isinstance(
-                payload, bytes) else payload
-        except Exception as exc:
-            last_error = exc
-    raise RuntimeError(f"Unable to read OBS text file: {path}") from last_error
+    payload = _mox().file.read(path, binary=False)
+    return payload.decode("utf-8") if isinstance(payload, bytes) else payload
+
+
+def read_bytes(path):
+    if not is_remote_path(path):
+        with open(path, "rb") as handle:
+            return handle.read()
+    return _mox().file.read(path, binary=True)
+
+
+def open_file(path, mode="rb"):
+    """Open local or OBS data as a file object.
+
+    OBS callers should prefer streaming modes because the corporate MoXing
+    file object is a network stream and is not guaranteed to support seek.
+    """
+    if not is_remote_path(path):
+        return open(path, mode)
+    return _mox().file.File(path, mode)
 
 
 def write_text(path, content):
@@ -121,14 +97,7 @@ def write_text(path, content):
         with open(path, "w") as handle:
             handle.write(content)
         return
-    last_error = None
-    for candidate in _candidate_uris(path):
-        try:
-            _mox().file.write(candidate, content)
-            return
-        except Exception as exc:
-            last_error = exc
-    raise RuntimeError(f"Unable to write OBS text file: {path}") from last_error
+    _mox().file.write(path, content)
 
 
 def join_remote(root, relative):

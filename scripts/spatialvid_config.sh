@@ -39,11 +39,9 @@ TORCHRUN_BIN="${TORCHRUN_BIN:-torchrun}"
 # Bounded on-demand caches per node. Values are soft limits in GiB.
 export MOX_VIDEO_CACHE_DIR="${LOCAL_CACHE_ROOT}/cache/videos"
 export MOX_DEPTH_CACHE_DIR="${LOCAL_CACHE_ROOT}/cache/depth"
-export MOX_LATENT_CACHE_DIR="${LOCAL_CACHE_ROOT}/cache/latent_shards"
 export MOX_METADATA_CACHE_DIR="${LOCAL_CACHE_ROOT}/cache/metadata"
 export MOX_CACHE_WRITER_DIR="${LOCAL_CACHE_ROOT}/cache/latent_writer"
 export MOX_VIDEO_CACHE_GB="${MOX_VIDEO_CACHE_GB:-1400}"
-export MOX_LATENT_CACHE_GB="${MOX_LATENT_CACHE_GB:-1400}"
 export MOX_DOWNLOAD_RETRIES=4
 export OUTPUT_SYNC_SECONDS=60
 

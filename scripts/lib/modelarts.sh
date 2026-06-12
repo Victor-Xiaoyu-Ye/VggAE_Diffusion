@@ -61,9 +61,12 @@ resolve_resume_checkpoint() {
     printf '%s' "${local_latest}"
     return
   fi
-  if "${PYTHON_BIN}" "${PROJECT}/scripts/remote_exists.py" \
-      "${remote_latest}"; then
-    stage_resume_checkpoint "${remote_latest}" "${staged_path}"
+  mkdir -p "$(dirname "${staged_path}")"
+  if "${PYTHON_BIN}" "${PROJECT}/scripts/moxing_transfer.py" \
+      "${remote_latest}" "${staged_path}" 2>/dev/null; then
+    printf '%s' "${staged_path}"
+  else
+    rm -f "${staged_path}"
   fi
 }
 
