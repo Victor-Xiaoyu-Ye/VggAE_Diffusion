@@ -13,12 +13,12 @@ RESUME=""
 REPRESENTATION_MAX_VIDEOS=0
 ENABLE_DEPTH=0
 
-EPOCHS=3
+EPOCHS=8
 BATCH_SIZE=1
-ACCUM_STEPS=8
+ACCUM_STEPS=4
 LEARNING_RATE=1e-4
 WEIGHT_DECAY=1e-2
-WARMUP_STEPS=5000
+WARMUP_STEPS=300
 EMA_DECAY=0.9999
 NUM_WORKERS=8
 CLIP_DURATION_SECONDS=1.0
@@ -53,10 +53,12 @@ run_torchrun "${PROJECT}/train_autoencoder.py" \
   --encoder_ckpt "${STREAMVGGT_CKPT}" \
   --output_dir "${OUTPUT_DIR}" \
   --max_videos "${REPRESENTATION_MAX_VIDEOS}" \
-  --latent_dim 512 --latent_grid 18 \
+  --latent_dim "${SCALE_LATENT_DIM}" \
+  --latent_grid "${SCALE_LATENT_GRID}" \
   --levels 4 11 17 23 \
   --disable_temporal_mixer \
-  --decoder_base_dim 384 --decoder_num_resblocks 2 \
+  --decoder_base_dim "${SCALE_DECODER_BASE_DIM}" \
+  --decoder_num_resblocks 2 \
   --latent_noise_std 0.05 --latent_noise_warmup 5000 \
   --lambda_l1 1.0 --lambda_lpips 1.0 \
   --lambda_grad 0.05 --lambda_temporal 0.1 \

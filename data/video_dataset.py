@@ -30,7 +30,8 @@ class SpatialVidDataset(Dataset):
                  annotation_index_path="", max_videos=0, num_frames_per_video=8,
                  depth_root="", temporal_jitter=True, index_shard_id=0,
                  index_num_shards=1, check_files=True, max_frame_span=0,
-                 clip_duration_seconds=0.0, decode_retries=8):
+                 clip_duration_seconds=0.0, decode_retries=8,
+                 clips_per_video=1):
         if index_num_shards < 1:
             raise ValueError("index_num_shards must be >= 1")
         if not 0 <= index_shard_id < index_num_shards:
@@ -44,6 +45,7 @@ class SpatialVidDataset(Dataset):
         self.max_frame_span = max_frame_span
         self.clip_duration_seconds = clip_duration_seconds
         self.decode_retries = max(0, int(decode_retries))
+        self.clips_per_video = max(1, int(clips_per_video))
         self.depth_root = depth_root
         self.remote_video_cache = os.environ.get(
             "MOX_VIDEO_CACHE_DIR", "/cache/vggae/video_cache")
@@ -113,14 +115,18 @@ class SpatialVidDataset(Dataset):
         shard_info = (
             f", index_shard={index_shard_id}/{index_num_shards}"
             if index_num_shards > 1 else "")
-        print(f"SpatialVidDataset: {len(self)} videos, seq_len={seq_len}, "
+        print(f"SpatialVidDataset: {len(self.index)} videos, "
+              f"{len(self)} clips, clips_per_video={self.clips_per_video}, "
+              f"seq_len={seq_len}, "
               f"target_size={target_size}{depth_info}{jitter_info}{shard_info}")
 
     def __len__(self):
-        return len(self.index)
+        return len(self.index) * self.clips_per_video
 
     def _load_entry(self, idx):
-        entry = self.index[idx]
+        video_idx = idx // self.clips_per_video
+        window_index = idx % self.clips_per_video
+        entry = self.index[video_idx]
         nf = self.num_frames_per_video
 
         # Compute frame indices once, use for both video and depth
@@ -130,6 +136,8 @@ class SpatialVidDataset(Dataset):
             max_frame_span=self.max_frame_span,
             fps=entry["fps"],
             clip_duration_seconds=self.clip_duration_seconds,
+            window_index=window_index,
+            num_windows=self.clips_per_video,
         )
 
         video_path = entry["video_path"]
@@ -171,6 +179,7 @@ class SpatialVidDataset(Dataset):
             "frames": frames,         # [S, 3, H, W]
             "caption": entry["caption"],
             "video_id": entry["video_id"],
+            "window_index": window_index,
             "depth": depth,           # [S, H, W] or None
         }
 
@@ -185,18 +194,21 @@ class SpatialVidDataset(Dataset):
         retry_stride = 104729
         for attempt in range(self.decode_retries + 1):
             candidate_idx = (
-                requested_idx + attempt * retry_stride) % len(self.index)
+                requested_idx + attempt * retry_stride) % len(self)
             try:
                 sample = self._load_entry(candidate_idx)
+                requested_video_idx = (
+                    requested_idx // self.clips_per_video)
                 sample["requested_video_id"] = self.index[
-                    requested_idx]["video_id"]
+                    requested_video_idx]["video_id"]
                 sample["decode_replacement"] = int(candidate_idx != requested_idx)
                 sample["decode_error"] = "" if last_error is None else str(last_error)
                 return sample
             except VideoDecodeError as exc:
                 last_error = exc
 
-        requested_path = self.index[requested_idx]["video_path"]
+        requested_path = self.index[
+            requested_idx // self.clips_per_video]["video_path"]
         raise VideoDecodeError(
             f"Unable to load {requested_path} or any of "
             f"{self.decode_retries} deterministic replacements. "
@@ -221,6 +233,9 @@ def collate_fn(batch):
         "frames": frames,
         "caption": captions,
         "video_id": video_ids,
+        "window_index": [
+            int(b.get("window_index", 0)) for b in batch
+        ],
         "requested_video_id": [
             b.get("requested_video_id", b["video_id"]) for b in batch
         ],

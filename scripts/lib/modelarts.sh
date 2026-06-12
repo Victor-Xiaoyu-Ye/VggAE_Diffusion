@@ -48,8 +48,25 @@ stage_resume_checkpoint() {
   esac
 }
 
+ensure_local_checkpoint() {
+  local local_path=$1
+  local remote_path=$2
+  local label=$3
+  if [[ -s "${local_path}" ]]; then
+    return
+  fi
+  if [[ -z "${remote_path}" ]]; then
+    echo "Missing ${label}: ${local_path}" >&2
+    exit 1
+  fi
+  mkdir -p "$(dirname "${local_path}")"
+  echo "Staging ${label}: ${remote_path} -> ${local_path}"
+  "${PYTHON_BIN}" "${PROJECT}/scripts/moxing_transfer.py" \
+    "${remote_path}" "${local_path}"
+}
+
 require_scale_cluster() {
-  local expected_nodes=${EXPECTED_NNODES:-24}
+  local expected_nodes=${EXPECTED_NNODES:-6}
   if [[ "${NNODES}" -ne "${expected_nodes}" ]]; then
     echo "[WARN] Scale job expected ${expected_nodes} nodes, got ${NNODES}." >&2
   fi

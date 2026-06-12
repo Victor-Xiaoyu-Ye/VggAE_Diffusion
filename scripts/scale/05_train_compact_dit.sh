@@ -12,20 +12,20 @@ REMOTE_OUTPUT_DIR="${SCALE_REMOTE_ROOT}/compact_dit"
 I0_CKPT="${SCALE_I0_DECODER_CKPT}"
 RESUME=""
 
-MAX_STEPS=300000
-BATCH_SIZE=2
-ACCUM_STEPS=8
+MAX_STEPS=40000
+BATCH_SIZE=1
+ACCUM_STEPS=4
 LEARNING_RATE=1e-4
 WEIGHT_DECAY=1e-2
-WARMUP_STEPS=5000
-MODEL_DIM=768
+WARMUP_STEPS=1000
+MODEL_DIM=640
 SPATIAL_DEPTH=8
 TEMPORAL_DEPTH=4
-NUM_HEADS=12
+NUM_HEADS=10
 NUM_WORKERS=4
 SHUFFLE_BUFFER=512
-SAVE_EVERY=10000
-EVAL_EVERY=10000
+SAVE_EVERY=2000
+EVAL_EVERY=2000
 LOG_EVERY=50
 SAMPLE_STEPS=20
 MASTER_PORT=29604
@@ -44,7 +44,9 @@ if [[ -n "${RESUME}" ]]; then
     "${RESUME}" "${LOCAL_CACHE_ROOT}/resume/compact_dit.pt")
   EXTRA_ARGS+=(--resume "${RESUME}")
 fi
-require_file "${I0_CKPT}" "scale I0 decoder checkpoint"
+ensure_local_checkpoint \
+  "${I0_CKPT}" "${SCALE_I0_DECODER_CKPT_URL}" \
+  "scale I0 decoder checkpoint"
 EXTRA_ARGS+=(--i0_decoder_ckpt "${I0_CKPT}")
 
 start_output_sync "${OUTPUT_DIR}" "${REMOTE_OUTPUT_DIR}"
@@ -54,7 +56,8 @@ run_torchrun "${PROJECT}/train_cached_compact_diffusion.py" \
   --manifest "${SCALE_TRAIN_CACHE_DIR}/manifest.txt" \
   --stats "${SCALE_TRAIN_CACHE_DIR}/stats.pt" \
   --output_dir "${OUTPUT_DIR}" \
-  --latent_dim 512 --latent_grid 18 --seq_len 7 \
+  --latent_dim "${SCALE_LATENT_DIM}" \
+  --latent_grid "${SCALE_LATENT_GRID}" --seq_len 7 \
   --model_dim "${MODEL_DIM}" \
   --spatial_depth "${SPATIAL_DEPTH}" \
   --temporal_depth "${TEMPORAL_DEPTH}" \

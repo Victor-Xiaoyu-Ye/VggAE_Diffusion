@@ -59,6 +59,7 @@ def parse_args():
     parser.add_argument("--max_videos", type=int, default=0)
     parser.add_argument("--check_files", action="store_true")
     parser.add_argument("--samples_per_tar", type=int, default=512)
+    parser.add_argument("--clips_per_video", type=int, default=1)
     parser.add_argument(
         "--store_i0_rgb", action="store_true",
         help="Store the observed first RGB frame for automatic previews")
@@ -150,7 +151,8 @@ class SafeDataset(Dataset):
         try:
             return self.dataset[index]
         except Exception as error:
-            entry = self.dataset.index[index]
+            base_index = index // self.dataset.clips_per_video
+            entry = self.dataset.index[base_index]
             return {
                 "_error": repr(error),
                 "video_id": entry.get("video_id", ""),
@@ -271,6 +273,7 @@ def main():
         check_files=args.check_files,
         max_frame_span=args.max_frame_span,
         clip_duration_seconds=args.clip_duration_seconds,
+        clips_per_video=args.clips_per_video,
     )
     rank_indices = range(rank, len(dataset), world_size)
     rank_dataset = Subset(SafeDataset(dataset), rank_indices)
@@ -344,6 +347,7 @@ def main():
                             device="cpu", dtype=torch.float16),
                         "caption": batch["caption"][batch_index],
                         "video_id": batch["video_id"][batch_index],
+                        "window_index": batch["window_index"][batch_index],
                     }
                     if args.store_i0_rgb:
                         sample["i0_rgb"] = (

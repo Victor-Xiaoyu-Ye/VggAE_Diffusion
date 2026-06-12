@@ -3,6 +3,22 @@
 The scale path freezes the representation before the full SpatialVID run.
 It does not decode MP4 or run StreamVGGT inside the diffusion training loop.
 
+## Default 6x8 configuration
+
+- Source videos: 365,362.
+- Cached windows per video: 4 deterministic one-second windows.
+- Total diffusion clips: 1,461,448.
+- Compact latent: `256 x 18 x 18`.
+- Compact DiT: 640 hidden, 8 spatial blocks, 4 temporal blocks, 10 heads
+  (about 68M parameters).
+- Global diffusion batch: `48 NPUs x batch 1 x accumulation 4 = 192`.
+- 40,000 optimizer steps: about 5.25 passes over the cached clips.
+
+The representation autoencoder trains for 8 epochs and the I0 decoder for 6.
+Those online stages choose a new random one-second window on every dataset
+access. The cache stage instead uses four deterministic windows distributed
+from the beginning to the end of each raw video.
+
 Edit local checkpoint/environment paths once in `scripts/spatialvid_config.sh`.
 The SpatialVID-HQ root is already set to:
 
@@ -22,7 +38,7 @@ SpatialVID CSV. No manually prepared evaluation CSV is required.
 3. `02_shard_metadata.sh`
    - Optional helper for multiple independent cache jobs.
 4. `03_cache_latents.sh`
-   - By default, one 24x8 job partitions the full CSV across 192 ranks.
+   - By default, one 6x8 job partitions the full CSV across 48 ranks.
    - For multiple cache jobs, edit `CACHE_PARTITION_ID` and
      `CACHE_NUM_PARTITIONS`.
 5. `03_cache_eval_latents.sh`
@@ -40,15 +56,14 @@ SpatialVID CSV. No manually prepared evaluation CSV is required.
 8. `06_sample_compact_dit.sh`
    - Generate seven future frames from one observed RGB frame.
 
-At 512 channels, an eight-frame fp16 cache is about 2.65 MB/video. The current
-365,362-row metadata CSV therefore needs roughly 1 TB for compact latents,
-before tar overhead and temporary files. The configured `/cache` budget is
-used only as a bounded staging area; persistent shards remain under
-`$OUTPUT_URL`.
+At 256 channels, each eight-frame fp16 cache sample is about 1.27 MiB. The
+1,461,448-clip cache therefore needs roughly 1.8 TiB before tar overhead and
+metadata. The configured `/cache` budget is used only as a bounded staging
+area; persistent shards remain under `$OUTPUT_URL`.
 
 Distributed launch uses HCCL. ModelArts variables are read automatically:
 `VC_WORKER_NUM`, `VC_TASK_INDEX`, and `VC_WORKER_HOSTS`. The scale scripts
-expect 24 workers and 8 NPUs per worker. `MASTER_PORT` remains editable at the
+expect 6 workers and 8 NPUs per worker. `MASTER_PORT` remains editable at the
 top of each script.
 
 Video files are downloaded individually through MoXing into

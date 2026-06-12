@@ -13,13 +13,13 @@ REMOTE_OUTPUT_DIR="${SCALE_REMOTE_ROOT}/i0_decoder"
 RESUME=""
 REPRESENTATION_MAX_VIDEOS=0
 
-EPOCHS=3
+EPOCHS=6
 BATCH_SIZE=1
-ACCUM_STEPS=8
+ACCUM_STEPS=4
 LEARNING_RATE=1e-4
 PRETRAINED_LR_SCALE=0.1
 WEIGHT_DECAY=1e-2
-WARMUP_STEPS=5000
+WARMUP_STEPS=300
 NUM_WORKERS=8
 CLIP_DURATION_SECONDS=1.0
 MASTER_PORT=29601
@@ -28,7 +28,9 @@ MASTER_PORT=29601
 configure_modelarts_distributed
 require_scale_cluster
 ensure_spatialvid_scale_splits
-require_file "${AUTOENCODER_CKPT}" "scale geometry autoencoder checkpoint"
+ensure_local_checkpoint \
+  "${AUTOENCODER_CKPT}" "${SCALE_GEOMETRY_AE_CKPT_URL}" \
+  "scale geometry autoencoder checkpoint"
 
 EXTRA_ARGS=()
 if [[ -n "${RESUME}" ]]; then
@@ -49,9 +51,11 @@ run_torchrun "${PROJECT}/train_i0_autoencoder.py" \
   --autoencoder_ckpt "${AUTOENCODER_CKPT}" \
   --output_dir "${OUTPUT_DIR}" \
   --max_videos "${REPRESENTATION_MAX_VIDEOS}" \
-  --latent_dim 512 --latent_grid 18 \
+  --latent_dim "${SCALE_LATENT_DIM}" \
+  --latent_grid "${SCALE_LATENT_GRID}" \
   --disable_temporal_mixer \
-  --decoder_base_dim 384 --decoder_num_resblocks 2 \
+  --decoder_base_dim "${SCALE_DECODER_BASE_DIM}" \
+  --decoder_num_resblocks 2 \
   --epochs "${EPOCHS}" \
   --batch_size "${BATCH_SIZE}" \
   --accum_steps "${ACCUM_STEPS}" \

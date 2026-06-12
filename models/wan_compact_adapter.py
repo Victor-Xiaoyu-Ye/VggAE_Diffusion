@@ -132,7 +132,7 @@ class WanCompactAdapter(nn.Module):
     def _time_embed(self, t):
         """t: [B] in Wan's native [0, 1000] range."""
         self._ensure_time_emb_float32()
-        with amp.autocast(device_type=z.device.type, enabled=False):
+        with amp.autocast(device_type=t.device.type, enabled=False):
             e = sinusoidal_embedding_1d(self.freq_dim, t).float().to(device=t.device)
             e = self.wan.time_embedding(e.float())
             e = self.wan.time_projection(e.float())

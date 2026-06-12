@@ -30,6 +30,12 @@ On ModelArts, videos remain on OBS and are staged per sample into a bounded
 node-local cache. Raw StreamVGGT features are never persisted. Compact latent
 shards and exact raw normalization moments are written under `$OUTPUT_URL`.
 
+The active six-node configuration uses a 256-channel, 18x18 latent. Four
+deterministic one-second windows per source video produce 1,461,448 cached
+clips from the 365,362-row SpatialVID CSV. The generator is a roughly 68M
+parameter Compact DiT (`640/8/4/10`) trained with global batch 192 for 40K
+steps.
+
 ## Checkpoint and Monitoring Contract
 
 Every active trainer writes atomic periodic and final checkpoints. A checkpoint
@@ -117,6 +123,6 @@ pipeline produces a valid baseline.
 - Never report periodic PSNR from the training DataLoader as validation PSNR.
 - Track invalid-video rate per data shard; do not silently replace failures.
 
-At 512x18x18 fp16, I0 plus seven residual frames cost about 2.65 MB/video.
-Budget roughly 1 TB for the current 365K-clip compact cache before tar overhead
-and temporary files.
+At 256x18x18 fp16, I0 plus seven residual frames cost about 1.27 MiB/clip.
+Budget roughly 1.8 TiB for the current 1.46M-clip compact cache before tar
+overhead and temporary files.

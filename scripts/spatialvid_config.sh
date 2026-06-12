@@ -49,6 +49,13 @@ EVAL_VIDEOS=64
 OVERFIT_VIDEOS=1
 MIN_VIDEO_FRAMES=8
 
+# Scale representation contract. Changing any value invalidates all scale
+# autoencoder, decoder, latent cache, normalization, and diffusion checkpoints.
+SCALE_LATENT_DIM=256
+SCALE_LATENT_GRID=18
+SCALE_DECODER_BASE_DIM=320
+SCALE_CLIPS_PER_VIDEO=4
+
 # Local checkpoints consumed by downstream stages.
 I0_DECODER_CKPT="${RUN_ROOT}/10k/i0_decoder/checkpoint_final.pt"
 OVERFIT_I0_DECODER_CKPT="${RUN_ROOT}/validation/i0_decoder_overfit/checkpoint_final.pt"
@@ -74,5 +81,8 @@ SCALE_CSV_SHARD_ROOT="${SCALE_ROOT}/csv_shards"
 # Large latent caches live under OUTPUT_URL and are streamed through the local
 # MOX_LATENT_CACHE_DIR.
 SCALE_REMOTE_ROOT="${REMOTE_RUN_ROOT}/scale"
+SCALE_GEOMETRY_AE_CKPT_URL="${SCALE_REMOTE_ROOT}/geometry_autoencoder/checkpoint_final.pt"
+SCALE_I0_DECODER_CKPT_URL="${SCALE_REMOTE_ROOT}/i0_decoder/checkpoint_final.pt"
+SCALE_DIFFUSION_CKPT_URL="${SCALE_REMOTE_ROOT}/compact_dit/checkpoint_final.pt"
 SCALE_TRAIN_CACHE_DIR="${SCALE_REMOTE_ROOT}/latent_cache/train"
 SCALE_EVAL_CACHE_DIR="${SCALE_REMOTE_ROOT}/latent_cache/eval"
