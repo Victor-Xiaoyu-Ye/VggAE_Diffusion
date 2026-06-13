@@ -41,13 +41,28 @@ def copy_file(source, destination):
         shutil.copy2(source, destination)
         return
 
-    os.makedirs(
-        os.path.dirname(os.path.abspath(destination)),
-        exist_ok=True,
-    ) if not is_remote_path(destination) else None
+    local_destination = not is_remote_path(destination)
+    if local_destination:
+        os.makedirs(
+            os.path.dirname(os.path.abspath(destination)), exist_ok=True)
+        temporary_destination = (
+            f"{destination}.partial-{os.getpid()}-{time.time_ns()}")
+    else:
+        temporary_destination = destination
     try:
-        _mox().file.copy(source, destination)
+        _mox().file.copy(source, temporary_destination)
+        if local_destination:
+            if (not os.path.isfile(temporary_destination)
+                    or os.path.getsize(temporary_destination) <= 0):
+                raise IOError(
+                    f"MoXing produced an empty local file: {source}")
+            os.replace(temporary_destination, destination)
     except Exception as exc:
+        if local_destination:
+            try:
+                os.unlink(temporary_destination)
+            except FileNotFoundError:
+                pass
         raise RuntimeError(
             f"MoXing copy failed: {source} -> {destination}") from exc
 
