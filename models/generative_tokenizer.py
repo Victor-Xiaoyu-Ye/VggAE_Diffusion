@@ -142,7 +142,7 @@ class GenerativeTokenizer(nn.Module):
         self.input_grid = input_grid
         self.num_tokens = input_grid ** 2  # 1369
         self.num_latent_tokens = latent_grid ** 2  # 324
-        self.disable_temporal_mixer = disable_temporal_mixer
+        self.disable_temporal_mixer = False
 
         # Per-level normalization + projection
         self.level_norms = nn.ModuleDict({
@@ -160,6 +160,7 @@ class GenerativeTokenizer(nn.Module):
 
         # Temporal mixing (applied per-position)
         self.temporal_mixer = TemporalMixer(latent_dim)
+        self.set_temporal_mixer_enabled(not disable_temporal_mixer)
 
         # Output refinement (small conv after all processing)
         self.output_refine = nn.Sequential(
@@ -168,6 +169,12 @@ class GenerativeTokenizer(nn.Module):
             nn.SiLU(),
             nn.Conv2d(latent_dim, latent_dim, 3, padding=1),
         )
+
+    def set_temporal_mixer_enabled(self, enabled):
+        """Keep control flow, gradients, and DDP parameter usage consistent."""
+        self.disable_temporal_mixer = not bool(enabled)
+        for parameter in self.temporal_mixer.parameters():
+            parameter.requires_grad_(bool(enabled))
 
     def forward(self, tokens_list):
         """Convert StreamVGGT token list to compact generative latent.

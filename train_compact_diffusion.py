@@ -374,10 +374,11 @@ def main():
          'target_size', 'decoder_base_dim', 'decoder_num_resblocks'),
         'Autoencoder checkpoint')
     tokenizer.load_state_dict(ae_ckpt['tokenizer'])
-    tokenizer.disable_temporal_mixer = (
+    disable_temporal_mixer = (
         args.disable_temporal_mixer
         or bool(ae_ckpt.get('args', {}).get('disable_temporal_mixer', False))
     )
+    tokenizer.set_temporal_mixer_enabled(not disable_temporal_mixer)
     if tokenizer.disable_temporal_mixer:
         if main_process:
             print('  TemporalMixer bypassed for I0 latent contract')
