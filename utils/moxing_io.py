@@ -180,6 +180,16 @@ def prune_cache(cache_dir, max_bytes, protected=()):
             break
 
 
+def _is_not_found_error(error):
+    current = error
+    while current is not None:
+        message = str(current).lower()
+        if "404" in message or "not found" in message:
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
 def stage_remote_file(remote_path, cache_dir, max_cache_bytes=0,
                       retries=3, lock_timeout=900):
     """Materialize one OBS object as a seekable local file."""
@@ -218,6 +228,8 @@ def stage_remote_file(remote_path, cache_dir, max_cache_bytes=0,
                 last_error = exc
                 if os.path.exists(partial_path):
                     os.unlink(partial_path)
+                if _is_not_found_error(exc):
+                    break
                 time.sleep(min(2 ** attempt, 8))
         raise RuntimeError(
             f"Failed to stage OBS file after {retries} attempts: "

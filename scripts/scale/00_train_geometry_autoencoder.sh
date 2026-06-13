@@ -22,6 +22,7 @@ WEIGHT_DECAY=1e-2
 WARMUP_STEPS=300
 EMA_DECAY=0.9999
 NUM_WORKERS=8
+DECODE_RETRIES=8
 CLIP_DURATION_SECONDS=1.0
 MASTER_PORT=29600
 # -----------------------------------------------------------------------------
@@ -79,6 +80,7 @@ run_torchrun "${PROJECT}/train_autoencoder.py" \
   --ema_decay "${EMA_DECAY}" \
   --seq_len 8 --target_size 518 --max_frame_span 32 \
   --clip_duration_seconds "${CLIP_DURATION_SECONDS}" \
-  --num_workers "${NUM_WORKERS}" --dtype fp16 \
+  --num_workers "${NUM_WORKERS}" \
+  --decode_retries "${DECODE_RETRIES}" --dtype fp16 \
   --log_every 100 --eval_every 1 --save_every 1 \
   "${EXTRA_ARGS[@]}"

@@ -29,6 +29,7 @@ from models.compact_decoder import CompactDecoder
 from models.compact_dit import CompactLatentDiT
 from models.flow_matching import OTCFM
 from data.video_dataset import SpatialVidDataset, collate_fn
+from data.loader_utils import multiprocessing_loader_kwargs
 from data.token_utils import strip_special_tokens
 from utils.training import (
     EMA,
@@ -470,6 +471,7 @@ def main():
         shuffle=(sampler is None), sampler=sampler,
         num_workers=args.num_workers, collate_fn=collate_fn,
         pin_memory=device_type == 'cuda', drop_last=True,
+        **multiprocessing_loader_kwargs(args.num_workers),
     )
 
     # ---- 4. Optimizer ----
