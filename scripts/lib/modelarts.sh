@@ -39,7 +39,11 @@ stage_resume_checkpoint() {
     obs://*|s3://*)
       mkdir -p "$(dirname "${local_path}")"
       "${PYTHON_BIN}" "${PROJECT}/scripts/moxing_transfer.py" \
-        "${source}" "${local_path}"
+        "${source}" "${local_path}" >&2
+      if [[ ! -s "${local_path}" ]]; then
+        echo "Resume checkpoint copy produced no file: ${source}" >&2
+        return 1
+      fi
       printf '%s' "${local_path}"
       ;;
     *)
@@ -62,11 +66,14 @@ resolve_resume_checkpoint() {
     return
   fi
   mkdir -p "$(dirname "${staged_path}")"
+  rm -f "${staged_path}"
   if "${PYTHON_BIN}" "${PROJECT}/scripts/moxing_transfer.py" \
-      "${remote_latest}" "${staged_path}" 2>/dev/null; then
+      "${remote_latest}" "${staged_path}" >&2 \
+      && [[ -s "${staged_path}" ]]; then
     printf '%s' "${staged_path}"
   else
     rm -f "${staged_path}"
+    echo "No remote checkpoint found; starting a new run." >&2
   fi
 }
 
@@ -85,6 +92,10 @@ ensure_local_checkpoint() {
   echo "Staging ${label}: ${remote_path} -> ${local_path}"
   "${PYTHON_BIN}" "${PROJECT}/scripts/moxing_transfer.py" \
     "${remote_path}" "${local_path}"
+  if [[ ! -s "${local_path}" ]]; then
+    echo "Failed to stage ${label}: ${remote_path}" >&2
+    exit 1
+  fi
 }
 
 require_scale_cluster() {
