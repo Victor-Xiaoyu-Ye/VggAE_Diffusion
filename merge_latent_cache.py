@@ -166,8 +166,10 @@ def main():
                     raise FileNotFoundError(success_path)
             except Exception as exc:
                 raise RuntimeError(
-                    f"Cache partition is incomplete (cannot copy _SUCCESS): "
-                    f"{partition_dir}") from exc
+                    f"Cache partition is incomplete (missing _SUCCESS): "
+                    f"{partition_dir}. Finish or resume "
+                    "scripts/scale/03_cache_latents.sh before running merge."
+                ) from exc
         elif not os.path.exists(success_path):
             raise RuntimeError(
                 f"Cache partition is incomplete (missing _SUCCESS): "
