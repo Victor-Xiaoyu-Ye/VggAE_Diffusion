@@ -224,11 +224,12 @@ def load_models(args, device, compute_dtype):
     checkpoint = torch.load(
         args.autoencoder_ckpt, map_location="cpu", weights_only=False)
     tokenizer.load_state_dict(checkpoint["tokenizer"])
-    tokenizer.disable_temporal_mixer = (
+    disable_temporal_mixer = (
         args.disable_temporal_mixer
         or bool(checkpoint.get("args", {}).get(
             "disable_temporal_mixer", False))
     )
+    tokenizer.set_temporal_mixer_enabled(not disable_temporal_mixer)
     tokenizer.eval()
     for parameter in tokenizer.parameters():
         parameter.requires_grad_(False)
