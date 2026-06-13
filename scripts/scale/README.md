@@ -104,6 +104,12 @@ top of each script.
 Video files are copied individually through MoXing into
 `MOX_VIDEO_CACHE_DIR` because OpenCV requires a local seekable path. Compact
 latent tar shards stay on OBS and are streamed with `moxing.file.File`.
+All active DataLoaders use the `spawn` multiprocessing context so workers do
+not inherit a MemArts gRPC handle initialized by the parent process. Missing
+or corrupt MP4 objects use deterministic replacement samples and are counted
+as `data/decode_replacements` in `metrics.jsonl` and TensorBoard. Treat a
+replacement rate above 1% as a dataset-copy/layout failure rather than normal
+training noise.
 
 The representation checkpoint is a data contract. Do not continue changing the
 tokenizer after latent caching starts. If the tokenizer changes, rebuild the

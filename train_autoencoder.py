@@ -33,6 +33,7 @@ from streamvggt.models.streamvggt import StreamVGGT
 from models.generative_tokenizer import GenerativeTokenizer
 from models.compact_decoder import CompactDecoder
 from data.video_dataset import SpatialVidDataset, collate_fn
+from data.loader_utils import multiprocessing_loader_kwargs
 from data.token_utils import strip_special_tokens
 from utils.training import (
     EMA,
@@ -131,6 +132,9 @@ def parse_args():
     p.add_argument('--clip_duration_seconds', type=float, default=0.0,
                    help='Fixed clip duration; takes precedence over frame span')
     p.add_argument('--num_workers', type=int, default=4)
+    p.add_argument(
+        '--decode_retries', type=int, default=8,
+        help='Deterministic replacement videos tried after staging/decode failure')
 
     # Eval
     p.add_argument('--log_every', type=int, default=100)
@@ -415,6 +419,7 @@ def main():
         depth_root=args.depth_root,
         max_frame_span=args.max_frame_span,
         clip_duration_seconds=args.clip_duration_seconds,
+        decode_retries=args.decode_retries,
     )
     sampler = torch.utils.data.distributed.DistributedSampler(dataset) if use_ddp else None
     dataloader = DataLoader(
@@ -422,6 +427,7 @@ def main():
         shuffle=(sampler is None), sampler=sampler,
         num_workers=args.num_workers, collate_fn=collate_fn,
         pin_memory=device_type == 'cuda', drop_last=True,
+        **multiprocessing_loader_kwargs(args.num_workers),
     )
 
     # Capture a fixed held-out sample for periodic reconstruction tracking.
@@ -517,6 +523,7 @@ def main():
         decoder.train()
         epoch_loss = 0.0
         num_batches = 0
+        epoch_decode_replacements = 0
         if use_ddp:
             sampler.set_epoch(epoch)
         optimizer.zero_grad()
@@ -524,6 +531,8 @@ def main():
         pbar = tqdm(dataloader, desc=f'Epoch {epoch}/{args.epochs}', dynamic_ncols=True)
 
         for batch_idx, batch in enumerate(pbar):
+            epoch_decode_replacements += batch.get(
+                'decode_replacements', 0)
             frames = batch['frames'].to(device=device, dtype=dtype)
 
             # ---- Encode ----
@@ -676,14 +685,27 @@ def main():
             global_step += 1
 
         avg_loss = epoch_loss / max(num_batches, 1)
+        decode_replacements = torch.tensor(
+            epoch_decode_replacements, device=device, dtype=torch.long)
+        if use_ddp:
+            torch.distributed.all_reduce(
+                decode_replacements, op=torch.distributed.ReduceOp.SUM)
+        total_decode_replacements = int(decode_replacements.item())
         if main_process:
-            print(f'  Epoch {epoch} | avg_loss={avg_loss:.4f} | global_step={global_step}')
+            print(
+                f'  Epoch {epoch} | avg_loss={avg_loss:.4f} | '
+                f'decode_replacements={total_decode_replacements} | '
+                f'global_step={global_step}')
             if writer:
                 writer.add_scalar('train/epoch_loss', avg_loss, epoch)
+                writer.add_scalar(
+                    'data/decode_replacements',
+                    total_decode_replacements, epoch)
             append_metrics(metrics_path, {
                 'step': global_step,
                 'epoch': epoch,
                 'train/epoch_loss': avg_loss,
+                'data/decode_replacements': total_decode_replacements,
             })
 
         tok = tokenizer.module if use_ddp else tokenizer

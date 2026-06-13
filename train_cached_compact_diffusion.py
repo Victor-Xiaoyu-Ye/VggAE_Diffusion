@@ -16,6 +16,7 @@ from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 
 from data.latent_shard_dataset import LatentShardDataset, latent_collate_fn
+from data.loader_utils import multiprocessing_loader_kwargs
 from models.compact_dit import CompactLatentDiT
 from models.flow_matching import OTCFM
 from utils.distributed import is_main_process, setup_ddp
@@ -468,7 +469,7 @@ def main():
         collate_fn=latent_collate_fn,
         pin_memory=device_type == "cuda",
         drop_last=True,
-        persistent_workers=args.num_workers > 0,
+        **multiprocessing_loader_kwargs(args.num_workers),
     )
 
     model = CompactLatentDiT(

@@ -25,6 +25,7 @@ from models.i0_decoder import (
     load_i0_decoder_state_dict,
 )
 from data.video_dataset import SpatialVidDataset, collate_fn
+from data.loader_utils import multiprocessing_loader_kwargs
 from data.token_utils import strip_special_tokens
 from utils.training import (
     EMA,
@@ -334,7 +335,8 @@ def main():
     sampler = torch.utils.data.distributed.DistributedSampler(dataset) if use_ddp else None
     loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=(sampler is None), sampler=sampler,
                         num_workers=args.num_workers, collate_fn=collate_fn,
-                        pin_memory=device_type == 'cuda', drop_last=True)
+                        pin_memory=device_type == 'cuda', drop_last=True,
+                        **multiprocessing_loader_kwargs(args.num_workers))
 
     # Eval video
     eval_video = None

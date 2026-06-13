@@ -18,6 +18,7 @@ from torch.utils.data import DataLoader, Dataset, Subset
 from tqdm import tqdm
 
 from data.token_utils import strip_special_tokens
+from data.loader_utils import multiprocessing_loader_kwargs
 from data.video_dataset import SpatialVidDataset, collate_fn
 from models.generative_tokenizer import GenerativeTokenizer
 from streamvggt.models.streamvggt import StreamVGGT
@@ -390,6 +391,7 @@ def main():
         collate_fn=safe_collate_fn,
         pin_memory=device_type == "cuda",
         drop_last=False,
+        **multiprocessing_loader_kwargs(args.num_workers),
     )
 
     # Long 10M runs cannot accumulate sum/sum_sq accurately in NPU FP32.
