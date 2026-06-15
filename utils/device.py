@@ -25,6 +25,22 @@ def get_device(local_rank=0):
     return torch.device(f'{name}:{local_rank}' if local_rank >= 0 else name)
 
 
+def configure_backend_compatibility(device_type=None):
+    """Apply backend-specific compatibility settings once per process."""
+    device_type = device_type or get_device_name()
+    if device_type != 'npu':
+        return
+
+    # PyTorch's inference-only MultiheadAttention fastpath fuses QKV and its
+    # bias. Ascend currently rejects FP16 activations with FP32 master-weight
+    # biases, even under autocast. The regular attention path supports this
+    # mixed-precision setup and is also the path used successfully in training.
+    mha_backend = getattr(torch.backends, 'mha', None)
+    set_fastpath = getattr(mha_backend, 'set_fastpath_enabled', None)
+    if set_fastpath is not None:
+        set_fastpath(False)
+
+
 def resolve_dtype(requested='bf16'):
     """Resolve a requested training dtype for the active backend."""
     if requested == 'fp32' or get_device_name() == 'cpu':

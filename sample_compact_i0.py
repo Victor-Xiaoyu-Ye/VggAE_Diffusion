@@ -17,6 +17,7 @@ from models.generative_tokenizer import GenerativeTokenizer
 from models.i0_decoder import I0ConditionalDecoder, load_i0_decoder_state_dict
 from streamvggt.models.streamvggt import StreamVGGT
 from utils.device import (
+    configure_backend_compatibility,
     get_device,
     get_device_name,
     manual_seed_all,
@@ -132,6 +133,7 @@ def main():
     torch.manual_seed(args.seed)
     manual_seed_all(args.seed)
     device_type = get_device_name()
+    configure_backend_compatibility(device_type)
     device = get_device()
     dtype = resolve_dtype(args.dtype)
 

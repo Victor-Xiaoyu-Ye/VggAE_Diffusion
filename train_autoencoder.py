@@ -17,6 +17,7 @@ The resulting z_g should be:
 """
 
 import argparse
+import json
 import os
 import random
 
@@ -46,6 +47,7 @@ from utils.training import (
 )
 from utils.distributed import setup_ddp, is_main_process
 from utils.device import (
+    configure_backend_compatibility,
     create_grad_scaler,
     get_device,
     get_device_name,
@@ -347,6 +349,7 @@ def main():
 
     use_ddp, rank, local_rank, world_size = setup_ddp()
     device_type = get_device_name()
+    configure_backend_compatibility(device_type)
     device = get_device(local_rank)
     main_process = is_main_process()
 
@@ -363,6 +366,8 @@ def main():
 
     set_seed(args.seed + rank)
     os.makedirs(args.output_dir, exist_ok=True)
+    decode_error_path = os.path.join(
+        args.output_dir, 'logs', f'decode_errors_rank{rank:05d}.jsonl')
 
     # ---- 1. Load frozen encoder ----
     if main_process:
@@ -533,6 +538,19 @@ def main():
         for batch_idx, batch in enumerate(pbar):
             epoch_decode_replacements += batch.get(
                 'decode_replacements', 0)
+            if batch.get('decode_errors'):
+                os.makedirs(os.path.dirname(decode_error_path), exist_ok=True)
+                with open(decode_error_path, 'a', encoding='utf-8') as f:
+                    for error in batch['decode_errors']:
+                        f.write(json.dumps({
+                            'epoch': epoch,
+                            'batch_idx': batch_idx,
+                            'requested_video_id': batch.get(
+                                'requested_video_id', []),
+                            'replacement_video_id': batch.get(
+                                'video_id', []),
+                            'error': error,
+                        }, ensure_ascii=True) + '\n')
             frames = batch['frames'].to(device=device, dtype=dtype)
 
             # ---- Encode ----

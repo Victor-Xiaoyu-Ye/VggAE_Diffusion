@@ -21,6 +21,7 @@ from models.compact_dit import CompactLatentDiT
 from models.flow_matching import OTCFM
 from utils.distributed import is_main_process, setup_ddp
 from utils.device import (
+    configure_backend_compatibility,
     create_grad_scaler,
     empty_cache,
     get_device,
@@ -392,6 +393,7 @@ def main():
 
     use_ddp, rank, local_rank, world_size = setup_ddp()
     device_type = get_device_name()
+    configure_backend_compatibility(device_type)
     if device_type == "cpu":
         raise RuntimeError(
             "Cached diffusion training requires an accelerator")

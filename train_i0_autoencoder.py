@@ -37,6 +37,7 @@ from utils.training import (
 )
 from utils.distributed import setup_ddp, is_main_process
 from utils.device import (
+    configure_backend_compatibility,
     create_grad_scaler,
     get_device,
     get_device_name,
@@ -267,6 +268,7 @@ def main():
         raise ValueError('log/save/eval intervals must be positive')
     use_ddp, rank, local_rank, world_size = setup_ddp()
     device_type = get_device_name()
+    configure_backend_compatibility(device_type)
     device = get_device(local_rank)
     main_process = is_main_process()
     dtype = resolve_dtype(args.dtype)

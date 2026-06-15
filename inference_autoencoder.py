@@ -23,7 +23,12 @@ from models.generative_tokenizer import GenerativeTokenizer
 from models.compact_decoder import CompactDecoder
 from data.video_dataset import SpatialVidDataset, collate_fn
 from data.token_utils import strip_special_tokens
-from utils.device import get_device, get_device_name, resolve_dtype
+from utils.device import (
+    configure_backend_compatibility,
+    get_device,
+    get_device_name,
+    resolve_dtype,
+)
 
 
 def parse_args():
@@ -158,6 +163,7 @@ def save_comparison_grid(original, reconstructed, out_path):
 def main():
     args = parse_args()
     device_type = get_device_name()
+    configure_backend_compatibility(device_type)
     if device_type == 'cpu':
         raise RuntimeError('Autoencoder inference requires an accelerator')
     device = get_device(0)
