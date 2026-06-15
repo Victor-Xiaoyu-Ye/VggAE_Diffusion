@@ -22,6 +22,7 @@ from streamvggt.models.streamvggt import StreamVGGT
 from models.generative_tokenizer import GenerativeTokenizer
 from models.compact_decoder import CompactDecoder
 from data.video_dataset import SpatialVidDataset, collate_fn
+from data.loader_utils import multiprocessing_loader_kwargs
 from data.token_utils import strip_special_tokens
 from utils.device import (
     configure_backend_compatibility,
@@ -39,6 +40,7 @@ def parse_args():
     p.add_argument('--csv', type=str, default='')
     p.add_argument('--video_root', type=str, default='')
     p.add_argument('--num_videos', type=int, default=10)
+    p.add_argument('--num_workers', type=int, default=0)
     p.add_argument('--seq_len', type=int, default=8)
     p.add_argument('--clip_duration_seconds', type=float, default=0.0)
     p.add_argument('--target_size', type=int, default=518)
@@ -91,6 +93,22 @@ def build_v2_decoder(base_dim, output_depth, args):
 
 
 def load_model(args, device, compute_dtype):
+    ckpt = torch.load(
+        args.checkpoint, map_location='cpu', weights_only=False)
+    checkpoint_args = ckpt.get('args', {})
+    for name in (
+            'latent_dim', 'latent_grid', 'seq_len', 'target_size',
+            'token_dim', 'input_grid'):
+        if name in checkpoint_args:
+            setattr(args, name, int(checkpoint_args[name]))
+    if 'levels' in checkpoint_args:
+        args.levels = [int(level) for level in checkpoint_args['levels']]
+    print(
+        'Checkpoint config: '
+        f'latent={args.latent_dim}x{args.latent_grid}x{args.latent_grid}, '
+        f'seq_len={args.seq_len}, target_size={args.target_size}, '
+        f'levels={args.levels}')
+
     encoder = StreamVGGT(img_size=args.target_size, patch_size=14, embed_dim=1024)
     state = torch.load(args.encoder_ckpt, map_location='cpu')
     encoder.load_state_dict(state, strict=False)
@@ -104,8 +122,6 @@ def load_model(args, device, compute_dtype):
         seq_len=args.seq_len, input_grid=args.input_grid,
     ).to(device=device).eval()
 
-    ckpt = torch.load(
-        args.checkpoint, map_location='cpu', weights_only=False)
     tokenizer.load_state_dict(ckpt['tokenizer'])
 
     # Auto-detect decoder version and base_dim from checkpoint
@@ -203,9 +219,12 @@ def main():
             clip_duration_seconds=args.clip_duration_seconds,
         )
         loader = torch.utils.data.DataLoader(
-            dataset, batch_size=1, shuffle=False, num_workers=2, collate_fn=collate_fn,
+            dataset, batch_size=1, shuffle=False,
+            num_workers=args.num_workers, collate_fn=collate_fn,
+            **multiprocessing_loader_kwargs(args.num_workers),
         )
         psnr_list = []
+        records = []
         for i, batch in enumerate(tqdm(loader, desc='Reconstructing')):
             if i >= args.num_videos:
                 break
@@ -219,12 +238,34 @@ def main():
             save_comparison_grid(original, recon, out_path)
             if args.compute_psnr:
                 mse = F.mse_loss(recon, original).item()
-                psnr_list.append(-10 * np.log10(mse) if mse > 0 else float('inf'))
+                psnr = -10 * np.log10(mse) if mse > 0 else float('inf')
+                psnr_list.append(psnr)
+            else:
+                psnr = None
+            records.append({
+                'index': i,
+                'requested_video_id': batch['requested_video_id'][0],
+                'video_id': batch['video_id'][0],
+                'decode_replacements': int(batch['decode_replacements']),
+                'decode_errors': batch['decode_errors'],
+                'psnr': float(psnr) if psnr is not None else None,
+                'image': os.path.basename(out_path),
+            })
         if psnr_list:
             avg_psnr = np.mean(psnr_list)
             print(f'\nAverage PSNR over {len(psnr_list)} videos: {avg_psnr:.2f} dB')
-            with open(os.path.join(args.output_dir, 'psnr.json'), 'w') as f:
-                json.dump({'psnr_per_video': psnr_list, 'avg_psnr': float(avg_psnr)}, f, indent=2)
+        else:
+            avg_psnr = None
+        with open(os.path.join(args.output_dir, 'metrics.json'), 'w') as f:
+            json.dump({
+                'checkpoint': args.checkpoint,
+                'num_videos': len(records),
+                'avg_psnr': (
+                    float(avg_psnr) if avg_psnr is not None else None),
+                'decode_replacements': sum(
+                    record['decode_replacements'] for record in records),
+                'videos': records,
+            }, f, indent=2)
     else:
         print('ERROR: specify --video_path or --csv')
         sys.exit(1)

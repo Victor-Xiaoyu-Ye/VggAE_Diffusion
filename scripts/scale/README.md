@@ -85,6 +85,15 @@ SpatialVID CSV. No manually prepared evaluation CSV is required.
 8. `06_sample_compact_dit.sh`
    - Generate seven future frames from one observed RGB frame.
 
+Geometry-autoencoder inference can be run independently with:
+
+```bash
+bash scripts/scale/inference_geometry_autoencoder.sh
+```
+
+It reads held-out SpatialVID videos from OBS on demand and uploads
+reconstruction grids plus `metrics.json` to the configured output URL.
+
 At 256 channels, each eight-frame fp16 cache sample is about 1.27 MiB. The
 1,461,448-clip cache therefore needs roughly 1.8 TiB before tar overhead and
 metadata. The configured `/cache` budget is used only for source MP4 files
