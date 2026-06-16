@@ -31,7 +31,7 @@ from data.token_utils import (
     select_levels_mean,
     strip_special_tokens,
 )
-from utils.training import EMA, build_optimizer, build_scheduler
+from utils.training import EMA, ThroughputMeter, build_optimizer, build_scheduler
 from utils.distributed import setup_ddp, is_main_process
 from utils.decoder_loader import load_decoder
 
@@ -340,11 +340,13 @@ def main():
         if use_ddp:
             sampler.set_epoch(epoch)
         optimizer.zero_grad()
+        throughput_meter = ThroughputMeter()
 
         pbar = tqdm(dataloader, desc=f"Epoch {epoch}/{args.epochs}", dynamic_ncols=True)
 
         for batch_idx, batch in enumerate(pbar):
             frames = batch["frames"].to(device=device, dtype=torch.bfloat16)
+            throughput_meter.update(frames.shape[0])
 
             with torch.no_grad():
                 tokens_list, psi = encoder(frames)
@@ -408,11 +410,15 @@ def main():
                 scheduler.step()
                 global_step += 1
                 pbar.set_postfix(loss=f"{loss_val:.6f}", flow=f"{flow_loss.item():.6f}" if use_decoder_aux else f"{loss_val:.6f}",
-                                 recon=f"{recon_loss.item():.4f}", lr=f"{optimizer.param_groups[0]['lr']:.2e}")
+                                 recon=f"{recon_loss.item():.4f}", lr=f"{optimizer.param_groups[0]['lr']:.2e}",
+                                 DI_throughput=throughput_meter.format())
 
                 if main_process and writer is not None and global_step % 50 == 0:
                     writer.add_scalar("train/loss", loss_val, global_step)
                     writer.add_scalar("train/lr", optimizer.param_groups[0]["lr"], global_step)
+                    writer.add_scalar(
+                        "train/DI_throughput",
+                        throughput_meter.rate(), global_step)
 
         if num_batches > 0 and num_batches % args.accum_steps != 0:
             if not use_bf16:
@@ -429,7 +435,10 @@ def main():
 
         avg_loss = epoch_loss / max(num_batches, 1)
         if main_process:
-            print(f"  Epoch {epoch}/{args.epochs} | avg loss: {avg_loss:.6f} | steps: {global_step}")
+            print(
+                f"  Epoch {epoch}/{args.epochs} | avg loss: {avg_loss:.6f} | "
+                f"steps: {global_step} | "
+                f"DI_throughput: {throughput_meter.rate():.2f} samples/s/npu")
             if writer is not None:
                 writer.add_scalar("train/epoch_loss", avg_loss, epoch)
 

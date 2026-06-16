@@ -1,6 +1,7 @@
 import json
 import os
 import random
+import time
 
 import numpy as np
 import torch
@@ -33,6 +34,24 @@ class EMA:
     def to(self, device):
         self.shadow = {k: v.to(device) for k, v in self.shadow.items()}
         return self
+
+
+class ThroughputMeter:
+    """Per-process sample throughput meter for train progress logs."""
+
+    def __init__(self):
+        self.start_time = time.time()
+        self.samples = 0
+
+    def update(self, sample_count):
+        self.samples += int(sample_count)
+
+    def rate(self):
+        elapsed = max(time.time() - self.start_time, 1e-12)
+        return self.samples / elapsed
+
+    def format(self):
+        return f"{self.rate():.2f} samples/s/npu"
 
 
 def atomic_torch_save(payload, path):

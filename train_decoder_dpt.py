@@ -35,7 +35,7 @@ from data.token_utils import (
     normalize_tokens,
     strip_special_tokens,
 )
-from utils.training import EMA, build_optimizer, build_scheduler
+from utils.training import EMA, ThroughputMeter, build_optimizer, build_scheduler
 from utils.distributed import setup_ddp, is_main_process
 
 
@@ -238,11 +238,13 @@ def train_one_epoch(
     optimizer.zero_grad()
 
     _decoder_raw = decoder.module if use_ddp else decoder
+    throughput_meter = ThroughputMeter()
 
     pbar = tqdm(train_loader, desc=f"Epoch {epoch + 1}", dynamic_ncols=True)
 
     for batch_idx, batch in enumerate(pbar):
         frames = batch["frames"].to(device, dtype=torch.float16)  # [B, S, 3, H, W]
+        throughput_meter.update(frames.shape[0])
         B, S = frames.shape[:2]
 
         # ---- Encoder forward (frozen, bf16) ----
@@ -378,6 +380,9 @@ def train_one_epoch(
             if is_main_process() and writer is not None and global_step % 10 == 0:
                 writer.add_scalar("step/loss", total_loss / max(num_batches, 1), global_step)
                 writer.add_scalar("step/lr", scheduler.get_last_lr()[0], global_step)
+                writer.add_scalar(
+                    "step/DI_throughput",
+                    throughput_meter.rate(), global_step)
 
             # Update progress bar
             if (batch_idx + 1) % 5 == 0:
@@ -386,6 +391,7 @@ def train_one_epoch(
                     "l1": f"{total_l1 / max(num_batches, 1):.4f}",
                     "temp": f"{total_temporal / max(num_batches, 1):.4f}",
                     "lr": f"{scheduler.get_last_lr()[0]:.2e}",
+                    "DI_throughput": throughput_meter.format(),
                 }
                 if output_depth:
                     postfix["depth"] = f"{total_depth / max(num_batches, 1):.4f}"

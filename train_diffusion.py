@@ -50,7 +50,7 @@ from data.token_utils import (
     select_levels,
     strip_special_tokens,
 )
-from utils.training import EMA, build_optimizer, build_scheduler
+from utils.training import EMA, ThroughputMeter, build_optimizer, build_scheduler
 from utils.distributed import setup_ddp, is_main_process
 
 
@@ -430,12 +430,14 @@ def main():
             sampler.set_epoch(epoch)
 
         optimizer.zero_grad()
+        throughput_meter = ThroughputMeter()
 
         pbar = tqdm(dataloader, desc=f"Epoch {epoch}/{args.epochs}", dynamic_ncols=True)
 
         for batch_idx, batch in enumerate(pbar):
             # --- Load frames ---
             frames = batch["frames"].to(device=device, dtype=torch.float16)  # [B, S, 3, H, W]
+            throughput_meter.update(frames.shape[0])
 
             # --- Encode with frozen StreamVGGT ---
             with torch.no_grad():
@@ -535,6 +537,7 @@ def main():
                     flow=f"{flow_loss.item():.6f}",
                     recon=f"{recon_loss.item():.4f}",
                     lr=f"{optimizer.param_groups[0]['lr']:.2e}",
+                    DI_throughput=throughput_meter.format(),
                 )
 
                 # Logging
@@ -542,12 +545,16 @@ def main():
                     lr_now = optimizer.param_groups[0]["lr"]
                     print(f"  [epoch {epoch} step {global_step}] "
                           f"loss={loss_val:.6f}, flow={flow_loss.item():.6f}, "
-                          f"recon={recon_loss.item():.4f}, lr={lr_now:.2e}")
+                          f"recon={recon_loss.item():.4f}, lr={lr_now:.2e}, "
+                          f"DI_throughput: {throughput_meter.rate():.2f} samples/s/npu")
                     if writer is not None:
                         writer.add_scalar("train/loss", loss_val, global_step)
                         writer.add_scalar("train/flow_loss", flow_loss.item(), global_step)
                         writer.add_scalar("train/recon_loss", recon_loss.item(), global_step)
                         writer.add_scalar("train/lr", lr_now, global_step)
+                        writer.add_scalar(
+                            "train/DI_throughput",
+                            throughput_meter.rate(), global_step)
 
         if num_batches > 0 and num_batches % args.accum_steps != 0:
             if not use_bf16:

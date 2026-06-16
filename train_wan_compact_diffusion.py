@@ -26,7 +26,7 @@ from models.wan_compact_adapter import WanCompactAdapter
 from models.flow_matching import OTCFM
 from data.video_dataset import SpatialVidDataset, collate_fn
 from data.token_utils import strip_special_tokens
-from utils.training import EMA, build_optimizer, build_scheduler
+from utils.training import EMA, ThroughputMeter, build_optimizer, build_scheduler
 from utils.distributed import setup_ddp, is_main_process
 
 
@@ -263,10 +263,12 @@ def main():
         epoch_loss = 0.0; num_batches = 0
         if use_ddp: sampler.set_epoch(epoch)
         optimizer.zero_grad()
+        throughput_meter = ThroughputMeter()
 
         pbar = tqdm(dataloader, desc=f'Epoch {epoch}/{args.epochs}', dynamic_ncols=True)
         for batch_idx, batch in enumerate(pbar):
             frames = batch['frames'].to(device=device, dtype=torch.bfloat16)
+            throughput_meter.update(frames.shape[0])
 
             with torch.no_grad():
                 tokens_list, psi = encoder(frames)
@@ -312,10 +314,14 @@ def main():
                 ema.update(model.module if use_ddp else model)
                 scheduler.step(); global_step += 1
                 pbar.set_postfix(loss=f'{loss.item():.4f}',
-                                 dec=f'{dec_loss.item():.4f}' if dec_loss.item() > 0 else '')
+                                 dec=f'{dec_loss.item():.4f}' if dec_loss.item() > 0 else '',
+                                 DI_throughput=throughput_meter.format())
 
                 if main_process and writer and global_step % 50 == 0:
                     writer.add_scalar('train/loss', loss.item(), global_step)
+                    writer.add_scalar(
+                        'train/DI_throughput',
+                        throughput_meter.rate(), global_step)
 
         if num_batches % args.accum_steps != 0:
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)

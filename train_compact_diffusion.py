@@ -33,6 +33,7 @@ from data.loader_utils import multiprocessing_loader_kwargs
 from data.token_utils import strip_special_tokens
 from utils.training import (
     EMA,
+    ThroughputMeter,
     append_metrics,
     atomic_torch_save,
     build_optimizer,
@@ -679,11 +680,13 @@ def main():
         if use_ddp:
             sampler.set_epoch(epoch)
         optimizer.zero_grad()
+        throughput_meter = ThroughputMeter()
 
         pbar = tqdm(dataloader, desc=f'Epoch {epoch}/{args.epochs}', dynamic_ncols=True)
 
         for batch_idx, batch in enumerate(pbar):
             frames = batch['frames'].to(device=device, dtype=dtype)
+            throughput_meter.update(frames.shape[0])
 
             # ---- Encode → Tokenize → z_g ----
             with torch.no_grad(), autocast(
@@ -809,6 +812,7 @@ def main():
                 pbar.set_postfix(
                     loss=f'{loss_val:.4f}',
                     dec=f'{dec_loss.item():.4f}' if dec_loss.item() > 0 else '',
+                    DI_throughput=throughput_meter.format(),
                 )
 
                 if main_process and global_step % args.log_every == 0:
@@ -822,6 +826,7 @@ def main():
                         'train/target_std': x1.float().std().item(),
                         'train/grad_norm': float(grad_norm),
                         'train/lr': optimizer.param_groups[0]['lr'],
+                        'train/DI_throughput': throughput_meter.rate(),
                     }
                     if writer:
                         for name, value in train_metrics.items():

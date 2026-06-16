@@ -12,6 +12,7 @@ import torch
 import torch.distributed as dist
 import torch.nn as nn
 from PIL import Image
+from tqdm import tqdm
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 
@@ -31,6 +32,7 @@ from utils.device import (
 )
 from utils.training import (
     EMA,
+    ThroughputMeter,
     append_metrics,
     atomic_torch_save,
     build_optimizer,
@@ -539,6 +541,11 @@ def main():
     data_iterator = iter(dataloader)
     optimizer.zero_grad(set_to_none=True)
     last_preview_step = -1
+    throughput_meter = ThroughputMeter()
+    pbar = tqdm(
+        total=args.max_steps, initial=global_step,
+        desc="Training cached CompactLatentDiT",
+        disable=not is_main_process(), dynamic_ncols=True)
     while global_step < args.max_steps:
         accumulated_loss = torch.zeros((), device=device)
         for micro_step in range(args.accum_steps):
@@ -547,6 +554,7 @@ def main():
                 device=device, dtype=torch.float32, non_blocking=True)
             cond_raw = batch["cond"].to(
                 device=device, dtype=torch.float32, non_blocking=True)
+            throughput_meter.update(target_raw.shape[0])
             if target_raw.shape[1:] != (
                     args.seq_len, args.latent_grid ** 2, args.latent_dim):
                 raise ValueError(
@@ -588,6 +596,7 @@ def main():
         base_model = model.module if use_ddp else model
         ema.update(base_model)
         global_step += 1
+        pbar.update(1)
 
         mean_loss = accumulated_loss / args.accum_steps
         if use_ddp:
@@ -597,18 +606,26 @@ def main():
         if is_main_process() and global_step % args.log_every == 0:
             loss_value = mean_loss.item()
             lr = optimizer.param_groups[0]["lr"]
+            throughput = throughput_meter.rate()
             print(
                 f"step={global_step} loss={loss_value:.6f} "
-                f"lr={lr:.3e} grad_norm={float(grad_norm):.3f}")
+                f"lr={lr:.3e} grad_norm={float(grad_norm):.3f} "
+                f"DI_throughput: {throughput:.2f} samples/s/npu")
+            pbar.set_postfix(
+                loss=f"{loss_value:.4f}",
+                DI_throughput=throughput_meter.format())
             writer.add_scalar("train/loss", loss_value, global_step)
             writer.add_scalar("train/lr", lr, global_step)
             writer.add_scalar(
                 "train/grad_norm", float(grad_norm), global_step)
+            writer.add_scalar(
+                "train/DI_throughput", throughput, global_step)
             append_metrics(metrics_path, {
                 "step": global_step,
                 "train/loss": loss_value,
                 "train/lr": lr,
                 "train/grad_norm": float(grad_norm),
+                "train/DI_throughput": throughput,
             })
 
         save_due = global_step % args.save_every == 0
@@ -661,6 +678,8 @@ def main():
                 del training_state
         if use_ddp and should_eval:
             dist.barrier()
+
+    pbar.close()
 
     if is_main_process():
         save_checkpoint(

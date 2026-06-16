@@ -29,6 +29,7 @@ from data.loader_utils import multiprocessing_loader_kwargs
 from data.token_utils import strip_special_tokens
 from utils.training import (
     EMA,
+    ThroughputMeter,
     append_metrics,
     atomic_torch_save,
     build_scheduler,
@@ -423,12 +424,14 @@ def main():
         epoch_loss, n_batches, epoch_decode_replacements = 0.0, 0, 0
         if use_ddp: sampler.set_epoch(epoch)
         optimizer.zero_grad()
+        throughput_meter = ThroughputMeter()
 
         pbar = tqdm(loader, desc=f'Epoch {epoch}/{args.epochs}', dynamic_ncols=True)
         for batch_idx, batch in enumerate(pbar):
             epoch_decode_replacements += batch.get(
                 'decode_replacements', 0)
             frames = batch['frames'].to(device, dtype=dtype)
+            throughput_meter.update(frames.shape[0])
             # Keep the conditioning distribution identical at train and inference.
             I_A = frames[:, 0:1]  # [B, 1, 3, H, W]
             I_B_frames = frames  # all frames for geometry
@@ -474,7 +477,11 @@ def main():
             else:
                 scaled_loss.backward()
             epoch_loss += loss.item(); n_batches += 1
-            pbar.set_postfix(l1=f'{l1.item():.4f}', lpips=f'{lpips_loss.item():.4f}')
+            pbar.set_postfix(
+                l1=f'{l1.item():.4f}',
+                lpips=f'{lpips_loss.item():.4f}',
+                DI_throughput=throughput_meter.format(),
+            )
 
             if (batch_idx + 1) % args.accum_steps == 0:
                 if use_scaler:
@@ -501,6 +508,7 @@ def main():
                         'train/lr_pretrained': next(
                             group['lr'] for group in optimizer.param_groups
                             if group['group_name'].startswith('pretrained_')),
+                        'train/DI_throughput': throughput_meter.rate(),
                     }
                     if writer:
                         for name, value in train_metrics.items():

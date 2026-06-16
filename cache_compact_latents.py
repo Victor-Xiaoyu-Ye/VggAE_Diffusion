@@ -41,6 +41,7 @@ from utils.moxing_io import (
     remote_exists,
     write_text,
 )
+from utils.training import ThroughputMeter
 
 
 def parse_args():
@@ -460,11 +461,15 @@ def main():
 
     successful_samples = torch.zeros(
         sample_index, device=device, dtype=torch.long)
+    throughput_meter = ThroughputMeter()
     progress = tqdm(
         dataloader, disable=not is_main_process(), desc="Caching compact latents")
     try:
         with torch.inference_mode():
             for batch in progress:
+                throughput_meter.update(batch["_batch_size"])
+                progress.set_postfix(
+                    DI_throughput=throughput_meter.format())
                 failed_samples.extend(batch["errors"])
                 if batch["frames"] is None:
                     processed_items += batch["_batch_size"]
