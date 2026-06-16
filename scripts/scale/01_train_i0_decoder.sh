@@ -8,6 +8,7 @@ source "${SCRIPT_DIR}/../lib/modelarts.sh"
 
 # ----------------------------- editable settings -----------------------------
 AUTOENCODER_CKPT="${SCALE_GEOMETRY_AE_CKPT}"
+AUTOENCODER_CKPT_URL="${AUTOENCODER_CKPT_URL:-obs://yw-ads-model-training-gy1/model-dev/pixelgeek/video-gen-ar/2026/06/13/34e65d0947a54a7b97ad903da70134d9/output/scale/geometry_autoencoder/checkpoint_latest.pt}"
 OUTPUT_DIR="${SCALE_ROOT}/i0_decoder"
 REMOTE_OUTPUT_DIR="${SCALE_REMOTE_ROOT}/i0_decoder"
 RESUME=""
@@ -30,7 +31,7 @@ configure_modelarts_distributed
 require_scale_cluster
 ensure_spatialvid_scale_splits
 ensure_local_checkpoint \
-  "${AUTOENCODER_CKPT}" "${SCALE_GEOMETRY_AE_CKPT_URL}" \
+  "${AUTOENCODER_CKPT}" "${AUTOENCODER_CKPT_URL}" \
   "scale geometry autoencoder checkpoint"
 
 EXTRA_ARGS=()

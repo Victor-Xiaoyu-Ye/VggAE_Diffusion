@@ -113,6 +113,8 @@ start_output_sync() {
   local remote_dir=$2
   MOX_SYNC_PID=""
   MOX_LOG_SYNC_PID=""
+  MOX_MIRROR_SYNC_PID=""
+  MOX_MIRROR_LOG_SYNC_PID=""
   if [[ -z "${remote_dir}" ]]; then
     return
   fi
@@ -127,6 +129,19 @@ start_output_sync() {
     "${local_dir}/logs" "${remote_node_logs}" --directory --watch \
     --interval "${OUTPUT_SYNC_SECONDS:-300}" &
   MOX_LOG_SYNC_PID=$!
+  local mirror_dir=""
+  if [[ -n "${MIRROR_RUN_ROOT:-}" && -n "${REMOTE_RUN_ROOT:-}" \
+        && "${MIRROR_RUN_ROOT%/}" != "${REMOTE_RUN_ROOT%/}" \
+        && "${remote_dir}" == "${REMOTE_RUN_ROOT}"* ]]; then
+    mirror_dir="${MIRROR_RUN_ROOT%/}${remote_dir#"${REMOTE_RUN_ROOT%/}"}"
+    local mirror_node_logs
+    mirror_node_logs=$(printf '%s/logs/node-%03d' \
+      "${mirror_dir%/}" "${NODE_RANK}")
+    "${PYTHON_BIN}" "${PROJECT}/scripts/moxing_transfer.py" \
+      "${local_dir}/logs" "${mirror_node_logs}" --directory --watch \
+      --interval "${OUTPUT_SYNC_SECONDS:-300}" &
+    MOX_MIRROR_LOG_SYNC_PID=$!
+  fi
   if [[ "${NODE_RANK}" -ne 0 ]]; then
     return
   fi
@@ -134,6 +149,12 @@ start_output_sync() {
     "${local_dir}" "${remote_dir}" --directory --watch \
     --interval "${OUTPUT_SYNC_SECONDS:-300}" &
   MOX_SYNC_PID=$!
+  if [[ -n "${mirror_dir}" ]]; then
+    "${PYTHON_BIN}" "${PROJECT}/scripts/moxing_transfer.py" \
+      "${local_dir}" "${mirror_dir}" --directory --watch \
+      --interval "${OUTPUT_SYNC_SECONDS:-300}" &
+    MOX_MIRROR_SYNC_PID=$!
+  fi
 }
 
 stop_output_sync() {
@@ -146,11 +167,26 @@ stop_output_sync() {
     kill "${MOX_LOG_SYNC_PID}" 2>/dev/null || true
     wait "${MOX_LOG_SYNC_PID}" 2>/dev/null || true
   fi
+  if [[ -n "${MOX_MIRROR_LOG_SYNC_PID:-}" ]]; then
+    kill "${MOX_MIRROR_LOG_SYNC_PID}" 2>/dev/null || true
+    wait "${MOX_MIRROR_LOG_SYNC_PID}" 2>/dev/null || true
+  fi
   local remote_node_logs
   remote_node_logs=$(printf '%s/logs/node-%03d' \
     "${remote_dir%/}" "${NODE_RANK}")
   "${PYTHON_BIN}" "${PROJECT}/scripts/moxing_transfer.py" \
     "${local_dir}/logs" "${remote_node_logs}" --directory || true
+  local mirror_dir=""
+  if [[ -n "${MIRROR_RUN_ROOT:-}" && -n "${REMOTE_RUN_ROOT:-}" \
+        && "${MIRROR_RUN_ROOT%/}" != "${REMOTE_RUN_ROOT%/}" \
+        && "${remote_dir}" == "${REMOTE_RUN_ROOT}"* ]]; then
+    mirror_dir="${MIRROR_RUN_ROOT%/}${remote_dir#"${REMOTE_RUN_ROOT%/}"}"
+    local mirror_node_logs
+    mirror_node_logs=$(printf '%s/logs/node-%03d' \
+      "${mirror_dir%/}" "${NODE_RANK}")
+    "${PYTHON_BIN}" "${PROJECT}/scripts/moxing_transfer.py" \
+      "${local_dir}/logs" "${mirror_node_logs}" --directory || true
+  fi
   if [[ "${NODE_RANK}" -ne 0 ]]; then
     return
   fi
@@ -158,8 +194,16 @@ stop_output_sync() {
     kill "${MOX_SYNC_PID}" 2>/dev/null || true
     wait "${MOX_SYNC_PID}" 2>/dev/null || true
   fi
+  if [[ -n "${MOX_MIRROR_SYNC_PID:-}" ]]; then
+    kill "${MOX_MIRROR_SYNC_PID}" 2>/dev/null || true
+    wait "${MOX_MIRROR_SYNC_PID}" 2>/dev/null || true
+  fi
   "${PYTHON_BIN}" "${PROJECT}/scripts/moxing_transfer.py" \
     "${local_dir}" "${remote_dir}" --directory || true
+  if [[ -n "${mirror_dir}" ]]; then
+    "${PYTHON_BIN}" "${PROJECT}/scripts/moxing_transfer.py" \
+      "${local_dir}" "${mirror_dir}" --directory || true
+  fi
 }
 
 run_torchrun() {

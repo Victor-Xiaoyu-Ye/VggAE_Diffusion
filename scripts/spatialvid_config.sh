@@ -29,8 +29,14 @@ GEOMETRY_AE_CKPT="${GEOMETRY_AE_CKPT:-${VGGAE_REF_ROOT}/checkpoints/geometry_aut
 # root declared below. Outside ModelArts, use the owner's output directory.
 PERSISTENT_OBS_ROOT="obs://yw-ads-training-gy1/data/external/personal/g00833899/y50046448"
 OUTPUT_URL="${OUTPUT_URL:-}"
-REMOTE_RUN_ROOT="${OUTPUT_URL:-${PERSISTENT_OBS_ROOT}/output}"
+PERSISTENT_RUN_ROOT="${PERSISTENT_OBS_ROOT}/output"
+REMOTE_RUN_ROOT="${OUTPUT_URL:-${PERSISTENT_RUN_ROOT}}"
 REMOTE_RUN_ROOT="${REMOTE_RUN_ROOT%/}"
+PERSISTENT_RUN_ROOT="${PERSISTENT_RUN_ROOT%/}"
+# When ModelArts provides OUTPUT_URL, outputs are written there and mirrored
+# once more to the owner directory below for reuse across jobs.
+MIRROR_RUN_ROOT="${MIRROR_RUN_ROOT:-${PERSISTENT_RUN_ROOT}}"
+MIRROR_RUN_ROOT="${MIRROR_RUN_ROOT%/}"
 
 # The cluster runtime prepares PATH before invoking bash.
 PYTHON_BIN="${PYTHON_BIN:-python}"
@@ -64,9 +70,9 @@ I0_DECODER_CKPT="${RUN_ROOT}/10k/i0_decoder/checkpoint_final.pt"
 OVERFIT_I0_DECODER_CKPT="${RUN_ROOT}/validation/i0_decoder_overfit/checkpoint_final.pt"
 OVERFIT_DIFFUSION_CKPT="${RUN_ROOT}/validation/compact_diffusion_overfit/checkpoint_final.pt"
 DIFFUSION_CKPT="${RUN_ROOT}/10k/compact_diffusion/checkpoint_final.pt"
-SCALE_GEOMETRY_AE_CKPT="${RUN_ROOT}/scale/geometry_autoencoder/checkpoint_final.pt"
-SCALE_I0_DECODER_CKPT="${RUN_ROOT}/scale/i0_decoder/checkpoint_final.pt"
-SCALE_DIFFUSION_CKPT="${RUN_ROOT}/scale/compact_dit/checkpoint_final.pt"
+SCALE_GEOMETRY_AE_CKPT="${RUN_ROOT}/scale/geometry_autoencoder/checkpoint_latest.pt"
+SCALE_I0_DECODER_CKPT="${RUN_ROOT}/scale/i0_decoder/checkpoint_latest.pt"
+SCALE_DIFFUSION_CKPT="${RUN_ROOT}/scale/compact_dit/checkpoint_latest.pt"
 
 # ============================================================================
 # DERIVED PATHS - normally do not edit
@@ -88,8 +94,8 @@ LATENT_CACHE_VERSION="vggae_streamvggt_256x18_v1"
 LATENT_CACHE_OBS_ROOT="${PERSISTENT_OBS_ROOT}/cache_latents/${LATENT_CACHE_VERSION}"
 
 SCALE_REMOTE_ROOT="${REMOTE_RUN_ROOT}/scale"
-SCALE_GEOMETRY_AE_CKPT_URL="${SCALE_REMOTE_ROOT}/geometry_autoencoder/checkpoint_final.pt"
-SCALE_I0_DECODER_CKPT_URL="${SCALE_REMOTE_ROOT}/i0_decoder/checkpoint_final.pt"
-SCALE_DIFFUSION_CKPT_URL="${SCALE_REMOTE_ROOT}/compact_dit/checkpoint_final.pt"
+SCALE_GEOMETRY_AE_CKPT_URL="${SCALE_GEOMETRY_AE_CKPT_URL:-${SCALE_REMOTE_ROOT}/geometry_autoencoder/checkpoint_latest.pt}"
+SCALE_I0_DECODER_CKPT_URL="${SCALE_I0_DECODER_CKPT_URL:-${SCALE_REMOTE_ROOT}/i0_decoder/checkpoint_latest.pt}"
+SCALE_DIFFUSION_CKPT_URL="${SCALE_DIFFUSION_CKPT_URL:-${SCALE_REMOTE_ROOT}/compact_dit/checkpoint_latest.pt}"
 SCALE_TRAIN_CACHE_DIR="${LATENT_CACHE_OBS_ROOT}/train"
 SCALE_EVAL_CACHE_DIR="${LATENT_CACHE_OBS_ROOT}/eval"
