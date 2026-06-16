@@ -30,6 +30,7 @@ from data.token_utils import strip_special_tokens
 from utils.training import (
     EMA,
     ThroughputMeter,
+    count_latent_tokens,
     append_metrics,
     atomic_torch_save,
     build_scheduler,
@@ -431,7 +432,6 @@ def main():
             epoch_decode_replacements += batch.get(
                 'decode_replacements', 0)
             frames = batch['frames'].to(device, dtype=dtype)
-            throughput_meter.update(frames.shape[0])
             # Keep the conditioning distribution identical at train and inference.
             I_A = frames[:, 0:1]  # [B, 1, 3, H, W]
             I_B_frames = frames  # all frames for geometry
@@ -449,6 +449,7 @@ def main():
                     i0_z, _ = tokenizer(i0_tokens)
                     z_g = z_g.clone()
                     z_g[:, 0] = i0_z[:, 0]
+                throughput_meter.update(count_latent_tokens(z_g))
                 # Call DDP wrappers so gradients synchronize across ranks.
                 I_0_feats = app_cnn(I_A[:, 0])
                 result = decoder(z_g, I_0_feats)

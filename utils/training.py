@@ -37,21 +37,32 @@ class EMA:
 
 
 class ThroughputMeter:
-    """Per-process sample throughput meter for train progress logs."""
+    """Per-process token throughput meter for train progress logs."""
 
     def __init__(self):
         self.start_time = time.time()
-        self.samples = 0
+        self.tokens = 0
 
-    def update(self, sample_count):
-        self.samples += int(sample_count)
+    def update(self, token_count):
+        self.tokens += int(token_count)
 
     def rate(self):
         elapsed = max(time.time() - self.start_time, 1e-12)
-        return self.samples / elapsed
+        return self.tokens / elapsed
 
     def format(self):
-        return f"{self.rate():.2f} samples/s/npu"
+        return f"{self.rate():.2f} tokens/s/npu"
+
+
+def count_latent_tokens(tensor):
+    """Count sequence tokens, excluding feature/channel dimensions."""
+    if tensor.dim() >= 5:
+        return int(tensor.shape[0] * tensor.shape[1] * tensor.shape[2] * tensor.shape[3])
+    if tensor.dim() >= 4:
+        return int(tensor.shape[0] * tensor.shape[1] * tensor.shape[2])
+    if tensor.dim() >= 3:
+        return int(tensor.shape[0] * tensor.shape[1])
+    return int(tensor.shape[0])
 
 
 def atomic_torch_save(payload, path):

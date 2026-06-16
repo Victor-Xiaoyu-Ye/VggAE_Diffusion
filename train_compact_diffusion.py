@@ -34,6 +34,7 @@ from data.token_utils import strip_special_tokens
 from utils.training import (
     EMA,
     ThroughputMeter,
+    count_latent_tokens,
     append_metrics,
     atomic_torch_save,
     build_optimizer,
@@ -686,7 +687,6 @@ def main():
 
         for batch_idx, batch in enumerate(pbar):
             frames = batch['frames'].to(device=device, dtype=dtype)
-            throughput_meter.update(frames.shape[0])
 
             # ---- Encode → Tokenize → z_g ----
             with torch.no_grad(), autocast(
@@ -716,6 +716,7 @@ def main():
                     if normalization is not None
                     else diffusion_target.float()
                 ).to(dtype=dtype)
+                throughput_meter.update(count_latent_tokens(diffusion_target))
 
             # Text conditioning
             text_emb = None

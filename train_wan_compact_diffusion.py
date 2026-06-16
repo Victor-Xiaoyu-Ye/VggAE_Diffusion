@@ -26,7 +26,13 @@ from models.wan_compact_adapter import WanCompactAdapter
 from models.flow_matching import OTCFM
 from data.video_dataset import SpatialVidDataset, collate_fn
 from data.token_utils import strip_special_tokens
-from utils.training import EMA, ThroughputMeter, build_optimizer, build_scheduler
+from utils.training import (
+    EMA,
+    ThroughputMeter,
+    build_optimizer,
+    build_scheduler,
+    count_latent_tokens,
+)
 from utils.distributed import setup_ddp, is_main_process
 
 
@@ -268,13 +274,13 @@ def main():
         pbar = tqdm(dataloader, desc=f'Epoch {epoch}/{args.epochs}', dynamic_ncols=True)
         for batch_idx, batch in enumerate(pbar):
             frames = batch['frames'].to(device=device, dtype=torch.bfloat16)
-            throughput_meter.update(frames.shape[0])
 
             with torch.no_grad():
                 tokens_list, psi = encoder(frames)
                 tokens_list = strip_special_tokens(tokens_list, psi)
                 z_g, z_g_flat = tokenizer(tokens_list)
                 x1 = z_g_flat.to(dtype=dtype)
+                throughput_meter.update(count_latent_tokens(x1))
 
             text_emb = None
             if clip_encoder is not None:

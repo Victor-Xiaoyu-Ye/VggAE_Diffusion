@@ -31,7 +31,13 @@ from data.token_utils import (
     select_levels_mean,
     strip_special_tokens,
 )
-from utils.training import EMA, ThroughputMeter, build_optimizer, build_scheduler
+from utils.training import (
+    EMA,
+    ThroughputMeter,
+    build_optimizer,
+    build_scheduler,
+    count_latent_tokens,
+)
 from utils.distributed import setup_ddp, is_main_process
 from utils.decoder_loader import load_decoder
 
@@ -346,7 +352,6 @@ def main():
 
         for batch_idx, batch in enumerate(pbar):
             frames = batch["frames"].to(device=device, dtype=torch.bfloat16)
-            throughput_meter.update(frames.shape[0])
 
             with torch.no_grad():
                 tokens_list, psi = encoder(frames)
@@ -355,6 +360,7 @@ def main():
 
             # Multi-layer mean (RAEv2-style) for reduced-dim diffusion
             x1 = select_levels_mean(tokens_list, levels=[4,11,17,23], downsample=0).to(dtype=dtype)
+            throughput_meter.update(count_latent_tokens(x1))
 
             if args.input_noise > 0:
                 x1 = x1 + torch.randn_like(x1) * args.input_noise
@@ -438,7 +444,7 @@ def main():
             print(
                 f"  Epoch {epoch}/{args.epochs} | avg loss: {avg_loss:.6f} | "
                 f"steps: {global_step} | "
-                f"DI_throughput: {throughput_meter.rate():.2f} samples/s/npu")
+                f"DI_throughput: {throughput_meter.rate():.2f} tokens/s/npu")
             if writer is not None:
                 writer.add_scalar("train/epoch_loss", avg_loss, epoch)
 

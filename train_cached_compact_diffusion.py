@@ -33,6 +33,7 @@ from utils.device import (
 from utils.training import (
     EMA,
     ThroughputMeter,
+    count_latent_tokens,
     append_metrics,
     atomic_torch_save,
     build_optimizer,
@@ -554,7 +555,7 @@ def main():
                 device=device, dtype=torch.float32, non_blocking=True)
             cond_raw = batch["cond"].to(
                 device=device, dtype=torch.float32, non_blocking=True)
-            throughput_meter.update(target_raw.shape[0])
+            throughput_meter.update(count_latent_tokens(target_raw))
             if target_raw.shape[1:] != (
                     args.seq_len, args.latent_grid ** 2, args.latent_dim):
                 raise ValueError(
@@ -610,7 +611,7 @@ def main():
             print(
                 f"step={global_step} loss={loss_value:.6f} "
                 f"lr={lr:.3e} grad_norm={float(grad_norm):.3f} "
-                f"DI_throughput: {throughput:.2f} samples/s/npu")
+                f"DI_throughput: {throughput:.2f} tokens/s/npu")
             pbar.set_postfix(
                 loss=f"{loss_value:.4f}",
                 DI_throughput=throughput_meter.format())

@@ -36,7 +36,13 @@ from data.token_utils import (
 )
 from torch.utils.tensorboard import SummaryWriter
 
-from utils.training import EMA, ThroughputMeter, build_optimizer, build_scheduler
+from utils.training import (
+    EMA,
+    ThroughputMeter,
+    build_optimizer,
+    build_scheduler,
+    count_latent_tokens,
+)
 from utils.distributed import setup_ddp, is_main_process
 
 
@@ -169,12 +175,13 @@ def train_one_epoch(epoch, encoder, decoder, lpips_model, train_loader,
 
     for batch_idx, batch in enumerate(pbar):
         frames = batch["frames"].to(device, dtype=torch.float16)
-        throughput_meter.update(frames.shape[0])
         B, S = frames.shape[:2]
 
         with torch.no_grad():
             tokens_list, psi = encoder.aggregator(frames)
             tokens_list = strip_special_tokens(tokens_list, psi)
+        throughput_meter.update(
+            count_latent_tokens(tokens_list[DEFAULT_BOUNDARY_LEVEL]))
 
         tokens_list = normalize_tokens(tokens_list, level_stats)
         tokens_list = augment_tokens_for_decoder(

@@ -41,7 +41,7 @@ from utils.moxing_io import (
     remote_exists,
     write_text,
 )
-from utils.training import ThroughputMeter
+from utils.training import ThroughputMeter, count_latent_tokens
 
 
 def parse_args():
@@ -467,12 +467,11 @@ def main():
     try:
         with torch.inference_mode():
             for batch in progress:
-                throughput_meter.update(batch["_batch_size"])
-                progress.set_postfix(
-                    DI_throughput=throughput_meter.format())
                 failed_samples.extend(batch["errors"])
                 if batch["frames"] is None:
                     processed_items += batch["_batch_size"]
+                    progress.set_postfix(
+                        DI_throughput=throughput_meter.format())
                     continue
                 frames = batch["frames"].to(
                     device=device, dtype=compute_dtype, non_blocking=True)
@@ -494,6 +493,9 @@ def main():
                     video_flat[:, 1:]
                     - i0_flat.expand(-1, video_flat.shape[1] - 1, -1, -1)
                 )
+                throughput_meter.update(count_latent_tokens(target))
+                progress.set_postfix(
+                    DI_throughput=throughput_meter.format())
 
                 for batch_index in range(target.shape[0]):
                     key = (

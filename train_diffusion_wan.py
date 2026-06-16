@@ -30,7 +30,13 @@ from data.token_utils import (
     select_levels,
     strip_special_tokens,
 )
-from utils.training import EMA, ThroughputMeter, build_optimizer, build_scheduler
+from utils.training import (
+    EMA,
+    ThroughputMeter,
+    build_optimizer,
+    build_scheduler,
+    count_latent_tokens,
+)
 from utils.distributed import setup_ddp, is_main_process
 from utils.decoder_loader import load_decoder
 
@@ -350,7 +356,6 @@ def main():
         for batch_idx, batch in enumerate(pbar):
             t0 = time.time()
             frames = batch["frames"].to(device=device, dtype=torch.float16)
-            throughput_meter.update(frames.shape[0])
 
             with torch.no_grad():
                 tokens_list, psi = encoder(frames)
@@ -358,6 +363,7 @@ def main():
                 tokens_list = normalize_tokens(tokens_list, level_stats)
 
             x1 = select_levels(tokens_list, levels=args.select_levels).to(dtype=dtype)
+            throughput_meter.update(count_latent_tokens(x1))
 
             if args.input_noise > 0:
                 x1 = x1 + torch.randn_like(x1) * args.input_noise
@@ -442,7 +448,7 @@ def main():
         if main_process:
             avg_bt_all = sum(batch_times) / max(len(batch_times), 1) if batch_times else 0
             print(f"  Epoch {epoch}/{args.epochs} | avg loss: {avg_loss:.6f} | steps: {global_step}")
-            print(f"  DI_throughput: {throughput_meter.rate():.3f} samples/s/npu")
+            print(f"  DI_throughput: {throughput_meter.rate():.3f} tokens/s/npu")
             if writer is not None:
                 writer.add_scalar("train/epoch_loss", avg_loss, epoch)
 

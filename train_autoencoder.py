@@ -39,6 +39,7 @@ from data.token_utils import strip_special_tokens
 from utils.training import (
     EMA,
     ThroughputMeter,
+    count_latent_tokens,
     append_metrics,
     atomic_torch_save,
     build_optimizer,
@@ -554,7 +555,6 @@ def main():
                             'error': error,
                         }, ensure_ascii=True) + '\n')
             frames = batch['frames'].to(device=device, dtype=dtype)
-            throughput_meter.update(frames.shape[0])
 
             # ---- Encode ----
             with torch.no_grad():
@@ -575,6 +575,7 @@ def main():
                     z_g + torch.randn_like(z_g) * noise_std
                     if noise_std > 0 and tokenizer.training else z_g)
                 result = decoder(z_g_noisy)
+            throughput_meter.update(count_latent_tokens(z_g))
 
             if decoder.module.output_depth if use_ddp else decoder.output_depth:
                 preds, pred_depth, pred_conf, _ = result

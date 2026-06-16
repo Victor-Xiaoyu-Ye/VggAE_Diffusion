@@ -50,7 +50,13 @@ from data.token_utils import (
     select_levels,
     strip_special_tokens,
 )
-from utils.training import EMA, ThroughputMeter, build_optimizer, build_scheduler
+from utils.training import (
+    EMA,
+    ThroughputMeter,
+    build_optimizer,
+    build_scheduler,
+    count_latent_tokens,
+)
 from utils.distributed import setup_ddp, is_main_process
 
 
@@ -437,7 +443,6 @@ def main():
         for batch_idx, batch in enumerate(pbar):
             # --- Load frames ---
             frames = batch["frames"].to(device=device, dtype=torch.float16)  # [B, S, 3, H, W]
-            throughput_meter.update(frames.shape[0])
 
             # --- Encode with frozen StreamVGGT ---
             with torch.no_grad():
@@ -448,6 +453,7 @@ def main():
             # --- Select DPT levels ---
             x1 = select_levels(tokens_list, levels=args.select_levels)
             x1 = x1.to(dtype=dtype)
+            throughput_meter.update(count_latent_tokens(x1))
 
             # Input noise regularization
             if args.input_noise > 0:
@@ -546,7 +552,7 @@ def main():
                     print(f"  [epoch {epoch} step {global_step}] "
                           f"loss={loss_val:.6f}, flow={flow_loss.item():.6f}, "
                           f"recon={recon_loss.item():.4f}, lr={lr_now:.2e}, "
-                          f"DI_throughput: {throughput_meter.rate():.2f} samples/s/npu")
+                          f"DI_throughput: {throughput_meter.rate():.2f} tokens/s/npu")
                     if writer is not None:
                         writer.add_scalar("train/loss", loss_val, global_step)
                         writer.add_scalar("train/flow_loss", flow_loss.item(), global_step)

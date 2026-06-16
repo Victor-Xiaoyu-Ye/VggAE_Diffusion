@@ -35,7 +35,13 @@ from data.token_utils import (
     normalize_tokens,
     strip_special_tokens,
 )
-from utils.training import EMA, ThroughputMeter, build_optimizer, build_scheduler
+from utils.training import (
+    EMA,
+    ThroughputMeter,
+    build_optimizer,
+    build_scheduler,
+    count_latent_tokens,
+)
 from utils.distributed import setup_ddp, is_main_process
 
 
@@ -244,13 +250,14 @@ def train_one_epoch(
 
     for batch_idx, batch in enumerate(pbar):
         frames = batch["frames"].to(device, dtype=torch.float16)  # [B, S, 3, H, W]
-        throughput_meter.update(frames.shape[0])
         B, S = frames.shape[:2]
 
         # ---- Encoder forward (frozen, bf16) ----
         with torch.no_grad():
             tokens_list, psi = encoder.aggregator(frames)
             tokens_list = strip_special_tokens(tokens_list, psi)
+        throughput_meter.update(
+            count_latent_tokens(tokens_list[DEFAULT_BOUNDARY_LEVEL]))
 
         # ---- Normalize DPT-level tokens ----
         tokens_list = normalize_tokens(tokens_list, level_stats)
