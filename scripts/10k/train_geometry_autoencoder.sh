@@ -30,6 +30,7 @@ MASTER_PORT=${MASTER_PORT:-29510}
 
 configure_modelarts_distributed
 ensure_spatialvid_splits
+WARMUP_STEPS=$(maybe_cap_warmup_steps "${SPATIALVID_TRAIN_10K_CSV}" "${BATCH_SIZE}" "${ACCUM_STEPS}" "${EPOCHS}" "${WARMUP_STEPS}")
 EXTRA_ARGS=()
 if [[ "${AUTO_RESUME}" -eq 1 && -z "${RESUME}" && -s "${OUTPUT_DIR}/checkpoint_latest.pt" ]]; then
   RESUME="${OUTPUT_DIR}/checkpoint_latest.pt"

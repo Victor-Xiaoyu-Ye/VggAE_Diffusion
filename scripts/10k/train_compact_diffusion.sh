@@ -37,6 +37,7 @@ MASTER_PORT=${MASTER_PORT:-29540}
 
 configure_modelarts_distributed
 ensure_spatialvid_splits
+WARMUP_STEPS=$(maybe_cap_warmup_steps "${SPATIALVID_TRAIN_10K_CSV}" "${BATCH_SIZE}" "${ACCUM_STEPS}" "${EPOCHS}" "${WARMUP_STEPS}")
 require_file "${AUTOENCODER_CKPT}" "geometry autoencoder checkpoint"
 require_file "${I0_CKPT}" "I0 decoder checkpoint"
 

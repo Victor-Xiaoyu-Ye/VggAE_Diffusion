@@ -9,7 +9,7 @@ checkpoint, and output defaults are set in `scripts/10k/local_cuda.sh`:
 
 ```text
 LOCAL_SPATIALVID_ROOT=/public2/LiZhen/yexiaoyu/dataset/spatial-vid-hq-oft
-LOCAL_RUN_ROOT=/home/yexiaoyu/work/VggAE-Diffusion/outputs
+LOCAL_RUN_ROOT=/home/yexiaoyu/work/VggAE-Diffusion/outputs/spatialvid_runs
 LOCAL_STREAMVGGT_CKPT=/home/yexiaoyu/work/4DLangVGGT/ckpt/streamvggt/checkpoints.pth
 CUDA_DEVICE_IDS=0,1,2,3,4,5,6,7
 ```

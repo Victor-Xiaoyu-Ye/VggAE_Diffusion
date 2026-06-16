@@ -9,15 +9,33 @@ SPATIALVID_METADATA_URL="${SPATIALVID_METADATA}"
 SPATIALVID_VIDEO_ROOT="${LOCAL_SPATIALVID_ROOT}/videos/SpatialVID/videos"
 SPATIALVID_DEPTH_ROOT="${LOCAL_SPATIALVID_ROOT}/depths/SpatialVID/depths"
 
-RUN_ROOT="${LOCAL_RUN_ROOT:-${PROJECT}/outputs}"
+RUN_ROOT="${LOCAL_RUN_ROOT:-${PROJECT}/outputs/spatialvid_runs}"
 REMOTE_RUN_ROOT="${RUN_ROOT}"
 PERSISTENT_RUN_ROOT="${RUN_ROOT}"
 MIRROR_RUN_ROOT="${RUN_ROOT}"
 
 STREAMVGGT_CKPT="${LOCAL_STREAMVGGT_CKPT:-/home/yexiaoyu/work/4DLangVGGT/ckpt/streamvggt/checkpoints.pth}"
-GEOMETRY_AE_CKPT="${LOCAL_GEOMETRY_AE_CKPT:-${RUN_ROOT}/10k/geometry_autoencoder/checkpoint_latest.pt}"
-I0_DECODER_CKPT="${LOCAL_I0_DECODER_CKPT:-${RUN_ROOT}/10k/i0_decoder/checkpoint_latest.pt}"
-OVERFIT_I0_DECODER_CKPT="${RUN_ROOT}/validation/i0_decoder_overfit/checkpoint_latest.pt"
+if [[ -n "${LOCAL_GEOMETRY_AE_CKPT:-}" ]]; then
+  GEOMETRY_AE_CKPT="${LOCAL_GEOMETRY_AE_CKPT}"
+elif [[ -s "${RUN_ROOT}/10k/geometry_autoencoder/checkpoint_latest.pt" ]]; then
+  GEOMETRY_AE_CKPT="${RUN_ROOT}/10k/geometry_autoencoder/checkpoint_latest.pt"
+elif [[ -s "${RUN_ROOT}/10k/geometry_autoencoder/checkpoint_final.pt" ]]; then
+  GEOMETRY_AE_CKPT="${RUN_ROOT}/10k/geometry_autoencoder/checkpoint_final.pt"
+else
+  GEOMETRY_AE_CKPT="${PROJECT}/ckpts/autoencoder/exp-1-big/checkpoint_final.pt"
+fi
+if [[ -n "${LOCAL_I0_DECODER_CKPT:-}" ]]; then
+  I0_DECODER_CKPT="${LOCAL_I0_DECODER_CKPT}"
+elif [[ -s "${RUN_ROOT}/10k/i0_decoder/checkpoint_latest.pt" ]]; then
+  I0_DECODER_CKPT="${RUN_ROOT}/10k/i0_decoder/checkpoint_latest.pt"
+else
+  I0_DECODER_CKPT="${RUN_ROOT}/10k/i0_decoder/checkpoint_final.pt"
+fi
+if [[ -s "${RUN_ROOT}/validation/i0_decoder_overfit/checkpoint_latest.pt" ]]; then
+  OVERFIT_I0_DECODER_CKPT="${RUN_ROOT}/validation/i0_decoder_overfit/checkpoint_latest.pt"
+else
+  OVERFIT_I0_DECODER_CKPT="${RUN_ROOT}/validation/i0_decoder_overfit/checkpoint_final.pt"
+fi
 OVERFIT_DIFFUSION_CKPT="${RUN_ROOT}/validation/compact_diffusion_overfit/checkpoint_latest.pt"
 DIFFUSION_CKPT="${LOCAL_DIFFUSION_CKPT:-${RUN_ROOT}/10k/compact_diffusion/checkpoint_latest.pt}"
 
@@ -29,7 +47,11 @@ SPATIALVID_FULL_TRAIN_CSV="${SPATIALVID_SPLIT_DIR}/train_full.csv"
 
 CUDA_DEVICE_IDS="${CUDA_DEVICE_IDS:-0,1,2,3,4,5,6,7}"
 NUM_GPUS="${NUM_GPUS:-$(awk -F, '{print NF}' <<< "${CUDA_DEVICE_IDS}")}"
-PYTHON_BIN="${PYTHON_BIN:-python}"
+if [[ ( -z "${PYTHON_BIN:-}" || "${PYTHON_BIN}" == "python" ) && -x "/home/yexiaoyu/miniconda3/envs/rae/bin/python" ]]; then
+  PYTHON_BIN="/home/yexiaoyu/miniconda3/envs/rae/bin/python"
+else
+  PYTHON_BIN="${PYTHON_BIN:-python}"
+fi
 TORCHRUN_BIN="${TORCHRUN_BIN:-torchrun}"
 
 configure_modelarts_distributed() {
@@ -76,4 +98,67 @@ run_torchrun() {
   CUDA_VISIBLE_DEVICES="${CUDA_DEVICE_IDS}" \
     OMP_NUM_THREADS="${OMP_NUM_THREADS:-4}" \
     "${command[@]}"
+}
+
+count_csv_rows() {
+  local csv_path=$1
+  if [[ ! -s "${csv_path}" ]]; then
+    echo 0
+    return
+  fi
+  local total_lines
+  total_lines=$(wc -l < "${csv_path}" | tr -d ' ')
+  if (( total_lines <= 0 )); then
+    echo 0
+  else
+    echo $((total_lines - 1))
+  fi
+}
+
+cap_warmup_steps() {
+  local csv_path=$1
+  local batch_size=$2
+  local accum_steps=$3
+  local epochs=$4
+  local requested_warmup=$5
+  local rows
+  rows=$(count_csv_rows "${csv_path}")
+  if (( rows <= 0 || batch_size <= 0 || accum_steps <= 0 || epochs <= 0 )); then
+    echo "${requested_warmup}"
+    return
+  fi
+
+  # Match DistributedSampler + drop_last=True conservatively: each rank only
+  # sees roughly rows / NUM_GPUS examples, then DataLoader drops incomplete
+  # per-rank batches.
+  local samples_per_rank=$((rows / NUM_GPUS))
+  local batches_per_epoch=$((samples_per_rank / batch_size))
+  if (( batches_per_epoch < 1 )); then
+    batches_per_epoch=1
+  fi
+  local steps_per_epoch=$(((batches_per_epoch + accum_steps - 1) / accum_steps))
+  if (( steps_per_epoch < 1 )); then
+    steps_per_epoch=1
+  fi
+  local total_steps=$((steps_per_epoch * epochs))
+  local max_warmup=$((total_steps > 1 ? total_steps - 1 : 0))
+  if (( requested_warmup > max_warmup )); then
+    echo "${max_warmup}"
+  else
+    echo "${requested_warmup}"
+  fi
+}
+
+maybe_cap_warmup_steps() {
+  local csv_path=$1
+  local batch_size=$2
+  local accum_steps=$3
+  local epochs=$4
+  local requested_warmup=$5
+  local capped
+  capped=$(cap_warmup_steps "${csv_path}" "${batch_size}" "${accum_steps}" "${epochs}" "${requested_warmup}")
+  if [[ "${capped}" != "${requested_warmup}" ]]; then
+    echo "[local_cuda] Capping warmup_steps ${requested_warmup} -> ${capped} for $(count_csv_rows "${csv_path}") rows, ${NUM_GPUS} GPUs, batch=${batch_size}, accum=${accum_steps}, epochs=${epochs}" >&2
+  fi
+  echo "${capped}"
 }
