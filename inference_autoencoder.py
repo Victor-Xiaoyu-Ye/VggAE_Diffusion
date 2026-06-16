@@ -48,6 +48,9 @@ def parse_args():
     p.add_argument('--compute_psnr', dest='compute_psnr', action='store_true')
     p.add_argument('--no_compute_psnr', dest='compute_psnr', action='store_false')
     p.set_defaults(compute_psnr=True)
+    p.add_argument('--use_ema', dest='use_ema', action='store_true')
+    p.add_argument('--no_use_ema', dest='use_ema', action='store_false')
+    p.set_defaults(use_ema=True)
     p.add_argument('--latent_dim', type=int, default=512)
     p.add_argument('--latent_grid', type=int, default=18)
     p.add_argument('--token_dim', type=int, default=2048)
@@ -90,6 +93,17 @@ def build_v2_decoder(base_dim, output_depth, args):
         num_resblocks=2, use_pixel_shuffle=True, num_temporal_blocks=2,
         version='v2', use_checkpoint=False,
     )
+
+
+def split_ema_state(ema_state):
+    tokenizer_state = {}
+    decoder_state = {}
+    for key, value in ema_state.items():
+        if key.startswith('0.'):
+            tokenizer_state[key[2:]] = value
+        elif key.startswith('1.'):
+            decoder_state[key[2:]] = value
+    return tokenizer_state, decoder_state
 
 
 def load_model(args, device, compute_dtype):
@@ -141,6 +155,20 @@ def load_model(args, device, compute_dtype):
     decoder = decoder.to(device=device)
 
     decoder.load_state_dict(dec_state)
+
+    if args.use_ema and 'ema' in ckpt:
+        tokenizer_ema, decoder_ema = split_ema_state(ckpt['ema'])
+        if tokenizer_ema and decoder_ema:
+            tokenizer.load_state_dict(tokenizer_ema, strict=False)
+            decoder.load_state_dict(decoder_ema, strict=False)
+            print('Loaded EMA weights for tokenizer and decoder.')
+        else:
+            print('[WARN] EMA state found but could not split ModuleList keys; '
+                  'using raw checkpoint weights.')
+    elif args.use_ema:
+        print('[WARN] --use_ema requested but checkpoint has no ema field; '
+              'using raw checkpoint weights.')
+
     decoder.eval()
     for p in decoder.parameters():
         p.requires_grad_(False)
