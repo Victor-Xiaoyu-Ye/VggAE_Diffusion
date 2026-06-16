@@ -3,14 +3,15 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source "${SCRIPT_DIR}/../spatialvid_config.sh"
+source "${SCRIPT_DIR}/local_cuda.sh"
 source "${SCRIPT_DIR}/../lib/spatialvid.sh"
-source "${SCRIPT_DIR}/../lib/modelarts.sh"
 
 # ----------------------------- editable settings -----------------------------
 AUTOENCODER_CKPT="${GEOMETRY_AE_CKPT}"
 OUTPUT_DIR="${RUN_ROOT}/10k/i0_decoder"
-REMOTE_OUTPUT_DIR="${REMOTE_RUN_ROOT}/10k/i0_decoder"
+REMOTE_OUTPUT_DIR=""
 RESUME=""
+AUTO_RESUME=1
 
 EPOCHS=50
 BATCH_SIZE=1
@@ -36,6 +37,9 @@ ensure_spatialvid_splits
 require_file "${AUTOENCODER_CKPT}" "geometry autoencoder checkpoint"
 
 EXTRA_ARGS=()
+if [[ "${AUTO_RESUME}" -eq 1 && -z "${RESUME}" && -s "${OUTPUT_DIR}/checkpoint_latest.pt" ]]; then
+  RESUME="${OUTPUT_DIR}/checkpoint_latest.pt"
+fi
 if [[ -n "${RESUME}" ]]; then
   EXTRA_ARGS+=(--resume "${RESUME}")
 fi

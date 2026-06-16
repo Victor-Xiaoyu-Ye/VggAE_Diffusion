@@ -4,10 +4,20 @@ These scripts preserve the current online 10K workflow. They intentionally
 keep video decoding, StreamVGGT encoding, and tokenization inside the training
 loop so existing experiments remain reproducible.
 
-Edit dataset/checkpoint/output roots once in `scripts/spatialvid_config.sh`.
-Every script then calls `prepare_spatialvid_splits.py`, which deterministically
-selects existing SpatialVID videos into non-overlapping `train_10k.csv`,
-`eval.csv`, and `overfit.csv`. Existing matching splits are reused.
+These scripts are configured for the local 8-GPU CUDA machine. Dataset,
+checkpoint, and output defaults are set in `scripts/10k/local_cuda.sh`:
+
+```text
+LOCAL_SPATIALVID_ROOT=/public2/LiZhen/yexiaoyu/dataset/spatial-vid-hq-oft
+LOCAL_RUN_ROOT=/home/yexiaoyu/work/VggAE-Diffusion/outputs
+LOCAL_STREAMVGGT_CKPT=/home/yexiaoyu/work/4DLangVGGT/ckpt/streamvggt/checkpoints.pth
+CUDA_DEVICE_IDS=0,1,2,3,4,5,6,7
+```
+
+Override those variables before `bash` if needed. Every script then calls
+`prepare_spatialvid_splits.py`, which deterministically selects existing
+SpatialVID videos into non-overlapping `train_10k.csv`, `eval.csv`, and
+`overfit.csv`. Existing matching splits are reused.
 
 - `train_geometry_autoencoder.sh`: train the compact tokenizer and RGB decoder.
 - `train_i0_autoencoder.sh`: current I0-conditioned reconstruction experiment.
@@ -40,11 +50,14 @@ All active training scripts write:
 Set `RESUME` near the top of the relevant script. Resume occurs at an epoch
 boundary; the optimizer, learning-rate schedule, EMA, and global step are
 restored.
+The three full 10K training scripts also set `AUTO_RESUME=1` by default, so
+rerunning them resumes `checkpoint_latest.pt` from their output directory when
+it exists.
 
 Paths and experiment hyperparameters are assigned near the top of each shell
-script. `NUM_NPUS`, `ASCEND_DEVICE_IDS`, and `MASTER_PORT` remain
-environment-driven so cluster launchers can control distributed execution.
-Active trainers use FP16 with gradient scaling on Ascend 910B.
+script. `CUDA_DEVICE_IDS`, `NUM_GPUS`, and `MASTER_PORT` remain
+environment-driven so the local machine can choose which GPUs to use. Active
+trainers use FP16 with gradient scaling on CUDA.
 
 Use `scripts/scale/` for the complete SpatialVID metadata CSV.
 

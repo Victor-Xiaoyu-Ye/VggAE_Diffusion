@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source "${SCRIPT_DIR}/../spatialvid_config.sh"
+source "${SCRIPT_DIR}/local_cuda.sh"
 
 I0_CKPT="${OVERFIT_I0_DECODER_CKPT}"
 LOG_DIR="${RUN_ROOT}/validation/compact_diffusion_overfit"

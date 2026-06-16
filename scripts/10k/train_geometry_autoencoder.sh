@@ -3,13 +3,14 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source "${SCRIPT_DIR}/../spatialvid_config.sh"
+source "${SCRIPT_DIR}/local_cuda.sh"
 source "${SCRIPT_DIR}/../lib/spatialvid.sh"
-source "${SCRIPT_DIR}/../lib/modelarts.sh"
 
 # ----------------------------- editable settings -----------------------------
 OUTPUT_DIR="${RUN_ROOT}/10k/geometry_autoencoder"
-REMOTE_OUTPUT_DIR="${REMOTE_RUN_ROOT}/10k/geometry_autoencoder"
+REMOTE_OUTPUT_DIR=""
 RESUME=""
+AUTO_RESUME=1
 
 EPOCHS=120
 BATCH_SIZE=2
@@ -30,6 +31,9 @@ MASTER_PORT=${MASTER_PORT:-29510}
 configure_modelarts_distributed
 ensure_spatialvid_splits
 EXTRA_ARGS=()
+if [[ "${AUTO_RESUME}" -eq 1 && -z "${RESUME}" && -s "${OUTPUT_DIR}/checkpoint_latest.pt" ]]; then
+  RESUME="${OUTPUT_DIR}/checkpoint_latest.pt"
+fi
 if [[ -n "${RESUME}" ]]; then
   EXTRA_ARGS+=(--resume "${RESUME}")
 fi
@@ -60,6 +64,7 @@ run_torchrun "${PROJECT}/train_autoencoder.py" \
   --ema_decay "${EMA_DECAY}" \
   --seq_len 8 --target_size 518 --max_frame_span 32 \
   --clip_duration_seconds "${CLIP_DURATION_SECONDS}" \
+  --disable_temporal_mixer \
   --num_workers "${NUM_WORKERS}" --dtype fp16 \
   --log_every "${LOG_EVERY}" \
   --eval_every "${EVAL_EVERY}" \
