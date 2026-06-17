@@ -378,9 +378,12 @@ def main():
     steps_per_epoch = (len(loader) + args.accum_steps - 1) // args.accum_steps
     total_steps = args.epochs * steps_per_epoch
     if args.warmup_steps >= max(total_steps, 1):
-        raise ValueError(
-            f'warmup_steps={args.warmup_steps} must be smaller than '
-            f'total_steps={total_steps}')
+        capped_warmup = max(total_steps - 1, 0)
+        if main_process:
+            print(
+                f'  [WARN] warmup_steps={args.warmup_steps} >= '
+                f'total_steps={total_steps}; using {capped_warmup}')
+        args.warmup_steps = capped_warmup
     scheduler = build_scheduler(optimizer, warmup_steps=args.warmup_steps, total_steps=max(total_steps, 1))
     scaler = create_grad_scaler(enabled=use_scaler)
 

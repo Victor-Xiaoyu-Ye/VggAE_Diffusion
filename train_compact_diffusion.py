@@ -439,7 +439,7 @@ def main():
         temporal_depth=args.temporal_depth, num_heads=args.num_heads,
         seq_len=args.generated_seq_len, text_cond=args.text_cond,
         i0_condition=args.i0_condition, time_scale=args.time_scale,
-    ).to(device=device, dtype=dtype)
+    ).to(device=device)
     model.i0_residual = args.i0_residual
 
     total_p = sum(p.numel() for p in model.parameters())
@@ -486,9 +486,12 @@ def main():
     steps_per_epoch = (len(dataloader) + args.accum_steps - 1) // args.accum_steps
     total_steps = args.epochs * steps_per_epoch
     if args.warmup_steps >= max(total_steps, 1):
-        raise ValueError(
-            f'warmup_steps={args.warmup_steps} must be smaller than '
-            f'total_steps={total_steps}')
+        capped_warmup = max(total_steps - 1, 0)
+        if main_process:
+            print(
+                f'  [WARN] warmup_steps={args.warmup_steps} >= '
+                f'total_steps={total_steps}; using {capped_warmup}')
+        args.warmup_steps = capped_warmup
     scheduler = build_scheduler(optimizer, warmup_steps=args.warmup_steps, total_steps=max(total_steps, 1))
     scaler = create_grad_scaler(enabled=use_scaler)
 
@@ -729,8 +732,12 @@ def main():
             # Decoder auxiliary loss
             dec_loss = x1.new_zeros(())
             use_decoder_aux = args.decoder_aux and (batch_idx % args.recon_every == 0)
-            flow_out = flow.compute_loss(
-                x1, cond=i0_cond, text_emb=text_emb, return_outputs=use_decoder_aux)
+            with autocast(
+                    device_type=device_type, dtype=dtype,
+                    enabled=dtype != torch.float32):
+                flow_out = flow.compute_loss(
+                    x1, cond=i0_cond, text_emb=text_emb,
+                    return_outputs=use_decoder_aux)
             if use_decoder_aux:
                 flow_loss = flow_out['loss']
                 loss = flow_loss
