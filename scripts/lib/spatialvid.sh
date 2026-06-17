@@ -49,6 +49,10 @@ validate_model_config() {
 
 ensure_spatialvid_splits() {
   validate_spatialvid_config
+  local split_args=()
+  if [[ "${SPATIALVID_SKIP_FILE_CHECK:-1}" == "1" ]]; then
+    split_args+=(--skip_file_check)
+  fi
   "${PYTHON_BIN}" "${PROJECT}/prepare_spatialvid_splits.py" \
     --csv "${SPATIALVID_METADATA}" \
     --video_root "${SPATIALVID_VIDEO_ROOT}" \
@@ -58,7 +62,7 @@ ensure_spatialvid_splits() {
     --overfit_count "${OVERFIT_VIDEOS}" \
     --min_frames "${MIN_VIDEO_FRAMES}" \
     --seed "${SPLIT_SEED}" \
-    --skip_file_check
+    "${split_args[@]}"
 }
 
 ensure_spatialvid_scale_splits() {

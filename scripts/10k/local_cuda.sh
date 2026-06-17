@@ -4,6 +4,7 @@
 # and before scripts/lib/spatialvid.sh.
 
 LOCAL_SPATIALVID_ROOT="${LOCAL_SPATIALVID_ROOT:-/public2/LiZhen/yexiaoyu/dataset/spatial-vid-hq-oft}"
+SPATIALVID_SKIP_FILE_CHECK=0
 SPATIALVID_METADATA="${LOCAL_SPATIALVID_ROOT}/data/train/SpatialVID_HQ_metadata.csv"
 SPATIALVID_METADATA_URL="${SPATIALVID_METADATA}"
 SPATIALVID_VIDEO_ROOT="${LOCAL_SPATIALVID_ROOT}/videos/SpatialVID/videos"
