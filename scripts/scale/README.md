@@ -60,6 +60,8 @@ SpatialVID CSV. No manually prepared evaluation CSV is required.
    - Set `ENABLE_DEPTH=1` only after confirming the OBS depth layout.
 2. `01_train_i0_decoder.sh`
    - Train the appearance-conditioned RGB decoder with the tokenizer frozen.
+   - After it writes `checkpoint_latest.pt`, run
+     `preflight_next_stage.sh after_i0` to validate the checkpoint contract.
 3. `02_shard_metadata.sh`
    - Optional helper for multiple independent cache jobs.
 4. `03_cache_latents.sh`
@@ -72,9 +74,15 @@ SpatialVID CSV. No manually prepared evaluation CSV is required.
      `status-rXXXXX.json` is the human-readable progress report.
 5. `03_cache_eval_latents.sh`
    - Run once to cache the automatically selected held-out split.
+   - Run this before the full cache, then run `smoke_compact_dit.sh`. The smoke
+     job uses only the held-out cache and performs two optimizer steps to test
+     OBS streaming, NPU forward/backward, EMA, checkpointing, and RGB preview.
 6. `04_merge_latent_cache.sh`
    - Merge tar manifests and exact per-channel normalization statistics.
    - Training and evaluation caches are merged separately.
+   - First run `preflight_next_stage.sh before_merge`; it requires every
+     partition to contain `_SUCCESS`, `manifest.txt`, `stats.pt`, and
+     `config.json`.
 7. `05_train_compact_dit.sh`
    - Train by optimizer step from streaming tar shards.
    - Set `EVAL_CACHE_DIR` to a held-out cache for fixed validation metrics.
@@ -82,8 +90,13 @@ SpatialVID CSV. No manually prepared evaluation CSV is required.
      latent preview.
    - The eval cache stores its first frame, so RGB previews automatically use
      the I0 aligned with the first latent sample.
+   - Run `preflight_next_stage.sh before_diffusion` before launching the full
+     40,000-step job. It validates both merged caches, normalization tensor
+     shapes, sampled tar objects, and the I0 checkpoint.
 8. `06_sample_compact_dit.sh`
    - Generate seven future frames from one observed RGB frame.
+   - Run `preflight_next_stage.sh before_sample` to validate the generator and
+     all upstream representation artifacts.
 
 Geometry-autoencoder inference can be run independently with:
 
