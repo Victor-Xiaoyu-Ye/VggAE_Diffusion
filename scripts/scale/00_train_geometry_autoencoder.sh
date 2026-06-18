@@ -37,7 +37,8 @@ if [[ "${AUTO_RESUME}" -eq 1 || -n "${RESUME}" ]]; then
     "${RESUME}" \
     "${OUTPUT_DIR}/checkpoint_latest.pt" \
     "${REMOTE_OUTPUT_DIR}/checkpoint_latest.pt" \
-    "${LOCAL_CACHE_ROOT}/resume/geometry_autoencoder.pt")
+    "${LOCAL_CACHE_ROOT}/resume/geometry_autoencoder.pt" \
+    "${SCALE_GEOMETRY_AE_MIRROR_CKPT_URL}")
 fi
 if [[ -n "${RESUME}" ]]; then
   echo "Resuming geometry autoencoder from ${RESUME}"

@@ -32,7 +32,8 @@ require_scale_cluster
 ensure_spatialvid_scale_splits
 ensure_local_checkpoint \
   "${AUTOENCODER_CKPT}" "${AUTOENCODER_CKPT_URL}" \
-  "scale geometry autoencoder checkpoint"
+  "scale geometry autoencoder checkpoint" \
+  "${SCALE_GEOMETRY_AE_MIRROR_CKPT_URL}"
 
 EXTRA_ARGS=()
 if [[ "${AUTO_RESUME}" -eq 1 || -n "${RESUME}" ]]; then
@@ -40,7 +41,8 @@ if [[ "${AUTO_RESUME}" -eq 1 || -n "${RESUME}" ]]; then
     "${RESUME}" \
     "${OUTPUT_DIR}/checkpoint_latest.pt" \
     "${REMOTE_OUTPUT_DIR}/checkpoint_latest.pt" \
-    "${LOCAL_CACHE_ROOT}/resume/i0_decoder.pt")
+    "${LOCAL_CACHE_ROOT}/resume/i0_decoder.pt" \
+    "${SCALE_I0_DECODER_MIRROR_CKPT_URL}")
 fi
 if [[ -n "${RESUME}" ]]; then
   echo "Resuming I0 decoder from ${RESUME}"

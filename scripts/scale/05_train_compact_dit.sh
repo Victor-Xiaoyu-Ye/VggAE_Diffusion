@@ -45,7 +45,8 @@ if [[ "${AUTO_RESUME}" -eq 1 || -n "${RESUME}" ]]; then
     "${RESUME}" \
     "${OUTPUT_DIR}/checkpoint_latest.pt" \
     "${REMOTE_OUTPUT_DIR}/checkpoint_latest.pt" \
-    "${LOCAL_CACHE_ROOT}/resume/compact_dit.pt")
+    "${LOCAL_CACHE_ROOT}/resume/compact_dit.pt" \
+    "${SCALE_DIFFUSION_MIRROR_CKPT_URL}")
 fi
 if [[ -n "${RESUME}" ]]; then
   echo "Resuming Compact DiT from ${RESUME}"
@@ -53,7 +54,8 @@ if [[ -n "${RESUME}" ]]; then
 fi
 ensure_local_checkpoint \
   "${I0_CKPT}" "${SCALE_I0_DECODER_CKPT_URL}" \
-  "scale I0 decoder checkpoint"
+  "scale I0 decoder checkpoint" \
+  "${SCALE_I0_DECODER_MIRROR_CKPT_URL}"
 EXTRA_ARGS+=(--i0_decoder_ckpt "${I0_CKPT}")
 
 start_output_sync "${OUTPUT_DIR}" "${REMOTE_OUTPUT_DIR}"

@@ -11,6 +11,7 @@ source "${SCRIPT_DIR}/../lib/modelarts.sh"
 # checkpoint path. If CHECKPOINT already exists locally, it is used directly.
 CHECKPOINT="${SCALE_ROOT}/geometry_autoencoder/checkpoint_latest.pt"
 CHECKPOINT_URL="${SCALE_REMOTE_ROOT}/geometry_autoencoder/checkpoint_latest.pt"
+CHECKPOINT_MIRROR_URL="${SCALE_GEOMETRY_AE_MIRROR_CKPT_URL}"
 OUTPUT_DIR="${SCALE_ROOT}/inference/geometry_autoencoder"
 REMOTE_OUTPUT_DIR="${SCALE_REMOTE_ROOT}/inference/geometry_autoencoder"
 NUM_VIDEOS=20
@@ -26,7 +27,8 @@ fi
 ensure_spatialvid_splits
 ensure_local_checkpoint \
   "${CHECKPOINT}" "${CHECKPOINT_URL}" \
-  "geometry autoencoder inference checkpoint"
+  "geometry autoencoder inference checkpoint" \
+  "${CHECKPOINT_MIRROR_URL}"
 
 mkdir -p "${OUTPUT_DIR}"
 

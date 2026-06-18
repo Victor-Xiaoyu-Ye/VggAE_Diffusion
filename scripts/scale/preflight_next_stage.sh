@@ -19,10 +19,12 @@ case "${STAGE}" in
   after_i0|before_diffusion|before_sample)
     ensure_local_checkpoint \
       "${SCALE_GEOMETRY_AE_CKPT}" "${SCALE_GEOMETRY_AE_CKPT_URL}" \
-      "scale geometry autoencoder checkpoint"
+      "scale geometry autoencoder checkpoint" \
+      "${SCALE_GEOMETRY_AE_MIRROR_CKPT_URL}"
     ensure_local_checkpoint \
       "${SCALE_I0_DECODER_CKPT}" "${SCALE_I0_DECODER_CKPT_URL}" \
-      "scale I0 decoder checkpoint"
+      "scale I0 decoder checkpoint" \
+      "${SCALE_I0_DECODER_MIRROR_CKPT_URL}"
     ;;
   before_merge)
     ;;
@@ -35,7 +37,8 @@ esac
 if [[ "${STAGE}" == "before_sample" ]]; then
   ensure_local_checkpoint \
     "${SCALE_DIFFUSION_CKPT}" "${SCALE_DIFFUSION_CKPT_URL}" \
-    "scale Compact DiT checkpoint"
+    "scale Compact DiT checkpoint" \
+    "${SCALE_DIFFUSION_MIRROR_CKPT_URL}"
 fi
 
 ARGS=(

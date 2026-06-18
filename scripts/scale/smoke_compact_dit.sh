@@ -18,7 +18,8 @@ require_output_url
 
 ensure_local_checkpoint \
   "${I0_CKPT}" "${SCALE_I0_DECODER_CKPT_URL}" \
-  "scale I0 decoder checkpoint"
+  "scale I0 decoder checkpoint" \
+  "${SCALE_I0_DECODER_MIRROR_CKPT_URL}"
 
 # Merge only the held-out partition. Node 0 writes the shared OBS metadata;
 # the other nodes wait before entering torchrun.

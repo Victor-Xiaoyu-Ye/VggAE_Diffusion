@@ -153,6 +153,17 @@ schedule, global step, normalization contract, and RNG state. The streaming
 shard iterator restarts rather than resuming at an exact tar byte offset, so
 sample order after recovery is not bit-identical.
 
+Checkpoint staging and resume first try the current ModelArts `$OUTPUT_URL`,
+then fall back to the persistent owner mirror:
+
+```text
+obs://yw-ads-training-gy1/data/external/personal/g00833899/y50046448/output/scale/
+```
+
+This fallback applies to the geometry autoencoder, I0 decoder, Compact DiT,
+preflight checks, inference, and sampling, so a new ModelArts job can continue
+artifacts written by an earlier job.
+
 Wan initialization is deliberately not the default scale script. The current
 compact adapter bypasses Wan's native VAE patch interface, and the legacy CLIP
 text path does not match Wan's pretrained UMT5 context. Establish the compact

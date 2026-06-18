@@ -57,6 +57,7 @@ resolve_resume_checkpoint() {
   local local_latest=$2
   local remote_latest=$3
   local staged_path=$4
+  local mirror_latest=${5:-}
   if [[ -n "${explicit}" ]]; then
     stage_resume_checkpoint "${explicit}" "${staged_path}"
     return
@@ -67,35 +68,59 @@ resolve_resume_checkpoint() {
   fi
   mkdir -p "$(dirname "${staged_path}")"
   rm -f "${staged_path}"
-  if "${PYTHON_BIN}" "${PROJECT}/scripts/moxing_transfer.py" \
-      "${remote_latest}" "${staged_path}" >&2 \
-      && [[ -s "${staged_path}" ]]; then
-    printf '%s' "${staged_path}"
-  else
+  local candidate
+  local last_candidate=""
+  for candidate in "${remote_latest}" "${mirror_latest}"; do
+    if [[ -z "${candidate}" || "${candidate}" == "${last_candidate}" ]]; then
+      continue
+    fi
+    last_candidate="${candidate}"
     rm -f "${staged_path}"
-    echo "No remote checkpoint found; starting a new run." >&2
-  fi
+    echo "Trying resume checkpoint: ${candidate}" >&2
+    if "${PYTHON_BIN}" "${PROJECT}/scripts/moxing_transfer.py" \
+        "${candidate}" "${staged_path}" >&2 \
+        && [[ -s "${staged_path}" ]]; then
+      echo "Staged resume checkpoint: ${candidate}" >&2
+      printf '%s' "${staged_path}"
+      return
+    fi
+    rm -f "${staged_path}"
+  done
+  echo "No remote checkpoint found; starting a new run." >&2
 }
 
 ensure_local_checkpoint() {
   local local_path=$1
   local remote_path=$2
   local label=$3
+  local mirror_path=${4:-}
   if [[ -s "${local_path}" ]]; then
     return
   fi
-  if [[ -z "${remote_path}" ]]; then
+  if [[ -z "${remote_path}" && -z "${mirror_path}" ]]; then
     echo "Missing ${label}: ${local_path}" >&2
     exit 1
   fi
   mkdir -p "$(dirname "${local_path}")"
-  echo "Staging ${label}: ${remote_path} -> ${local_path}"
-  "${PYTHON_BIN}" "${PROJECT}/scripts/moxing_transfer.py" \
-    "${remote_path}" "${local_path}"
-  if [[ ! -s "${local_path}" ]]; then
-    echo "Failed to stage ${label}: ${remote_path}" >&2
-    exit 1
-  fi
+  local candidate
+  local last_candidate=""
+  for candidate in "${remote_path}" "${mirror_path}"; do
+    if [[ -z "${candidate}" || "${candidate}" == "${last_candidate}" ]]; then
+      continue
+    fi
+    last_candidate="${candidate}"
+    rm -f "${local_path}"
+    echo "Staging ${label}: ${candidate} -> ${local_path}"
+    if "${PYTHON_BIN}" "${PROJECT}/scripts/moxing_transfer.py" \
+        "${candidate}" "${local_path}" \
+        && [[ -s "${local_path}" ]]; then
+      echo "Staged ${label} from ${candidate}"
+      return
+    fi
+    rm -f "${local_path}"
+  done
+  echo "Failed to stage ${label} from current output or persistent mirror." >&2
+  exit 1
 }
 
 require_scale_cluster() {

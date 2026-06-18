@@ -23,7 +23,8 @@ require_output_url
 ensure_spatialvid_scale_splits
 ensure_local_checkpoint \
   "${AUTOENCODER_CKPT}" "${SCALE_GEOMETRY_AE_CKPT_URL}" \
-  "scale geometry autoencoder checkpoint"
+  "scale geometry autoencoder checkpoint" \
+  "${SCALE_GEOMETRY_AE_MIRROR_CKPT_URL}"
 
 LOG_DIR="${SCALE_ROOT}/cache_generation/train"
 REMOTE_LOG_DIR="${SCALE_REMOTE_ROOT}/cache_generation/train"

@@ -24,13 +24,16 @@ validate_model_config
 ensure_spatialvid_splits
 ensure_local_checkpoint \
   "${AUTOENCODER_CKPT}" "${SCALE_GEOMETRY_AE_CKPT_URL}" \
-  "scale geometry autoencoder checkpoint"
+  "scale geometry autoencoder checkpoint" \
+  "${SCALE_GEOMETRY_AE_MIRROR_CKPT_URL}"
 ensure_local_checkpoint \
   "${I0_CKPT}" "${SCALE_I0_DECODER_CKPT_URL}" \
-  "scale I0 decoder checkpoint"
+  "scale I0 decoder checkpoint" \
+  "${SCALE_I0_DECODER_MIRROR_CKPT_URL}"
 ensure_local_checkpoint \
   "${GENERATOR_CKPT}" "${SCALE_DIFFUSION_CKPT_URL}" \
-  "scale diffusion checkpoint"
+  "scale diffusion checkpoint" \
+  "${SCALE_DIFFUSION_MIRROR_CKPT_URL}"
 
 "${PYTHON_BIN}" "${PROJECT}/sample_compact_i0.py" \
   --csv "${SPATIALVID_EVAL_CSV}" \
