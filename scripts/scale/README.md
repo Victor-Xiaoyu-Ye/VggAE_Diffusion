@@ -107,6 +107,18 @@ bash scripts/scale/inference_geometry_autoencoder.sh
 It reads held-out SpatialVID videos from OBS on demand and uploads
 reconstruction grids plus `metrics.json` to the configured output URL.
 
+I0-decoder inference can be run independently with:
+
+```bash
+bash scripts/scale/inference_i0_decoder.sh
+```
+
+It uploads grids and `temporal_metrics.json` under
+`$OUTPUT_URL/scale/inference/i0_decoder`. Each grid compares target frames,
+AE reconstruction, I0 reconstruction, and repeated-z0 controls for checking
+whether temporal changes come from geometry latents or from copying the first
+frame.
+
 At 256 channels, each eight-frame fp16 cache sample is about 1.27 MiB. The
 1,461,448-clip cache therefore needs roughly 1.8 TiB before tar overhead and
 metadata. The configured `/cache` budget is used only for source MP4 files
