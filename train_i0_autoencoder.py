@@ -127,14 +127,13 @@ def eval_samples(enc, tok, dec, app_cnn, eval_video, device, out_dir, epoch,
     z_g = z_g.clone()
     z_g[:, 0] = i0_z[:, 0]
 
-    # I_0 features
+    # I_0 features + decode. Keep both inside autocast on NPU; otherwise
+    # conv receives fp16 inputs with fp32 weights during eval.
     I_0 = frames[:, 0:1, :, :, :]  # [1, 1, 3, H, W]
-    I_0_feats = app_cnn(I_0.reshape(1, 3, 518, 518))
-
-    # Decode all S frames conditioned on I_0
     with autocast(
             device_type=device_type, dtype=compute_dtype,
             enabled=compute_dtype != torch.float32):
+        I_0_feats = app_cnn(I_0.reshape(1, 3, 518, 518))
         result = dec(z_g, I_0_feats)
     preds = result[0] if isinstance(result, tuple) else result
     recon = preds[..., :3].clamp(0, 1)  # [1, S, 518, 518, 3]

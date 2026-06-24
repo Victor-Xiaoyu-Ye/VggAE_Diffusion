@@ -2,11 +2,19 @@
 """Copy ModelArts inputs/outputs with MoXing."""
 
 import argparse
+import logging
 import os
 import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# Corporate MoXing/OBS SDK can emit noisy logging rollover errors when several
+# copy_parallel workers initialize the same rotating OBS log. The transfer
+# result is still surfaced through exceptions from copy_file/copy_directory.
+logging.raiseExceptions = False
+for logger_name in ("obs", "moxing", "esdk-obs-python"):
+    logging.getLogger(logger_name).setLevel(logging.ERROR)
 
 from utils.moxing_io import copy_directory, copy_file
 
