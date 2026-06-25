@@ -75,11 +75,16 @@ SpatialVID CSV. No manually prepared evaluation CSV is required.
    - Check completion with
      `bash scripts/scale/check_cache_status.sh train`. It must print
      `COMPLETE` before merge.
+   - If all ranks report complete progress but `_SUCCESS` is missing because
+     the torchrun job failed at finalization, recover with
+     `bash scripts/scale/finalize_cache_partition.sh train`.
 5. `03_cache_eval_latents.sh`
    - Run once to cache the automatically selected held-out split.
    - Check completion with
      `bash scripts/scale/check_cache_status.sh eval`. It must print
      `COMPLETE` before merge.
+   - The same finalization recovery is available with
+     `bash scripts/scale/finalize_cache_partition.sh eval`.
    - Run this before the full cache, then run `smoke_compact_dit.sh`. The smoke
      job uses only the held-out cache and performs two optimizer steps to test
      OBS streaming, NPU forward/backward, EMA, checkpointing, and RGB preview.
