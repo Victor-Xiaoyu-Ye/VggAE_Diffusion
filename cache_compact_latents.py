@@ -459,7 +459,9 @@ def main():
             flush=True,
         )
 
-    successful_samples = torch.zeros(
+    # Scalar count for this rank. This may start nonzero when resuming a cache
+    # run that processed all samples but failed before writing _SUCCESS.
+    successful_samples = torch.tensor(
         sample_index, device=device, dtype=torch.long)
     throughput_meter = ThroughputMeter()
     progress = tqdm(

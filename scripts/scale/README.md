@@ -72,8 +72,14 @@ SpatialVID CSV. No manually prepared evaluation CSV is required.
      `cache_latents/.../train` directory, then removed from local staging.
    - `progress-rXXXXX.pt` is the exact resume cursor and raw-moment state.
      `status-rXXXXX.json` is the human-readable progress report.
+   - Check completion with
+     `bash scripts/scale/check_cache_status.sh train`. It must print
+     `COMPLETE` before merge.
 5. `03_cache_eval_latents.sh`
    - Run once to cache the automatically selected held-out split.
+   - Check completion with
+     `bash scripts/scale/check_cache_status.sh eval`. It must print
+     `COMPLETE` before merge.
    - Run this before the full cache, then run `smoke_compact_dit.sh`. The smoke
      job uses only the held-out cache and performs two optimizer steps to test
      OBS streaming, NPU forward/backward, EMA, checkpointing, and RGB preview.
