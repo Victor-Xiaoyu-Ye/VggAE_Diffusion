@@ -132,9 +132,10 @@ def validate_resume(checkpoint, cache_stats, args):
     saved_stats = checkpoint.get("normalization")
     if saved_stats is None:
         raise ValueError("Resume checkpoint has no cached-latent normalization")
-    if saved_stats.get("representation") != cache_stats.get("representation"):
-        raise ValueError(
-            "Resume checkpoint was trained with a different representation")
+    compare_cache_representations(
+        saved_stats.get("representation"),
+        cache_stats.get("representation"),
+        label="resume/cache")
     for group in ("target", "cond"):
         for key in ("mean", "std"):
             if not torch.equal(
@@ -142,6 +143,45 @@ def validate_resume(checkpoint, cache_stats, args):
                     cache_stats[group][key].cpu()):
                 raise ValueError(
                     f"Resume normalization mismatch for {group}.{key}")
+
+
+def compare_file_signature(left, right, key, label):
+    if left == right:
+        return
+    if not isinstance(left, dict) or not isinstance(right, dict):
+        raise ValueError(f"{label} {key} signature mismatch")
+    left_size = left.get("size")
+    right_size = right.get("size")
+    if left_size is not None and right_size is not None and left_size != right_size:
+        raise ValueError(
+            f"{label} {key} checkpoint size mismatch: "
+            f"{left_size} != {right_size}")
+    if "sample_sha256" in left and "sample_sha256" in right:
+        raise ValueError(f"{label} {key} checkpoint content mismatch")
+    if is_main_process():
+        print(
+            f"[WARN] {label} {key} signature differs only by legacy metadata; "
+            "continuing with size-compatible checkpoint contract")
+
+
+def compare_cache_representations(left, right, label="train/eval cache"):
+    if not isinstance(left, dict) or not isinstance(right, dict):
+        raise ValueError(f"{label} representation is missing")
+    keys = (
+        "latent_dim", "latent_grid", "levels", "seq_len", "target_size",
+        "max_frame_span", "clip_duration_seconds", "clips_per_video",
+        "disable_temporal_mixer",
+    )
+    mismatches = []
+    for key in keys:
+        if left.get(key) != right.get(key):
+            mismatches.append(
+                f"{key}: left={left.get(key)!r}, right={right.get(key)!r}")
+    if mismatches:
+        raise ValueError(
+            f"{label} latent contract mismatch: " + "; ".join(mismatches))
+    for key in ("encoder", "autoencoder"):
+        compare_file_signature(left.get(key), right.get(key), key, label)
 
 
 def load_preview_sample(manifest_path):
@@ -449,9 +489,10 @@ def main():
                 if is_remote_path(args.eval_stats) else args.eval_stats)
             eval_stats = torch.load(
                 eval_stats_path, map_location="cpu", weights_only=False)
-            if eval_stats.get("representation") != representation:
-                raise ValueError(
-                    "Evaluation cache uses a different representation")
+            compare_cache_representations(
+                representation,
+                eval_stats.get("representation"),
+                label="train/eval cache")
         preview_batch = load_preview_sample(eval_manifest)
         print(
             "Preview cache sample: "

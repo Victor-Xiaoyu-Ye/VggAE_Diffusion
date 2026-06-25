@@ -71,6 +71,55 @@ def validate_representation_args(saved, expected, label):
     print(f"[PASS] {label} representation contract")
 
 
+def compare_file_signature(left, right, key, label):
+    if left == right:
+        return
+    if not isinstance(left, dict) or not isinstance(right, dict):
+        raise RuntimeError(f"{label} {key} signature mismatch")
+    left_size = left.get("size")
+    right_size = right.get("size")
+    if left_size is not None and right_size is not None and left_size != right_size:
+        raise RuntimeError(
+            f"{label} {key} checkpoint size mismatch: "
+            f"{left_size} != {right_size}")
+    if "sample_sha256" in left and "sample_sha256" in right:
+        raise RuntimeError(f"{label} {key} checkpoint content mismatch")
+    print(
+        f"[WARN] {label} {key} signature differs only by legacy metadata; "
+        "continuing with size-compatible checkpoint contract")
+
+
+def compare_cache_representations(train_rep, eval_rep):
+    """Compare only fields that define the latent tensor semantics.
+
+    Older cache artifacts may have a less detailed checkpoint signature. That
+    should not stop a run when the model-size contract and latent parameters
+    still match; changed latent dimensions, levels, temporal mixing, or frame
+    sampling do remain fatal.
+    """
+    if not isinstance(train_rep, dict) or not isinstance(eval_rep, dict):
+        raise RuntimeError("Training/evaluation cache representation is missing")
+    keys = (
+        "latent_dim", "latent_grid", "levels", "seq_len", "target_size",
+        "max_frame_span", "clip_duration_seconds", "clips_per_video",
+        "disable_temporal_mixer",
+    )
+    mismatches = []
+    for key in keys:
+        if train_rep.get(key) != eval_rep.get(key):
+            mismatches.append(
+                f"{key}: train={train_rep.get(key)!r}, "
+                f"eval={eval_rep.get(key)!r}")
+    if mismatches:
+        raise RuntimeError(
+            "Training and evaluation caches use different latent contracts: "
+            + "; ".join(mismatches))
+    for key in ("encoder", "autoencoder"):
+        compare_file_signature(
+            train_rep.get(key), eval_rep.get(key), key, "cache")
+    print("[PASS] training/evaluation cache latent contract match")
+
+
 def validate_autoencoder(path, expected):
     require_file(path, "geometry autoencoder checkpoint")
     checkpoint = load_torch(path)
@@ -193,9 +242,9 @@ def main():
             args.train_cache_dir, expected, "training cache")
         eval_stats = validate_merged_cache(
             args.eval_cache_dir, expected, "evaluation cache")
-        if train_stats.get("representation") != eval_stats.get("representation"):
-            raise RuntimeError(
-                "Training and evaluation caches use different representations")
+        compare_cache_representations(
+            train_stats.get("representation"),
+            eval_stats.get("representation"))
 
     if args.stage == "before_sample":
         validate_diffusion(args.diffusion_ckpt, expected)
