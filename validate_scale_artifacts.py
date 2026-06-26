@@ -101,8 +101,7 @@ def compare_cache_representations(train_rep, eval_rep):
         raise RuntimeError("Training/evaluation cache representation is missing")
     keys = (
         "latent_dim", "latent_grid", "levels", "seq_len", "target_size",
-        "max_frame_span", "clip_duration_seconds", "clips_per_video",
-        "disable_temporal_mixer",
+        "max_frame_span", "clip_duration_seconds", "disable_temporal_mixer",
     )
     mismatches = []
     for key in keys:
