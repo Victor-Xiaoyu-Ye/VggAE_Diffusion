@@ -442,6 +442,7 @@ def main():
         raise ValueError("--sample_steps must be positive")
 
     use_ddp, rank, local_rank, world_size = setup_ddp()
+    main_process = is_main_process()
     device_type = get_device_name()
     configure_backend_compatibility(device_type)
     if device_type == "cpu":
@@ -485,7 +486,7 @@ def main():
     eval_manifest = args.eval_manifest or args.manifest
     preview_batch = None
     rgb_preview = None
-    if is_main_process():
+    if main_process:
         if not args.eval_manifest:
             print(
                 "[WARN] --eval_manifest not set; preview metrics use "
@@ -591,10 +592,10 @@ def main():
             log_dir=os.path.join(args.output_dir, "tb"),
             purge_step=global_step if global_step > 0 else None,
         )
-        if is_main_process() else None
+        if main_process else None
     )
     metrics_path = os.path.join(args.output_dir, "metrics.jsonl")
-    if is_main_process():
+    if main_process:
         total_params = sum(
             parameter.numel()
             for parameter in (model.module if use_ddp else model).parameters())
@@ -621,7 +622,7 @@ def main():
     pbar = tqdm(
         total=args.max_steps, initial=global_step,
         desc="Training cached CompactLatentDiT",
-        disable=not is_main_process(), dynamic_ncols=True)
+        disable=not main_process, dynamic_ncols=True)
     while global_step < args.max_steps:
         accumulated_loss = torch.zeros((), device=device)
         for micro_step in range(args.accum_steps):
@@ -679,7 +680,7 @@ def main():
             dist.all_reduce(mean_loss, op=dist.ReduceOp.SUM)
             mean_loss /= world_size
 
-        if is_main_process() and global_step % args.log_every == 0:
+        if main_process and global_step % args.log_every == 0:
             loss_value = mean_loss.item()
             lr = optimizer.param_groups[0]["lr"]
             throughput = throughput_meter.rate()
@@ -706,7 +707,7 @@ def main():
 
         save_due = global_step % args.save_every == 0
         eval_due = global_step % args.eval_every == 0
-        if is_main_process() and save_due:
+        if main_process and save_due:
             step_checkpoint = os.path.join(
                 args.output_dir, f"checkpoint_step{global_step:08d}.pt")
             save_checkpoint(
@@ -721,7 +722,7 @@ def main():
         should_eval = save_due or eval_due
         if use_ddp and should_eval:
             dist.barrier()
-        if is_main_process() and should_eval:
+        if main_process and should_eval:
             training_state = {
                 key: value.clone()
                 for key, value in base_model.state_dict().items()}
@@ -757,7 +758,7 @@ def main():
 
     pbar.close()
 
-    if is_main_process():
+    if main_process:
         save_checkpoint(
             os.path.join(args.output_dir, "checkpoint_final.pt"),
             model.module if use_ddp else model,
