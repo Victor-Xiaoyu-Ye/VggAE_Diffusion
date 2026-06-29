@@ -11,6 +11,7 @@ I0_CKPT="${SCALE_I0_DECODER_CKPT}"
 GENERATOR_CKPT="${SCALE_DIFFUSION_CKPT}"
 OUT_DIR="${SCALE_ROOT}/samples"
 REMOTE_OUT_DIR="${SCALE_REMOTE_ROOT}/samples"
+MIRROR_OUT_DIR="${SCALE_MIRROR_ROOT}/samples"
 SEED=42
 NUM_STEPS=50
 SOLVER="midpoint"
@@ -51,3 +52,7 @@ ensure_local_checkpoint \
 
 "${PYTHON_BIN}" "${PROJECT}/scripts/moxing_transfer.py" \
   "${OUT_DIR}" "${REMOTE_OUT_DIR}" --directory
+if [[ -n "${MIRROR_OUT_DIR}" && "${MIRROR_OUT_DIR%/}" != "${REMOTE_OUT_DIR%/}" ]]; then
+  "${PYTHON_BIN}" "${PROJECT}/scripts/moxing_transfer.py" \
+    "${OUT_DIR}" "${MIRROR_OUT_DIR}" --directory
+fi
