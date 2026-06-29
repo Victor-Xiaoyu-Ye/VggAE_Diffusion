@@ -124,13 +124,19 @@ ensure_local_checkpoint() {
 }
 
 require_scale_cluster() {
-  local expected_nodes=${EXPECTED_NNODES:-6}
-  if [[ "${NNODES}" -ne "${expected_nodes}" ]]; then
-    echo "[WARN] Scale job expected ${expected_nodes} nodes, got ${NNODES}." >&2
+  if [[ -n "${EXPECTED_NNODES:-}" && "${NNODES}" -ne "${EXPECTED_NNODES}" ]]; then
+    echo "[WARN] Scale job expected ${EXPECTED_NNODES} nodes, got ${NNODES}." >&2
+  fi
+  if [[ -n "${MIN_NNODES:-}" && "${NNODES}" -lt "${MIN_NNODES}" ]]; then
+    echo "[WARN] Scale job expected at least ${MIN_NNODES} nodes, got ${NNODES}." >&2
+  fi
+  if [[ -n "${MAX_NNODES:-}" && "${NNODES}" -gt "${MAX_NNODES}" ]]; then
+    echo "[WARN] Scale job expected at most ${MAX_NNODES} nodes, got ${NNODES}." >&2
   fi
   if [[ "${NUM_NPUS}" -ne 8 ]]; then
     echo "[WARN] Scale job expected 8 NPUs per node, got ${NUM_NPUS}." >&2
   fi
+  echo "Scale cluster: NNODES=${NNODES}, NUM_NPUS=${NUM_NPUS}, WORLD_SIZE=${WORLD_SIZE}" >&2
 }
 
 start_output_sync() {

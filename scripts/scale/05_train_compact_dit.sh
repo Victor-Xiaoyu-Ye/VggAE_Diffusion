@@ -10,31 +10,35 @@ source "${SCRIPT_DIR}/../lib/modelarts.sh"
 OUTPUT_DIR="${SCALE_ROOT}/compact_dit"
 REMOTE_OUTPUT_DIR="${SCALE_REMOTE_ROOT}/compact_dit"
 I0_CKPT="${SCALE_I0_DECODER_CKPT}"
-RESUME=""
-AUTO_RESUME=1
+RESUME="${RESUME:-}"
+AUTO_RESUME="${AUTO_RESUME:-1}"
+RESUME_MODE="${RESUME_MODE:-weights}"
 
-MAX_STEPS=40000
-BATCH_SIZE=1
-ACCUM_STEPS=4
-LEARNING_RATE=1e-4
-WEIGHT_DECAY=1e-2
-WARMUP_STEPS=1000
-MODEL_DIM=640
-SPATIAL_DEPTH=8
-TEMPORAL_DEPTH=4
-NUM_HEADS=10
-NUM_WORKERS=4
-SHUFFLE_BUFFER=512
-SAVE_EVERY=2000
-EVAL_EVERY=2000
-LOG_EVERY=50
-SAMPLE_STEPS=20
+MAX_STEPS="${MAX_STEPS:-100000}"
+BATCH_SIZE="${BATCH_SIZE:-1}"
+ACCUM_STEPS="${ACCUM_STEPS:-1}"
+LEARNING_RATE="${LEARNING_RATE:-5e-5}"
+WEIGHT_DECAY="${WEIGHT_DECAY:-1e-2}"
+WARMUP_STEPS="${WARMUP_STEPS:-500}"
+MODEL_DIM="${MODEL_DIM:-640}"
+SPATIAL_DEPTH="${SPATIAL_DEPTH:-8}"
+TEMPORAL_DEPTH="${TEMPORAL_DEPTH:-4}"
+NUM_HEADS="${NUM_HEADS:-10}"
+NUM_WORKERS="${NUM_WORKERS:-4}"
+SHUFFLE_BUFFER="${SHUFFLE_BUFFER:-512}"
+SAVE_EVERY="${SAVE_EVERY:-2000}"
+EVAL_EVERY="${EVAL_EVERY:-2000}"
+LOG_EVERY="${LOG_EVERY:-50}"
+SAMPLE_STEPS="${SAMPLE_STEPS:-20}"
 MASTER_PORT=29604
 # -----------------------------------------------------------------------------
 
 configure_modelarts_distributed
 require_scale_cluster
 require_output_url
+
+echo "Compact DiT launch: NNODES=${NNODES}, NUM_NPUS=${NUM_NPUS}, WORLD_SIZE=${WORLD_SIZE}"
+echo "Continuation config: max_steps=${MAX_STEPS}, batch=${BATCH_SIZE}, accum=${ACCUM_STEPS}, lr=${LEARNING_RATE}, resume_mode=${RESUME_MODE}"
 
 EXTRA_ARGS=(
   --eval_manifest "${SCALE_EVAL_CACHE_DIR}/manifest.txt"
@@ -50,7 +54,7 @@ if [[ "${AUTO_RESUME}" -eq 1 || -n "${RESUME}" ]]; then
 fi
 if [[ -n "${RESUME}" ]]; then
   echo "Resuming Compact DiT from ${RESUME}"
-  EXTRA_ARGS+=(--resume "${RESUME}")
+  EXTRA_ARGS+=(--resume "${RESUME}" --resume_mode "${RESUME_MODE}")
 fi
 ensure_local_checkpoint \
   "${I0_CKPT}" "${SCALE_I0_DECODER_CKPT_URL}" \

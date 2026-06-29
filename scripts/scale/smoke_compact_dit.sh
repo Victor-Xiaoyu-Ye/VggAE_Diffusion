@@ -5,8 +5,9 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source "${SCRIPT_DIR}/../spatialvid_config.sh"
 source "${SCRIPT_DIR}/../lib/modelarts.sh"
 
-# Two optimizer steps on the held-out cache. This validates OBS tar streaming,
-# normalization, NPU forward/backward, EMA, checkpointing, and RGB preview.
+# Two optimizer steps on the training cache, with held-out cache used only for
+# fixed preview. The train cache has enough tar shards for large 30-44 node
+# jobs; the eval cache intentionally has only a small number of shards.
 OUTPUT_DIR="${SCALE_ROOT}/smoke_compact_dit"
 REMOTE_OUTPUT_DIR="${SCALE_REMOTE_ROOT}/smoke_compact_dit"
 I0_CKPT="${SCALE_I0_DECODER_CKPT}"
@@ -39,8 +40,8 @@ start_output_sync "${OUTPUT_DIR}" "${REMOTE_OUTPUT_DIR}"
 trap 'stop_output_sync "${OUTPUT_DIR}" "${REMOTE_OUTPUT_DIR}"' EXIT
 
 run_torchrun "${PROJECT}/train_cached_compact_diffusion.py" \
-  --manifest "${SCALE_EVAL_CACHE_DIR}/manifest.txt" \
-  --stats "${SCALE_EVAL_CACHE_DIR}/stats.pt" \
+  --manifest "${SCALE_TRAIN_CACHE_DIR}/manifest.txt" \
+  --stats "${SCALE_TRAIN_CACHE_DIR}/stats.pt" \
   --eval_manifest "${SCALE_EVAL_CACHE_DIR}/manifest.txt" \
   --eval_stats "${SCALE_EVAL_CACHE_DIR}/stats.pt" \
   --i0_decoder_ckpt "${I0_CKPT}" \

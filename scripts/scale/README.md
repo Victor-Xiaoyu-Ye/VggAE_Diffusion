@@ -3,7 +3,7 @@
 The scale path freezes the representation before the full SpatialVID run.
 It does not decode MP4 or run StreamVGGT inside the diffusion training loop.
 
-## Default 6x8 configuration
+## Scale configuration
 
 - Source videos: 365,362.
 - Cached windows per video: 4 deterministic one-second windows.
@@ -11,8 +11,15 @@ It does not decode MP4 or run StreamVGGT inside the diffusion training loop.
 - Compact latent: `256 x 18 x 18`.
 - Compact DiT: 640 hidden, 8 spatial blocks, 4 temporal blocks, 10 heads
   (about 68M parameters).
-- Global diffusion batch: `48 NPUs x batch 1 x accumulation 4 = 192`.
-- 40,000 optimizer steps: about 5.25 passes over the cached clips.
+- The existing latent cache was generated with one 6x8 job, but merged cache
+  training is independent of cache-generation world size.
+- Compact DiT continuation supports larger ModelArts jobs such as 30-44 nodes.
+  The script uses all assigned nodes by default.
+- Default continuation batch on 30-44 nodes:
+  `nodes x 8 NPUs x batch 1 x accumulation 1 = 240-352`.
+- Default continuation target: `MAX_STEPS=100000`, resuming model/EMA weights
+  from the latest checkpoint and resetting the optimizer schedule with
+  `RESUME_MODE=weights`.
 
 The representation autoencoder trains for 8 epochs and the I0 decoder for 6.
 Those online stages choose a new random one-second window on every dataset
@@ -101,8 +108,14 @@ SpatialVID CSV. No manually prepared evaluation CSV is required.
      latent preview.
    - The eval cache stores its first frame, so RGB previews automatically use
      the I0 aligned with the first latent sample.
+   - By default `AUTO_RESUME=1` tries the current output URL and then the
+     persistent personal OBS mirror for `checkpoint_latest.pt`.
+   - For large continuation jobs, the default `RESUME_MODE=weights` loads
+     model/EMA/global step but starts a fresh optimizer and LR schedule. Use
+     `RESUME_MODE=full` only when continuing the same run with the same
+     optimizer schedule.
    - Run `preflight_next_stage.sh before_diffusion` before launching the full
-     40,000-step job. It validates both merged caches, normalization tensor
+     DiT job. It validates both merged caches, normalization tensor
      shapes, sampled tar objects, and the I0 checkpoint.
 8. `06_sample_compact_dit.sh`
    - Generate seven future frames from one observed RGB frame.

@@ -62,6 +62,14 @@ def parse_args():
     parser.add_argument("--i0_decoder_ckpt", default="")
     parser.add_argument("--output_dir", required=True)
     parser.add_argument("--resume", default="")
+    parser.add_argument(
+        "--resume_mode",
+        choices=["full", "weights"],
+        default="full",
+        help=(
+            "full restores optimizer/scheduler/scaler/RNG exactly; weights "
+            "loads model/EMA/global_step only and starts a fresh optimizer "
+            "schedule, useful when continuing on a larger cluster"))
 
     parser.add_argument("--latent_dim", type=int, default=512)
     parser.add_argument("--latent_grid", type=int, default=18)
@@ -547,15 +555,31 @@ def main():
         model.load_state_dict(checkpoint["model"])
         ema.load_state_dict(checkpoint["ema"])
         ema = ema.to(device)
-        optimizer.load_state_dict(checkpoint["optimizer"])
-        scheduler.load_state_dict(checkpoint["scheduler"])
-        if "scaler" in checkpoint:
-            scaler.load_state_dict(checkpoint["scaler"])
         global_step = checkpoint["global_step"]
-        if rank == 0:
-            restore_rng_state(checkpoint.get("rng_state"))
+        if args.resume_mode == "full":
+            optimizer.load_state_dict(checkpoint["optimizer"])
+            scheduler.load_state_dict(checkpoint["scheduler"])
+            if "scaler" in checkpoint:
+                scaler.load_state_dict(checkpoint["scaler"])
+            if rank == 0:
+                restore_rng_state(checkpoint.get("rng_state"))
+            else:
+                set_seed(args.seed + rank + global_step * 1009)
+            if main_process:
+                print(
+                    f"Resumed full optimizer/scheduler state from "
+                    f"{args.resume} at step {global_step}")
         else:
             set_seed(args.seed + rank + global_step * 1009)
+            if main_process:
+                print(
+                    f"Resumed model/EMA weights from {args.resume} at "
+                    f"step {global_step}; optimizer and LR schedule reset")
+        if global_step >= args.max_steps:
+            raise ValueError(
+                f"Resume checkpoint is already at step {global_step}, but "
+                f"--max_steps is {args.max_steps}. Increase MAX_STEPS for "
+                "continuation training.")
 
     if use_ddp:
         model = nn.parallel.DistributedDataParallel(
@@ -578,6 +602,17 @@ def main():
             f"Training cached CompactLatentDiT: {total_params / 1e6:.1f}M params, "
             f"{cache_stats.get('num_samples', 'unknown')} cached videos, "
             f"{world_size} {device_type.upper()} devices")
+        append_metrics(metrics_path, {
+            "run/start": True,
+            "resume_step": global_step,
+            "max_steps": args.max_steps,
+            "world_size": world_size,
+            "batch_size": args.batch_size,
+            "accum_steps": args.accum_steps,
+            "effective_batch": world_size * args.batch_size * args.accum_steps,
+            "lr": args.lr,
+            "resume_mode": args.resume_mode,
+        })
 
     data_iterator = iter(dataloader)
     optimizer.zero_grad(set_to_none=True)
