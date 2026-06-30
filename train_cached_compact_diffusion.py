@@ -98,6 +98,11 @@ def parse_args():
     parser.add_argument("--save_every", type=int, default=10000)
     parser.add_argument("--eval_every", type=int, default=10000)
     parser.add_argument("--sample_steps", type=int, default=20)
+    parser.add_argument(
+        "--throughput_divisor",
+        type=float,
+        default=1.0,
+        help="Divide reported DI_throughput by this value")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--local_rank", type=int, default=0)
     return parser.parse_args()
@@ -440,6 +445,8 @@ def main():
         raise ValueError("log/save/eval intervals must be positive")
     if args.sample_steps < 1:
         raise ValueError("--sample_steps must be positive")
+    if args.throughput_divisor <= 0:
+        raise ValueError("--throughput_divisor must be positive")
 
     use_ddp, rank, local_rank, world_size = setup_ddp()
     main_process = is_main_process()
@@ -613,6 +620,7 @@ def main():
             "effective_batch": world_size * args.batch_size * args.accum_steps,
             "lr": args.lr,
             "resume_mode": args.resume_mode,
+            "throughput_divisor": args.throughput_divisor,
         })
 
     data_iterator = iter(dataloader)
@@ -683,14 +691,15 @@ def main():
         if main_process and global_step % args.log_every == 0:
             loss_value = mean_loss.item()
             lr = optimizer.param_groups[0]["lr"]
-            throughput = throughput_meter.rate()
+            raw_throughput = throughput_meter.rate()
+            throughput = raw_throughput / args.throughput_divisor
             print(
                 f"step={global_step} loss={loss_value:.6f} "
                 f"lr={lr:.3e} grad_norm={float(grad_norm):.3f} "
                 f"DI_throughput: {throughput:.2f} tokens/s/npu")
             pbar.set_postfix(
                 loss=f"{loss_value:.4f}",
-                DI_throughput=throughput_meter.format())
+                DI_throughput=f"{throughput:.2f} tokens/s/npu")
             writer.add_scalar("train/loss", loss_value, global_step)
             writer.add_scalar("train/lr", lr, global_step)
             writer.add_scalar(
@@ -703,6 +712,7 @@ def main():
                 "train/lr": lr,
                 "train/grad_norm": float(grad_norm),
                 "train/DI_throughput": throughput,
+                "train/raw_DI_throughput": raw_throughput,
             })
 
         save_due = global_step % args.save_every == 0

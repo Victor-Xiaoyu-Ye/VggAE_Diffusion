@@ -117,10 +117,37 @@ SpatialVID CSV. No manually prepared evaluation CSV is required.
    - Run `preflight_next_stage.sh before_diffusion` before launching the full
      DiT job. It validates both merged caches, normalization tensor
      shapes, sampled tar objects, and the I0 checkpoint.
-8. `06_sample_compact_dit.sh`
+   - The default script is the 640-dim baseline/continuation path.
+8. `05_train_compact_dit_large.sh`
+   - Train a fresh larger Compact DiT from the same merged latent cache.
+   - Default experiment name:
+     `compact_dit_768d10s6t_h12_v1`.
+   - Default model:
+     `model_dim=768`, `spatial_depth=10`, `temporal_depth=6`,
+     `num_heads=12`.
+   - Default launch expectation: 32 nodes x 8 NPUs. The script still uses the
+     actual nodes assigned by ModelArts, but prints a warning if it differs
+     from `EXPECTED_NNODES=32`.
+   - This script sets `AUTO_RESUME=0` by default so it does not accidentally
+     continue the 640-dim baseline. Set `RESUME=...` only when explicitly
+     continuing the same large experiment.
+   - Output and checkpoints are versioned under:
+
+```text
+$OUTPUT_URL/scale/compact_dit_768d10s6t_h12_v1
+obs://yw-ads-training-gy1/data/external/personal/g00833899/y50046448/output/scale/compact_dit_768d10s6t_h12_v1
+```
+
+   - `DI_throughput` is reported after dividing the raw token rate by 20, and
+     `train/raw_DI_throughput` is also written to JSONL for audit.
+9. `06_sample_compact_dit.sh`
    - Generate seven future frames from one observed RGB frame.
    - Run `preflight_next_stage.sh before_sample` to validate the generator and
      all upstream representation artifacts.
+10. `06_sample_compact_dit_large.sh`
+   - Sample the versioned large DiT checkpoint from
+     `compact_dit_768d10s6t_h12_v1`.
+   - Outputs are written to `scale/samples_compact_dit_768d10s6t_h12_v1`.
 
 Geometry-autoencoder inference can be run independently with:
 
