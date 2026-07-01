@@ -107,25 +107,38 @@ works; then add classifier-free text conditioning as a separate experiment.
 
 ## Wan Initialization
 
-Wan2.1 1.3B is an initialization experiment, not the default production path.
-The current adapter bypasses Wan's native VAE patch embedding and output head,
-so pretrained input/output semantics are not preserved. Legacy CLIP embeddings
-also do not match Wan's pretrained UMT5 context.
+Wan initialization is now a formal scale A/B path:
 
-The retained Wan training harness is not ready for this comparison: it does
-not yet consume cached seven-frame residuals or wire the adapter's I0/native
-UMT5 hooks. Do not launch it as a scale run.
+```bash
+bash scripts/scale/05_train_wan_compact.sh
+bash scripts/scale/06_sample_wan_compact.sh
+```
 
-For a fair A/B test:
+It consumes the same cached seven-frame residual latents and normalization as
+CompactLatentDiT, conditions on I0, and writes a versioned output directory
+under `scale/wan_compact_i2v14b480p_v1` by default. Checkpoints store only
+trainable adapter, time, modulation, and optional QKV deltas plus EMA; the
+frozen Wan backbone is reloaded from `WAN_CKPT_DIR` on resume and sampling.
 
-- Use the same cached latent shards and normalization as CompactLatentDiT.
-- Use native UMT5 embeddings through Wan's `text_embedding`.
-- Condition on I0 and predict only seven future residual frames.
-- Warm up adapters, then progressively unfreeze attention/FFN blocks.
-- Compare sample quality per GPU-hour, not training loss alone.
+This does not preserve Wan's native VAE patch input/output semantics. The fair
+question is whether pretrained Wan temporal/spatial attention is a better
+initialization for the StreamVGGT compact latent field than a from-scratch DiT.
+Text conditioning remains off by default so the geometry-aware latent contract
+is the only variable.
 
-Move to a larger image-to-video Wan checkpoint only after the compact-latent
-pipeline produces a valid baseline.
+The current default prefers `Wan2.1-I2V-14B-480P`. Because the training code
+uses replicated DDP rather than FSDP/ZeRO, `TRAIN_QKV=0` is the default for
+14B. That trains latent input/output adapters, the I0 adapter, Wan time path,
+and block modulation while preserving pretrained attention/FFN weights. Use
+`TRAIN_QKV=1` only after a small memory smoke test succeeds.
+
+Move beyond the default frozen-QKV 14B run only after:
+
+- it improves RGB/latent preview quality over from-scratch DiT;
+- memory and throughput are acceptable on the assigned node count;
+- the larger checkpoint's config loads through `WanCompactAdapter` without
+  hidden-dimension mismatch;
+- sampling works from the saved trainable-delta checkpoint.
 
 ## Data Requirements
 

@@ -56,6 +56,8 @@ path is preferred when using the complete SpatialVID metadata CSV.
 Use [`scripts/scale/`](scripts/scale/README.md). The scale path freezes the
 tokenizer, caches compact I0/future-residual latent tar shards, and trains the
 generator by optimizer step without video decoding in the diffusion loop.
+The active generator baselines are from-scratch Compact DiT and a
+Wan-initialized compact latent adapter on the same cached latent contract.
 
 The design, validation gates, storage estimates, and Wan recommendation are in
 [`SCALE_TRAINING.md`](SCALE_TRAINING.md).

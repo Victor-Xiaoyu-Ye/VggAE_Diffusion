@@ -148,6 +148,30 @@ obs://yw-ads-training-gy1/data/external/personal/g00833899/y50046448/output/scal
    - Sample the versioned large DiT checkpoint from
      `compact_dit_768d10s6t_h12_v1`.
    - Outputs are written to `scale/samples_compact_dit_768d10s6t_h12_v1`.
+11. `smoke_wan_compact.sh`
+   - Run two Wan-initialized optimizer steps and preview generation.
+   - Use this before the full 14B run to verify weight loading, NPU memory,
+     DDP communication, checkpoint writing, RGB preview, and output mirroring.
+12. `05_train_wan_compact.sh`
+   - Train a Wan-initialized generator on the same cached compact residual
+     latents.
+   - Default experiment name: `wan_compact_i2v14b480p_v1`.
+   - Default checkpoint selection prefers `Wan2.1-I2V-14B-480P` from
+     `WAN_CKPT_DIR`, then falls back to `Wan2.1-T2V-1.3B`.
+   - The checkpoint stores only trainable Wan adapter/QKV/time/modulation
+     deltas plus EMA, not the frozen Wan backbone. Resume and sampling
+     therefore require the same `WAN_CKPT_DIR`.
+   - `TRAIN_QKV=0` by default. This keeps 14B DDP memory realistic by training
+     latent input/output adapters, I0 adapter, time path, and Wan modulation.
+     Set `TRAIN_QKV=1` only after a memory smoke test succeeds.
+   - This is the current A/B test against from-scratch Compact DiT. It does
+     not require retraining the geometry AE, I0 decoder, or latent cache.
+   - Override `WAN_CKPT_DIR` to test a larger Wan checkpoint after confirming
+     it fits memory; the adapter reads hidden dimension, frequency dimension,
+     heads, and layers from the checkpoint config.
+13. `06_sample_wan_compact.sh`
+   - Sample `wan_compact_i2v14b480p_v1` using the same I0-conditioned decoder.
+   - Outputs are written to `scale/samples_wan_compact_i2v14b480p_v1`.
 
 Geometry-autoencoder inference can be run independently with:
 
@@ -227,10 +251,11 @@ This fallback applies to the geometry autoencoder, I0 decoder, Compact DiT,
 preflight checks, inference, and sampling, so a new ModelArts job can continue
 artifacts written by an earlier job.
 
-Wan initialization is deliberately not the default scale script. The current
-compact adapter bypasses Wan's native VAE patch interface, and the legacy CLIP
-text path does not match Wan's pretrained UMT5 context. Establish the compact
-DiT baseline first, then compare Wan initialization on the same cached latents.
+Wan initialization is available as `05_train_wan_compact.sh`. It still bypasses
+Wan's native VAE patch interface, so the fair comparison is not "Wan video VAE
+vs our latent"; it is "from-scratch transformer vs Wan-pretrained temporal/
+spatial attention on the same StreamVGGT compact latent contract." Text
+conditioning remains off by default.
 
 Outputs are written under local `RUN_ROOT`, then global rank 0 mirrors them
 every `OUTPUT_SYNC_SECONDS` to

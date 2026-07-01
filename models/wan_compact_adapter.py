@@ -1,4 +1,4 @@
-"""Wan2.1 1.3B adapter for compact latent z_g.
+"""Wan2.1 adapter for compact latent z_g.
 
 Key design (from verification experiments + all prior learnings):
   1. DUAL time conditioning: concat at input (V1/V3: works) + adaLN in blocks (Wan native)
@@ -15,65 +15,132 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.amp as amp
 import math
+import importlib.util
 import sys, os
+import types
+
+try:
+    torch.get_autocast_dtype("npu")
+    _NPU_AUTOCAST_AVAILABLE = True
+except RuntimeError:
+    _NPU_AUTOCAST_AVAILABLE = False
+
+if not _NPU_AUTOCAST_AVAILABLE:
+    if not hasattr(torch, "npu"):
+        class _DummyNPU:
+            @staticmethod
+            def current_device():
+                return 0
+
+            @staticmethod
+            def is_available():
+                return False
+
+        torch.npu = _DummyNPU()
+
+    _original_autocast = amp.autocast
+
+    def _autocast_without_npu(*args, **kwargs):
+        if kwargs.get("device_type") == "npu":
+            kwargs = dict(kwargs)
+            kwargs["device_type"] = "cuda" if torch.cuda.is_available() else "cpu"
+        elif args and args[0] == "npu":
+            args = ("cuda" if torch.cuda.is_available() else "cpu",) + args[1:]
+        return _original_autocast(*args, **kwargs)
+
+    amp.autocast = _autocast_without_npu
 
 _wan_root = os.path.join(os.path.dirname(__file__), '..', 'Wan2.1')
-if _wan_root not in sys.path:
-    sys.path.insert(0, _wan_root)
-from wan.modules.model import WanModel, sinusoidal_embedding_1d
+_wan_modules_root = os.path.join(_wan_root, "wan", "modules")
+_wan_direct_package = "_vgg_ae_wan_modules"
+if _wan_direct_package not in sys.modules:
+    package = types.ModuleType(_wan_direct_package)
+    package.__path__ = [_wan_modules_root]
+    sys.modules[_wan_direct_package] = package
+_wan_model_name = f"{_wan_direct_package}.model"
+if _wan_model_name not in sys.modules:
+    spec = importlib.util.spec_from_file_location(
+        _wan_model_name, os.path.join(_wan_modules_root, "model.py"))
+    wan_model_module = importlib.util.module_from_spec(spec)
+    sys.modules[_wan_model_name] = wan_model_module
+    spec.loader.exec_module(wan_model_module)
+else:
+    wan_model_module = sys.modules[_wan_model_name]
+WanModel = wan_model_module.WanModel
+sinusoidal_embedding_1d = wan_model_module.sinusoidal_embedding_1d
 
 
 class WanCompactAdapter(nn.Module):
     """Wan backbone adapted for compact latent flow matching."""
 
     def __init__(self, wan_checkpoint_dir, latent_dim=768, latent_grid=18,
-                 seq_len=8, wan_dim=1536, freq_dim=256, num_heads=12,
-                 i0_condition=False):
+                 seq_len=8, wan_dim=None, freq_dim=None, num_heads=None,
+                 i0_condition=False, train_text_adapter=False,
+                 train_qkv=True):
         super().__init__()
 
-        # Load pretrained Wan 1.3B
+        # Load pretrained Wan backbone. Do not hard-code the 1.3B dimensions:
+        # the scale script can point this adapter at larger Wan checkpoints.
         self.wan = WanModel.from_pretrained(wan_checkpoint_dir)
-        self.wan_dim = wan_dim
-        self.freq_dim = freq_dim
+        inferred_wan_dim = int(getattr(self.wan, "dim"))
+        inferred_freq_dim = int(getattr(self.wan, "freq_dim"))
+        inferred_heads = int(getattr(self.wan, "num_heads"))
+        if wan_dim is not None and int(wan_dim) != inferred_wan_dim:
+            raise ValueError(
+                f"wan_dim={wan_dim} does not match checkpoint dim "
+                f"{inferred_wan_dim}")
+        if freq_dim is not None and int(freq_dim) != inferred_freq_dim:
+            raise ValueError(
+                f"freq_dim={freq_dim} does not match checkpoint freq_dim "
+                f"{inferred_freq_dim}")
+        if num_heads is not None and int(num_heads) != inferred_heads:
+            raise ValueError(
+                f"num_heads={num_heads} does not match checkpoint heads "
+                f"{inferred_heads}")
+        self.wan_dim = inferred_wan_dim
+        self.freq_dim = inferred_freq_dim
+        self.num_heads = inferred_heads
 
         self.latent_dim = latent_dim
         self.latent_grid = latent_grid
         self.num_tokens = latent_grid ** 2
         self.seq_len = seq_len
         self.i0_condition = i0_condition
+        self.train_text_adapter = train_text_adapter
+        self.train_qkv = train_qkv
 
         # ---- Input: latent_dim → wan_dim with concat time injection ----
         self.time_concat_dim = 256
         self.time_concat_mlp = nn.Sequential(
-            nn.Linear(freq_dim, self.time_concat_dim * 2),
+            nn.Linear(self.freq_dim, self.time_concat_dim * 2),
             nn.SiLU(),
             nn.Linear(self.time_concat_dim * 2, self.time_concat_dim),
         )
         self.input_proj = nn.Sequential(
-            nn.Linear(latent_dim + self.time_concat_dim, wan_dim),
-            nn.LayerNorm(wan_dim),
+            nn.Linear(latent_dim + self.time_concat_dim, self.wan_dim),
+            nn.LayerNorm(self.wan_dim),
             nn.SiLU(),
-            nn.Linear(wan_dim, wan_dim),
+            nn.Linear(self.wan_dim, self.wan_dim),
         )
         if i0_condition:
             self.i0_proj = nn.Sequential(
                 nn.LayerNorm(latent_dim),
-                nn.Linear(latent_dim, wan_dim),
+                nn.Linear(latent_dim, self.wan_dim),
                 nn.SiLU(),
-                nn.Linear(wan_dim, wan_dim),
+                nn.Linear(self.wan_dim, self.wan_dim),
             )
 
         # ---- Output: wan_dim → latent_dim (zero-init) ----
-        self.output_norm = nn.LayerNorm(wan_dim)
-        self.output_proj = nn.Linear(wan_dim, latent_dim)
+        self.output_norm = nn.LayerNorm(self.wan_dim)
+        self.output_proj = nn.Linear(self.wan_dim, latent_dim)
         nn.init.zeros_(self.output_proj.weight)
         nn.init.zeros_(self.output_proj.bias)
 
-        # ---- Text projection: CLIP 768 → Wan 1536 ----
+        # ---- Text projection: legacy CLIP 768 → native Wan dim ----
         self.text_proj = nn.Sequential(
-            nn.Linear(768, wan_dim),
+            nn.Linear(768, self.wan_dim),
             nn.GELU(),
-            nn.Linear(wan_dim, wan_dim),
+            nn.Linear(self.wan_dim, self.wan_dim),
         )
 
         # ---- Trainable parameter setup ----
@@ -100,8 +167,9 @@ class WanCompactAdapter(nn.Module):
             p.requires_grad_(True)
         for p in self.output_proj.parameters():
             p.requires_grad_(True)
-        for p in self.text_proj.parameters():
-            p.requires_grad_(True)
+        if self.train_text_adapter:
+            for p in self.text_proj.parameters():
+                p.requires_grad_(True)
 
         # Wan time pathway
         for p in self.wan.time_embedding.parameters():
@@ -109,13 +177,14 @@ class WanCompactAdapter(nn.Module):
         for p in self.wan.time_projection.parameters():
             p.requires_grad_(True)
 
-        # Wan blocks: modulation + QKV
+        # Wan blocks: modulation + optionally QKV.
         for blk in self.wan.blocks:
             blk.modulation.requires_grad_(True)
-            for name in ['q', 'k', 'v']:
-                attn_module = getattr(blk.self_attn, name)
-                for p in attn_module.parameters():
-                    p.requires_grad_(True)
+            if self.train_qkv:
+                for name in ['q', 'k', 'v']:
+                    attn_module = getattr(blk.self_attn, name)
+                    for p in attn_module.parameters():
+                        p.requires_grad_(True)
 
         trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
         total = sum(p.numel() for p in self.parameters())

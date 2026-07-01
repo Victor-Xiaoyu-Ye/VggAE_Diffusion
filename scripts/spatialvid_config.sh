@@ -23,6 +23,20 @@ SPATIALVID_METADATA="${LOCAL_CACHE_ROOT}/metadata/SpatialVID_HQ_metadata.csv"
 VGGAE_REF_ROOT="${VGGAE_REF_ROOT:-/cache/yexiaoyu/vggae_ref}"
 STREAMVGGT_CKPT="${STREAMVGGT_CKPT:-${VGGAE_REF_ROOT}/StreamVGGT/checkpoints.pth}"
 GEOMETRY_AE_CKPT="${GEOMETRY_AE_CKPT:-${VGGAE_REF_ROOT}/checkpoints/geometry_autoencoder.pt}"
+WAN_CKPT_DIR="${WAN_CKPT_DIR:-}"
+if [[ -z "${WAN_CKPT_DIR}" ]]; then
+  for candidate in \
+    "/public2/LiZhen/yexiaoyu/ckpt/Wan2.1-I2V-14B-480P" \
+    "${VGGAE_REF_ROOT}/Wan2.1-I2V-14B-480P" \
+    "${VGGAE_REF_ROOT}/Wan2.1/checkpoints/Wan2.1-I2V-14B-480P" \
+    "${VGGAE_REF_ROOT}/Wan2.1/checkpoints/Wan2.1-T2V-1.3B" \
+    "${PROJECT}/Wan2.1/checkpoints/Wan2.1-T2V-1.3B"; do
+    if [[ -d "${candidate}" ]]; then
+      WAN_CKPT_DIR="${candidate}"
+      break
+    fi
+  done
+fi
 
 # ModelArts injects OUTPUT_URL for run outputs: checkpoints, metrics, samples,
 # TensorBoard, stdout, and NPU logs. Latent datasets use the fixed owner OBS
@@ -73,6 +87,7 @@ DIFFUSION_CKPT="${RUN_ROOT}/10k/compact_diffusion/checkpoint_final.pt"
 SCALE_GEOMETRY_AE_CKPT="${RUN_ROOT}/scale/geometry_autoencoder/checkpoint_latest.pt"
 SCALE_I0_DECODER_CKPT="${RUN_ROOT}/scale/i0_decoder/checkpoint_latest.pt"
 SCALE_DIFFUSION_CKPT="${RUN_ROOT}/scale/compact_dit/checkpoint_latest.pt"
+SCALE_WAN_DIFFUSION_CKPT="${RUN_ROOT}/scale/wan_compact_i2v14b480p_v1/checkpoint_latest.pt"
 
 # ============================================================================
 # DERIVED PATHS - normally do not edit

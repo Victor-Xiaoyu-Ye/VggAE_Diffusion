@@ -12,6 +12,7 @@
 | Scale I0 decoder | `scripts/scale/01_train_i0_decoder.sh` | Active |
 | Scale latent cache | `scripts/scale/02_*` through `04_*` | Active |
 | Scale cached Compact DiT | `scripts/scale/05_train_compact_dit.sh` | Primary generator |
+| Scale cached Wan adapter | `scripts/scale/05_train_wan_compact.sh` | Active A/B experiment |
 | Scale sampling | `scripts/scale/06_sample_compact_dit.sh` | Active |
 
 All active shell arguments match their Python entry points. Python compilation
@@ -38,13 +39,16 @@ historical eight-target run into the new seven-target configuration.
 
 ## Experimental
 
-`models/wan_compact_adapter.py` is retained as an adapter prototype. Its
-timestep bug is fixed, and it has native 4096-dim UMT5 and I0 conditioning
-hooks. The current `train_wan_compact_diffusion.py` harness does not wire those
-hooks into the active seven-frame residual/cache contract: it still uses the
-legacy CLIP path, online encoding, and eight full-frame targets. Treat that
-trainer as legacy, not as a valid Wan baseline. The adapter also bypasses Wan's
-native VAE patch input/output interface.
+`scripts/scale/05_train_wan_compact.sh` is the valid Wan A/B path. It consumes
+the active cached seven-frame I0 residual latent contract and saves only
+trainable Wan adapter/QKV/time/modulation deltas plus EMA. The old
+`train_wan_compact_diffusion.py` harness is still legacy because it uses online
+encoding and the superseded target contract.
+
+The Wan adapter bypasses Wan's native VAE patch input/output interface, so this
+experiment tests pretrained Wan attention as an initialization for StreamVGGT
+compact latents. It is not a claim that the original Wan VAE latent semantics
+are preserved.
 
 ## Legacy
 

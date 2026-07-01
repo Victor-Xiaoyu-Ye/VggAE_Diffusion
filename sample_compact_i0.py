@@ -15,6 +15,7 @@ from models.appearance_cnn import AppearanceCNN
 from models.compact_dit import CompactLatentDiT
 from models.generative_tokenizer import GenerativeTokenizer
 from models.i0_decoder import I0ConditionalDecoder, load_i0_decoder_state_dict
+from models.wan_compact_adapter import WanCompactAdapter
 from streamvggt.models.streamvggt import StreamVGGT
 from utils.device import (
     configure_backend_compatibility,
@@ -42,6 +43,9 @@ def parse_args():
     parser.add_argument("--autoencoder_ckpt", required=True)
     parser.add_argument("--i0_decoder_ckpt", required=True)
     parser.add_argument("--diffusion_ckpt", required=True)
+    parser.add_argument(
+        "--wan_ckpt_dir", default="",
+        help="Required when sampling a wan_compact_adapter checkpoint")
     parser.add_argument("--out_dir", default="outputs/compact_i0")
     parser.add_argument("--num_steps", type=int, default=50)
     parser.add_argument("--solver", choices=["euler", "midpoint"], default="midpoint")
@@ -127,6 +131,24 @@ def validate_representation_files(normalization, encoder_path, autoencoder_path)
         validate_file_signature(path, signature, f"{key} checkpoint")
 
 
+def load_trainable_state_dict(model, state_dict, label):
+    parameters = dict(model.named_parameters())
+    missing = []
+    for name, parameter in parameters.items():
+        if not parameter.requires_grad:
+            continue
+        if name not in state_dict:
+            missing.append(name)
+            continue
+        parameter.data.copy_(state_dict[name].to(
+            device=parameter.device, dtype=parameter.dtype))
+    unexpected = sorted(set(state_dict) - set(parameters))
+    if missing or unexpected:
+        raise ValueError(
+            f"{label} trainable state mismatch: "
+            f"missing={missing[:8]}, unexpected={unexpected[:8]}")
+
+
 @torch.no_grad()
 def main():
     args = parse_args()
@@ -139,6 +161,8 @@ def main():
 
     diffusion_ckpt = torch.load(
         args.diffusion_ckpt, map_location="cpu", weights_only=False)
+    architecture = diffusion_ckpt.get("architecture", "compact_dit")
+    is_wan_checkpoint = architecture == "wan_compact_adapter"
     diffusion_args = diffusion_ckpt.get("args", {})
     normalization = diffusion_ckpt.get("normalization")
     cached_training = normalization is not None
@@ -149,7 +173,7 @@ def main():
             normalization, args.encoder_ckpt, args.autoencoder_ckpt)
     if diffusion_args.get("text_cond", False):
         raise ValueError("This sampler currently supports the non-text I0 checkpoint")
-    if not cached_training and not diffusion_args.get("i0_condition", False):
+    if not cached_training and not is_wan_checkpoint and not diffusion_args.get("i0_condition", False):
         raise ValueError("The diffusion checkpoint was not trained with --i0_condition")
     if not cached_training and "latent_scale" not in diffusion_ckpt:
         raise ValueError("The diffusion checkpoint does not contain latent_scale")
@@ -234,21 +258,43 @@ def main():
     app_cnn.load_state_dict(i0_ckpt["app_cnn"])
     load_i0_decoder_state_dict(decoder, i0_ckpt["decoder"])
 
-    model = CompactLatentDiT(
-        latent_dim=latent_dim,
-        num_tokens=latent_grid ** 2,
-        model_dim=int(diffusion_args.get("model_dim", 768)),
-        spatial_depth=int(diffusion_args.get("spatial_depth", 8)),
-        temporal_depth=int(diffusion_args.get("temporal_depth", 4)),
-        num_heads=int(diffusion_args.get("num_heads", 12)),
-        seq_len=seq_len,
-        text_cond=False,
-        i0_condition=True,
-        time_scale=float(diffusion_args.get("time_scale", 1.0)),
-    ).to(device=device, dtype=dtype).eval()
-    model.i0_residual = bool(diffusion_args.get("i0_residual", False))
-    model_state = diffusion_ckpt.get("ema", diffusion_ckpt["model"])
-    model.load_state_dict(model_state)
+    if is_wan_checkpoint:
+        if not args.wan_ckpt_dir:
+            raise ValueError(
+                "--wan_ckpt_dir is required for wan_compact_adapter sampling")
+        model = WanCompactAdapter(
+            args.wan_ckpt_dir,
+            latent_dim=latent_dim,
+            latent_grid=latent_grid,
+            seq_len=seq_len,
+            i0_condition=True,
+            train_text_adapter=bool(
+                diffusion_args.get("train_text_adapter", False)),
+            train_qkv=not bool(diffusion_args.get("freeze_wan_qkv", False)),
+        ).to(device=device, dtype=dtype).eval()
+        trainable_state = diffusion_ckpt.get(
+            "ema_trainable", diffusion_ckpt.get("model_trainable"))
+        if trainable_state is None:
+            raise ValueError(
+                "Wan checkpoint has no ema_trainable/model_trainable state")
+        load_trainable_state_dict(model, trainable_state, "Wan sampler")
+        model.i0_residual = True
+    else:
+        model = CompactLatentDiT(
+            latent_dim=latent_dim,
+            num_tokens=latent_grid ** 2,
+            model_dim=int(diffusion_args.get("model_dim", 768)),
+            spatial_depth=int(diffusion_args.get("spatial_depth", 8)),
+            temporal_depth=int(diffusion_args.get("temporal_depth", 4)),
+            num_heads=int(diffusion_args.get("num_heads", 12)),
+            seq_len=seq_len,
+            text_cond=False,
+            i0_condition=True,
+            time_scale=float(diffusion_args.get("time_scale", 1.0)),
+        ).to(device=device, dtype=dtype).eval()
+        model.i0_residual = bool(diffusion_args.get("i0_residual", False))
+        model_state = diffusion_ckpt.get("ema", diffusion_ckpt["model"])
+        model.load_state_dict(model_state)
 
     reference = (
         load_reference(args.i0_path, target_size)
@@ -269,12 +315,18 @@ def main():
     dt = 1.0 / args.num_steps
     for index in range(args.num_steps):
         t = torch.full((1,), index / args.num_steps, device=device, dtype=dtype)
-        velocity = model(z, t, cond=cond)
+        with torch.autocast(
+                device_type=device_type, dtype=dtype,
+                enabled=dtype != torch.float32):
+            velocity = model(z, t, cond=cond)
         if args.solver == "midpoint":
             z_mid = z + 0.5 * dt * velocity
             t_mid = torch.full(
                 (1,), (index + 0.5) / args.num_steps, device=device, dtype=dtype)
-            velocity = model(z_mid, t_mid, cond=cond)
+            with torch.autocast(
+                    device_type=device_type, dtype=dtype,
+                    enabled=dtype != torch.float32):
+                velocity = model(z_mid, t_mid, cond=cond)
         z = z + dt * velocity
 
     if cached_training:
