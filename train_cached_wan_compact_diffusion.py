@@ -253,7 +253,11 @@ def validate_resume(checkpoint, cache_stats, args, config):
 def main():
     args = parse_args()
     if args.warmup_steps >= args.max_steps:
-        raise ValueError("--warmup_steps must be smaller than --max_steps")
+        adjusted = max(1, args.max_steps - 1)
+        print(
+            f"[WARN] --warmup_steps={args.warmup_steps} must be smaller "
+            f"than --max_steps={args.max_steps}; using {adjusted}")
+        args.warmup_steps = adjusted
     if args.throughput_divisor <= 0:
         raise ValueError("--throughput_divisor must be positive")
     if args.sample_steps < 1:

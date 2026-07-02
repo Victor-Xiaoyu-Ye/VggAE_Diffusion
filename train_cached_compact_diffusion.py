@@ -440,7 +440,11 @@ def evaluate_preview(model, preview_batch, target_mean, target_std,
 def main():
     args = parse_args()
     if args.warmup_steps >= args.max_steps:
-        raise ValueError("--warmup_steps must be smaller than --max_steps")
+        adjusted = max(1, args.max_steps - 1)
+        print(
+            f"[WARN] --warmup_steps={args.warmup_steps} must be smaller "
+            f"than --max_steps={args.max_steps}; using {adjusted}")
+        args.warmup_steps = adjusted
     if args.eval_every < 1 or args.save_every < 1 or args.log_every < 1:
         raise ValueError("log/save/eval intervals must be positive")
     if args.sample_steps < 1:
