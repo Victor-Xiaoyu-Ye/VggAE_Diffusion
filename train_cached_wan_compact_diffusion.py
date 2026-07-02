@@ -77,8 +77,16 @@ def parse_args():
         "--freeze_wan_qkv",
         action="store_true",
         help=(
-            "Keep Wan self-attention QKV frozen. This is the default "
-            "recommended mode for 14B DDP runs without FSDP/ZeRO."))
+            "Keep Wan self-attention QKV frozen. Use this only for adapter-only "
+            "warmup or memory debugging."))
+    parser.add_argument(
+        "--train_qkv_last_n",
+        type=int,
+        default=0,
+        help=(
+            "When QKV is trainable, unfreeze only the last N Wan blocks. "
+            "0 means all blocks. Use a small value such as 4 for 14B DDP."))
+    parser.add_argument("--ddp_bucket_cap_mb", type=int, default=64)
 
     parser.add_argument("--batch_size", type=int, default=1)
     parser.add_argument("--accum_steps", type=int, default=1)
@@ -224,7 +232,7 @@ def validate_resume(checkpoint, cache_stats, args, config):
     saved_args = checkpoint.get("args", {})
     for key in (
             "latent_dim", "latent_grid", "seq_len", "train_text_adapter",
-            "freeze_wan_qkv"):
+            "freeze_wan_qkv", "train_qkv_last_n"):
         if saved_args.get(key, getattr(args, key)) != getattr(args, key):
             raise ValueError(
                 f"Resume mismatch for {key}: "
@@ -350,6 +358,7 @@ def main():
         i0_condition=True,
         train_text_adapter=args.train_text_adapter,
         train_qkv=not args.freeze_wan_qkv,
+        train_qkv_last_n=args.train_qkv_last_n,
     )
     cast_frozen_parameters(model, model_dtype)
     model = model.to(device=device)
@@ -399,7 +408,10 @@ def main():
 
     if use_ddp:
         model = nn.parallel.DistributedDataParallel(
-            model, device_ids=[local_rank], output_device=local_rank)
+            model,
+            device_ids=[local_rank],
+            output_device=local_rank,
+            bucket_cap_mb=args.ddp_bucket_cap_mb)
         flow.model = model
 
     writer = (
@@ -435,6 +447,8 @@ def main():
             "resume_mode": args.resume_mode,
             "throughput_divisor": args.throughput_divisor,
             "freeze_wan_qkv": args.freeze_wan_qkv,
+            "train_qkv_last_n": args.train_qkv_last_n,
+            "ddp_bucket_cap_mb": args.ddp_bucket_cap_mb,
             **{f"wan/{key}": value for key, value in config.items()},
         })
 

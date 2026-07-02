@@ -271,6 +271,7 @@ def main():
             train_text_adapter=bool(
                 diffusion_args.get("train_text_adapter", False)),
             train_qkv=not bool(diffusion_args.get("freeze_wan_qkv", False)),
+            train_qkv_last_n=int(diffusion_args.get("train_qkv_last_n", 0)),
         ).to(device=device, dtype=dtype).eval()
         trainable_state = diffusion_ckpt.get(
             "ema_trainable", diffusion_ckpt.get("model_trainable"))

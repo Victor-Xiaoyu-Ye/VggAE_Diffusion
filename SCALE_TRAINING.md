@@ -126,13 +126,15 @@ initialization for the StreamVGGT compact latent field than a from-scratch DiT.
 Text conditioning remains off by default so the geometry-aware latent contract
 is the only variable.
 
-The current default prefers `Wan2.1-I2V-14B-480P`. Because the training code
-uses replicated DDP rather than FSDP/ZeRO, `TRAIN_QKV=0` is the default for
-14B. That trains latent input/output adapters, the I0 adapter, Wan time path,
-and block modulation while preserving pretrained attention/FFN weights. Use
-`TRAIN_QKV=1` only after a small memory smoke test succeeds.
+The current default prefers `Wan2.1-I2V-14B-480P` and finetunes only the last
+four self-attention QKV blocks with `TRAIN_QKV=1` and `TRAIN_QKV_LAST_N=4`.
+This is the practical middle ground for replicated DDP: it adapts high-level
+motion and scene dynamics to StreamVGGT latents while preserving lower/middle
+Wan video priors and avoiding the all-QKV OOM seen on 60 GiB NPUs. Use
+`TRAIN_QKV_LAST_N=40` only after moving to a memory strategy that can hold full
+14B QKV optimizer state.
 
-Move beyond the default frozen-QKV 14B run only after:
+Move beyond the default last-4-QKV 14B run only after:
 
 - it improves RGB/latent preview quality over from-scratch DiT;
 - memory and throughput are acceptable on the assigned node count;

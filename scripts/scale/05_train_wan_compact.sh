@@ -40,7 +40,9 @@ SAMPLE_STEPS="${SAMPLE_STEPS:-20}"
 THROUGHPUT_DIVISOR="${THROUGHPUT_DIVISOR:-20}"
 MASTER_PORT="${MASTER_PORT:-29624}"
 TRAIN_TEXT_ADAPTER="${TRAIN_TEXT_ADAPTER:-0}"
-TRAIN_QKV="${TRAIN_QKV:-0}"
+TRAIN_QKV="${TRAIN_QKV:-1}"
+TRAIN_QKV_LAST_N="${TRAIN_QKV_LAST_N:-4}"
+DDP_BUCKET_CAP_MB="${DDP_BUCKET_CAP_MB:-64}"
 # -----------------------------------------------------------------------------
 
 configure_modelarts_distributed
@@ -61,7 +63,7 @@ echo "  wan_ckpt=${WAN_CKPT_DIR}"
 echo "  NNODES=${NNODES}, NUM_NPUS=${NUM_NPUS}, WORLD_SIZE=${WORLD_SIZE}"
 echo "  max_steps=${MAX_STEPS}, batch=${BATCH_SIZE}, accum=${ACCUM_STEPS}, lr=${LEARNING_RATE}"
 echo "  DI_throughput divisor=${THROUGHPUT_DIVISOR}"
-echo "  train_qkv=${TRAIN_QKV}, train_text_adapter=${TRAIN_TEXT_ADAPTER}"
+echo "  train_qkv=${TRAIN_QKV}, train_qkv_last_n=${TRAIN_QKV_LAST_N}, train_text_adapter=${TRAIN_TEXT_ADAPTER}"
 
 EXTRA_ARGS=()
 
@@ -70,6 +72,8 @@ if [[ "${TRAIN_TEXT_ADAPTER}" -eq 1 ]]; then
 fi
 if [[ "${TRAIN_QKV}" -eq 0 ]]; then
   EXTRA_ARGS+=(--freeze_wan_qkv)
+else
+  EXTRA_ARGS+=(--train_qkv_last_n "${TRAIN_QKV_LAST_N}")
 fi
 
 if [[ "${AUTO_RESUME}" -eq 1 || -n "${RESUME}" ]]; then
@@ -117,5 +121,6 @@ run_torchrun "${PROJECT}/train_cached_wan_compact_diffusion.py" \
   --eval_every "${EVAL_EVERY}" \
   --sample_steps "${SAMPLE_STEPS}" \
   --throughput_divisor "${THROUGHPUT_DIVISOR}" \
+  --ddp_bucket_cap_mb "${DDP_BUCKET_CAP_MB}" \
   --dtype fp16 \
   "${EXTRA_ARGS[@]}"

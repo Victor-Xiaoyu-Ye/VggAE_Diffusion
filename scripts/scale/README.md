@@ -161,9 +161,11 @@ obs://yw-ads-training-gy1/data/external/personal/g00833899/y50046448/output/scal
    - The checkpoint stores only trainable Wan adapter/QKV/time/modulation
      deltas plus EMA, not the frozen Wan backbone. Resume and sampling
      therefore require the same `WAN_CKPT_DIR`.
-   - `TRAIN_QKV=0` by default. This keeps 14B DDP memory realistic by training
-     latent input/output adapters, I0 adapter, time path, and Wan modulation.
-     Set `TRAIN_QKV=1` only after a memory smoke test succeeds.
+   - `TRAIN_QKV=1` and `TRAIN_QKV_LAST_N=4` by default. This finetunes the
+     last four Wan self-attention QKV blocks while preserving lower/middle
+     pretrained video priors.
+   - Full-QKV finetuning requires `TRAIN_QKV_LAST_N=40` for the 14B checkpoint,
+     but the replicated DDP path has already shown OOM risk on 60 GiB NPUs.
    - This is the current A/B test against from-scratch Compact DiT. It does
      not require retraining the geometry AE, I0 decoder, or latent cache.
    - Override `WAN_CKPT_DIR` to test a larger Wan checkpoint after confirming

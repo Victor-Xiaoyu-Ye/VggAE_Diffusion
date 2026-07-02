@@ -41,7 +41,7 @@ historical eight-target run into the new seven-target configuration.
 
 `scripts/scale/05_train_wan_compact.sh` is the valid Wan A/B path. It consumes
 the active cached seven-frame I0 residual latent contract and saves only
-trainable Wan adapter/QKV/time/modulation deltas plus EMA. The old
+trainable Wan adapter, last-N QKV, time, and modulation deltas plus EMA. The old
 `train_wan_compact_diffusion.py` harness is still legacy because it uses online
 encoding and the superseded target contract.
 

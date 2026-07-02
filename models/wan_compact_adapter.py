@@ -2,7 +2,7 @@
 
 Key design (from verification experiments + all prior learnings):
   1. DUAL time conditioning: concat at input (V1/V3: works) + adaLN in blocks (Wan native)
-  2. Trainable: modulation + time_emb + QKV (~215M params)
+  2. Trainable: adapters + modulation + time_emb + optional last-N QKV
   3. Frozen: FFN, cross-attn, norms, RoPE freqs
   4. Uniform time sampling in flow matching (debug finding: t near 1 critical)
 
@@ -76,7 +76,7 @@ class WanCompactAdapter(nn.Module):
     def __init__(self, wan_checkpoint_dir, latent_dim=768, latent_grid=18,
                  seq_len=8, wan_dim=None, freq_dim=None, num_heads=None,
                  i0_condition=False, train_text_adapter=False,
-                 train_qkv=True):
+                 train_qkv=True, train_qkv_last_n=0):
         super().__init__()
 
         # Load pretrained Wan backbone. Do not hard-code the 1.3B dimensions:
@@ -108,6 +108,7 @@ class WanCompactAdapter(nn.Module):
         self.i0_condition = i0_condition
         self.train_text_adapter = train_text_adapter
         self.train_qkv = train_qkv
+        self.train_qkv_last_n = int(train_qkv_last_n)
 
         # ---- Input: latent_dim → wan_dim with concat time injection ----
         self.time_concat_dim = 256
@@ -154,7 +155,7 @@ class WanCompactAdapter(nn.Module):
             p.requires_grad_(False)
 
     def _unfreeze_trainable(self):
-        """Unfreeze: modulation + time_emb + QKV + adapters (~215M)."""
+        """Unfreeze adapters, modulation, time path, and optional last-N QKV."""
         # Adapter layers
         for p in self.time_concat_mlp.parameters():
             p.requires_grad_(True)
@@ -177,10 +178,21 @@ class WanCompactAdapter(nn.Module):
         for p in self.wan.time_projection.parameters():
             p.requires_grad_(True)
 
-        # Wan blocks: modulation + optionally QKV.
-        for blk in self.wan.blocks:
+        # Wan blocks: modulation + optionally QKV. On 14B, full-QKV DDP is too
+        # large without FSDP/ZeRO, so callers can unfreeze only the last N
+        # blocks while still adapting high-level temporal dynamics.
+        num_blocks = len(self.wan.blocks)
+        if self.train_qkv:
+            if self.train_qkv_last_n <= 0:
+                qkv_start = 0
+            else:
+                qkv_start = max(0, num_blocks - self.train_qkv_last_n)
+        else:
+            qkv_start = num_blocks
+        self.qkv_trainable_blocks = max(0, num_blocks - qkv_start)
+        for index, blk in enumerate(self.wan.blocks):
             blk.modulation.requires_grad_(True)
-            if self.train_qkv:
+            if index >= qkv_start:
                 for name in ['q', 'k', 'v']:
                     attn_module = getattr(blk.self_attn, name)
                     for p in attn_module.parameters():
@@ -188,7 +200,10 @@ class WanCompactAdapter(nn.Module):
 
         trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
         total = sum(p.numel() for p in self.parameters())
-        print(f"WanCompactAdapter: {trainable/1e6:.1f}M trainable / {total/1e9:.2f}B total")
+        print(
+            f"WanCompactAdapter: {trainable/1e6:.1f}M trainable / "
+            f"{total/1e9:.2f}B total "
+            f"(qkv_blocks={self.qkv_trainable_blocks}/{len(self.wan.blocks)})")
 
     def _ensure_time_emb_float32(self):
         if self._time_emb_converted:
