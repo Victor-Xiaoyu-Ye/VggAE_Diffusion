@@ -50,16 +50,23 @@ export VGGAE_OVERFIT_CSV="${VGGAE_OVERFIT_CSV:-${VGGAE_SPLIT_DIR}/overfit.csv}"
 mkdir -p "${VGGAE_H200_RUN_ROOT}" "${VGGAE_SPLIT_DIR}"
 
 # Ensure the 10k/eval/overfit splits exist on this machine.
+# Args verified against prepare_spatialvid_splits.py:
+#   required: --csv, --video_root, --output_dir
+#   optional: --train_count (def 10000), --eval_count (def 64),
+#             --overfit_count (def 1), --min_frames (def 8),
+#             --seed (def 42), --candidate_multiplier (def 2),
+#             --skip_file_check (flag), --write_full_train (flag), --force (flag)
 ensure_h200_splits() {
   if [[ -s "${VGGAE_TRAIN_10K_CSV}" && -s "${VGGAE_EVAL_CSV}" ]]; then
     return 0
   fi
   echo "[h200_env] Building SpatialVID 10k/eval/overfit splits under ${VGGAE_SPLIT_DIR}" >&2
   "${VGGAE_PYTHON_BIN}" "${VGGAE_PROJECT}/prepare_spatialvid_splits.py" \
-    --metadata "${VGGAE_METADATA_CSV}" \
+    --csv "${VGGAE_METADATA_CSV}" \
+    --video_root "${VGGAE_VIDEO_ROOT}" \
     --output_dir "${VGGAE_SPLIT_DIR}" \
     --seed "${VGGAE_SPLIT_SEED}" \
-    --num_workers 8
+    ${VGGAE_SPLIT_EXTRA_ARGS:-}
 }
 
 # Standard torchrun launcher for the 4-card H200 topology.
