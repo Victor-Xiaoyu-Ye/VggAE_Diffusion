@@ -502,14 +502,14 @@ def eval_recon(encoder, projector, decoder, eval_frames, device, out_dir,
 def main():
     args = parse_args()
     configure_backend_compatibility()
-    rank, world_size, use_ddp, local_rank, device = setup_ddp()
+    use_ddp, rank, local_rank, world_size = setup_ddp()
+    device = get_device(local_rank)
     main_process = is_main_process()
-    device_type = get_device_name(device)
-    dtype = resolve_dtype(args.dtype, device_type)
-    use_scaler = (dtype != torch.float32) and create_grad_scaler(
-        enabled=(dtype != torch.float32), device_type=device_type) is not None
+    device_type = get_device_name()
+    dtype = resolve_dtype(args.dtype)
     use_amp = dtype != torch.float32
-    scaler = create_grad_scaler(enabled=use_scaler, device_type=device_type)
+    use_scaler = dtype == torch.float16
+    scaler = create_grad_scaler(enabled=use_scaler)
     manual_seed_all(args.seed + rank)
     os.makedirs(args.output_dir, exist_ok=True)
 
