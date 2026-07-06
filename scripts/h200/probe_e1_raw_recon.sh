@@ -22,8 +22,14 @@ OUTPUT_DIR="${VGGAE_H200_RUN_ROOT}/probes/${PROBE_NAME}"
 RESUME="${RESUME:-}"
 
 EPOCHS="${EPOCHS:-40}"
-BATCH_SIZE="${BATCH_SIZE:-2}"
-ACCUM_STEPS="${ACCUM_STEPS:-8}"
+# Memory guide (single card, raw 37-grid probe): ~31G at batch 2.
+# Fixed cost (StreamVGGT encoder + LPIPS VGG + weights) is roughly constant,
+# activations scale ~linearly with batch. Rough single-card estimate:
+#   batch 2 ~ 31G | batch 4 ~ 47G | batch 6 ~ 63G | batch 8 ~ 79G.
+# batch*accum = effective batch (16 here); raise BATCH_SIZE and lower
+# ACCUM_STEPS together to keep it constant while using more of the GPU.
+BATCH_SIZE="${BATCH_SIZE:-4}"
+ACCUM_STEPS="${ACCUM_STEPS:-4}"
 LEARNING_RATE="${LEARNING_RATE:-1e-4}"
 DECODER_BASE_DIM="${DECODER_BASE_DIM:-384}"
 PROJ_DIM="${PROJ_DIM:-512}"
