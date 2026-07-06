@@ -26,9 +26,17 @@ export VGGAE_ENCODER_CKPT="${VGGAE_ENCODER_CKPT:-/home/yexiaoyu/data/StreamVGGT/
 # Output root for H200 experiments.
 export VGGAE_H200_RUN_ROOT="${VGGAE_H200_RUN_ROOT:-${VGGAE_PROJECT}/outputs/h200}"
 
-# GPU topology.
-export VGGAE_NUM_GPUS="${VGGAE_NUM_GPUS:-4}"
-export VGGAE_GPU_IDS="${VGGAE_GPU_IDS:-0,1,2,3}"
+# GPU topology. EDIT THESE TWO LINES DIRECTLY.
+# These are hard assignments (no ${VAR:-default}), so the value written here
+# always wins and takes effect immediately on the next `bash <launcher>.sh`.
+# You do NOT need to `source` this file or unset anything first. A stale
+# exported VGGAE_NUM_GPUS/VGGAE_GPU_IDS from a previous source will NOT
+# override the file value anymore.
+#   Single card:  VGGAE_NUM_GPUS=1   VGGAE_GPU_IDS=0
+#   Four cards:   VGGAE_NUM_GPUS=4   VGGAE_GPU_IDS=0,1,2,3
+export VGGAE_NUM_GPUS=1
+export VGGAE_GPU_IDS=0
+# MASTER_PORT keeps the env-override pattern (rarely edited).
 export VGGAE_MASTER_PORT="${VGGAE_MASTER_PORT:-29540}"
 
 # Python binary (prefer the rae env if present, else python).
