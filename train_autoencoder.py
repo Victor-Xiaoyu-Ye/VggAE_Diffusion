@@ -20,6 +20,7 @@ import argparse
 import json
 import os
 import random
+from contextlib import nullcontext as _nullcontext
 
 import numpy as np
 import torch
@@ -71,6 +72,42 @@ def get_lpips(device):
     return _lpips_fn
 
 
+class PatchGANDiscriminator(nn.Module):
+    """Lightweight PatchGAN discriminator for optional adversarial sharpness.
+
+    Operates per-frame on RGB. Used only when --lambda_adv > 0. Adversarial
+    loss is icing for high-frequency texture; per-pixel L1/MSE + LPIPS remain
+    the main reconstruction drivers.
+    """
+
+    def __init__(self, in_channels=3, base_dim=64, n_layers=3):
+        super().__init__()
+        layers = [
+            nn.Conv2d(in_channels, base_dim, 4, stride=2, padding=1),
+            nn.LeakyReLU(0.2, inplace=True),
+        ]
+        ch = base_dim
+        for i in range(n_layers):
+            ch_next = min(ch * 2, base_dim * 8)
+            layers.append(nn.Conv2d(ch, ch_next, 4, stride=2, padding=1, bias=False))
+            layers.append(nn.GroupNorm(8, ch_next))
+            layers.append(nn.LeakyReLU(0.2, inplace=True))
+            ch = ch_next
+        layers.append(nn.Conv2d(ch, 1, 4, stride=1, padding=1))
+        self.model = nn.Sequential(*layers)
+
+    def forward(self, x):
+        return self.model(x)
+
+
+def hinge_d_loss(logits_real, logits_fake):
+    return (F.relu(1.0 - logits_real).mean() + F.relu(1.0 + logits_fake).mean()) * 0.5
+
+
+def hinge_g_loss(logits_fake):
+    return F.relu(1.0 - logits_fake).mean()
+
+
 def parse_args():
     p = argparse.ArgumentParser(description='Train generative autoencoder')
 
@@ -95,6 +132,10 @@ def parse_args():
     p.add_argument('--decoder_base_dim', type=int, default=384,
                    help='Decoder channel width (384=high quality, 256=speed)')
     p.add_argument('--decoder_num_resblocks', type=int, default=2)
+    p.add_argument('--decoder_use_pixel_shuffle', type=int, default=1,
+                   choices=[0, 1],
+                   help='1=PixelShuffle upsample (v2 default), 0=resize-conv '
+                        '(bilinear+conv, avoids checkerboard). E3 grid probe.')
     p.add_argument('--disable_temporal_mixer', action='store_true')
     p.add_argument('--output_depth', action='store_true', default=False)
     p.add_argument('--depth_root', type=str, default='')
@@ -107,12 +148,21 @@ def parse_args():
                    help='Linearly ramp noise from 0→latent_noise_std over N steps')
     # Loss weights
     p.add_argument('--lambda_l1', type=float, default=1.0)
+    p.add_argument('--lambda_mse', type=float, default=0.0,
+                   help='Per-pixel MSE (L2) loss weight; 0 disables. '
+                        'Per-pixel reconstruction driver alongside L1.')
     p.add_argument('--lambda_lpips', type=float, default=1.0,
                    help='LPIPS perceptual loss weight')
     p.add_argument('--lambda_grad', type=float, default=0.05)
     p.add_argument('--lambda_temporal', type=float, default=0.05)
     p.add_argument('--lambda_latent_reg', type=float, default=0.01,
                    help='Aggregate channel mean/std regularization toward N(0,1)')
+    p.add_argument('--lambda_adv', type=float, default=0.0,
+                   help='Optional PatchGAN adversarial loss weight; 0 disables. '
+                        'Adversarial is sharpness/texture icing; per-pixel L1/MSE '
+                        'and LPIPS remain the main reconstruction drivers.')
+    p.add_argument('--adv_every', type=int, default=1,
+                   help='Apply adversarial update every N optimizer steps.')
 
     # Training
     p.add_argument('--batch_size', type=int, default=10)
@@ -303,8 +353,9 @@ def validate_resume_args(saved_args, args):
 
 
 def checkpoint_payload(tokenizer, decoder, ema, optimizer, scheduler, scaler,
-                       global_step, epoch, args):
-    return {
+                       global_step, epoch, args, discriminator=None,
+                       disc_optimizer=None):
+    payload = {
         'checkpoint_version': 2,
         'tokenizer': tokenizer.state_dict(),
         'decoder': decoder.state_dict(),
@@ -317,6 +368,11 @@ def checkpoint_payload(tokenizer, decoder, ema, optimizer, scheduler, scaler,
         'rng_state': capture_rng_state(),
         'args': vars(args),
     }
+    if discriminator is not None:
+        payload['discriminator'] = discriminator.state_dict()
+    if disc_optimizer is not None:
+        payload['disc_optimizer'] = disc_optimizer.state_dict()
+    return payload
 
 
 def normalize_relative_depth(depth):
@@ -397,8 +453,20 @@ def main():
         output_dim=3, output_depth=args.output_depth,
         img_size=args.target_size, latent_grid=args.latent_grid,
         num_resblocks=args.decoder_num_resblocks,
+        use_pixel_shuffle=bool(args.decoder_use_pixel_shuffle),
         use_checkpoint=True,
     ).to(device=device)
+
+    # Optional PatchGAN discriminator for adversarial sharpness (lambda_adv > 0).
+    # Per-pixel L1/MSE + LPIPS remain the main reconstruction drivers; this only
+    # adds high-frequency texture icing when explicitly enabled.
+    discriminator = None
+    disc_optimizer = None
+    if args.lambda_adv > 0:
+        discriminator = PatchGANDiscriminator(in_channels=3, base_dim=64).to(device=device)
+        disc_optimizer = torch.optim.AdamW(
+            discriminator.parameters(), lr=args.lr, weight_decay=args.wd,
+            betas=(0.5, 0.999))
 
     total_p = sum(p.numel() for p in tokenizer.parameters()) + \
               sum(p.numel() for p in decoder.parameters())
@@ -503,6 +571,10 @@ def main():
         scheduler.load_state_dict(ckpt['scheduler'])
         if 'scaler' in ckpt:
             scaler.load_state_dict(ckpt['scaler'])
+        if discriminator is not None and 'discriminator' in ckpt:
+            discriminator.load_state_dict(ckpt['discriminator'])
+        if disc_optimizer is not None and 'disc_optimizer' in ckpt:
+            disc_optimizer.load_state_dict(ckpt['disc_optimizer'])
         global_step = ckpt.get('global_step', 0)
         start_epoch = ckpt.get('epoch', 0) + 1
         if rank == 0:
@@ -515,6 +587,9 @@ def main():
             tokenizer, device_ids=[local_rank], output_device=local_rank)
         decoder = nn.parallel.DistributedDataParallel(
             decoder, device_ids=[local_rank], output_device=local_rank)
+        if discriminator is not None:
+            discriminator = nn.parallel.DistributedDataParallel(
+                discriminator, device_ids=[local_rank], output_device=local_rank)
 
     writer = None
     if main_process:
@@ -591,6 +666,8 @@ def main():
 
             # ---- Losses ----
             l1 = F.l1_loss(pred_rgb, target_rgb)
+            mse = F.mse_loss(pred_rgb, target_rgb) if args.lambda_mse > 0 \
+                else z_g.new_zeros(())
             grad = image_gradient_loss(
                 pred_rgb.reshape(-1, *pred_rgb.shape[2:]),
                 target_rgb.reshape(-1, *target_rgb.shape[2:]),
@@ -613,10 +690,21 @@ def main():
                         print(f'  [WARN] LPIPS disabled: {exc}')
 
             loss = (args.lambda_l1 * l1 +
+                    args.lambda_mse * mse +
                     args.lambda_lpips * lpips_loss +
                     args.lambda_grad * grad +
                     args.lambda_temporal * temp +
                     args.lambda_latent_reg * reg)
+
+            # Optional adversarial (PatchGAN hinge). Generator side; the
+            # discriminator update happens below outside the accum window.
+            adv_g_loss = z_g.new_zeros(())
+            if args.lambda_adv > 0 and discriminator is not None:
+                p_flat = pred_rgb.reshape(-1, 3, pred_rgb.shape[-2], pred_rgb.shape[-1])
+                t_flat = target_rgb.reshape(-1, 3, target_rgb.shape[-2], target_rgb.shape[-1])
+                logits_fake = discriminator(p_flat)
+                adv_g_loss = hinge_g_loss(logits_fake)
+                loss = loss + args.lambda_adv * adv_g_loss
 
             # Depth loss (if available)
             depth_loss = z_g.new_zeros(())
@@ -652,6 +740,31 @@ def main():
                     grad_norm = torch.nn.utils.clip_grad_norm_(
                         params, args.max_grad_norm)
                     optimizer.step()
+
+                # Discriminator update (hinge PatchGAN). Done after the
+                # generator optimizer step and only every adv_every steps so
+                # the generator has time to use the adversarial gradient.
+                disc_loss_val = 0.0
+                if args.lambda_adv > 0 and discriminator is not None \
+                        and global_step % args.adv_every == 0:
+                    disc_optimizer.zero_grad(set_to_none=True)
+                    with autocast(device_type=device_type, dtype=dtype) if use_amp \
+                            else _nullcontext():
+                        p_flat = pred_rgb.detach().reshape(
+                            -1, 3, pred_rgb.shape[-2], pred_rgb.shape[-1])
+                        t_flat = target_rgb.detach().reshape(
+                            -1, 3, target_rgb.shape[-2], target_rgb.shape[-1])
+                        logits_real = discriminator(t_flat)
+                        logits_fake = discriminator(p_flat)
+                        disc_loss = hinge_d_loss(logits_real, logits_fake)
+                    if use_scaler:
+                        scaler.scale(disc_loss).backward()
+                        scaler.step(disc_optimizer)
+                    else:
+                        disc_loss.backward()
+                        disc_optimizer.step()
+                    disc_loss_val = disc_loss.item()
+
                 optimizer.zero_grad(set_to_none=True)
                 ema.update(nn.ModuleList([
                     tokenizer.module if use_ddp else tokenizer,
@@ -666,7 +779,10 @@ def main():
                         'epoch': epoch,
                         'train/loss': loss.item(),
                         'train/l1': l1.item(),
+                        'train/mse': mse.item() if torch.is_tensor(mse) else float(mse),
                         'train/lpips': lpips_loss.item(),
+                        'train/adv_g': adv_g_loss.item() if torch.is_tensor(adv_g_loss) else 0.0,
+                        'train/adv_d': disc_loss_val,
                         'train/gradient': grad.item(),
                         'train/temporal': temp.item(),
                         'train/depth': depth_loss.item(),
@@ -745,7 +861,10 @@ def main():
             save_path = os.path.join(args.output_dir, f'checkpoint_epoch{epoch:04d}.pt')
             payload = checkpoint_payload(
                 tok, dec, ema, optimizer, scheduler, scaler,
-                global_step, epoch, args)
+                global_step, epoch, args,
+                discriminator=(discriminator.module if use_ddp and discriminator
+                               else discriminator),
+                disc_optimizer=disc_optimizer)
             atomic_torch_save(
                 payload,
                 save_path,
@@ -793,7 +912,10 @@ def main():
         atomic_torch_save(
             checkpoint_payload(
                 tok, dec, ema, optimizer, scheduler, scaler,
-                global_step, args.epochs - 1, args),
+                global_step, args.epochs - 1, args,
+                discriminator=(discriminator.module if use_ddp and discriminator
+                               else discriminator),
+                disc_optimizer=disc_optimizer),
             final_path,
         )
         print(f'\nDone. Final: {final_path}')

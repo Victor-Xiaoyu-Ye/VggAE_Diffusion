@@ -36,8 +36,10 @@ Frame 0 is observed and is not a diffusion target.
 
 - `AGENTS.md`: first-read instructions for future agents.
 - `PROJECT_CONTEXT.md`: goals, architecture, decisions, conventions, known
-  issues, and next tasks.
-- `scripts/scale/README.md`: runnable scale-stage command order.
+  issues, research risks, and next tasks.
+- `scripts/h200/README.md`: active reconstruction-first probe plan (H200).
+- `scripts/scale/README.md`: runnable scale-stage command order (paused
+  until reconstruction passes the gate).
 - `TOKEN_STATS.md`: latent normalization contract.
 - `SCALE_TRAINING.md`: detailed scale plan and validation gates.
 

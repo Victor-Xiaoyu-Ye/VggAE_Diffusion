@@ -12,11 +12,40 @@ the strongest current generator baseline.
 The active research claim is:
 
 ```text
-StreamVGGT compact latents provide geometry-aware structure.
-Wan pretrained video attention provides strong spatiotemporal generation prior.
-Adapting Wan to StreamVGGT compact residual latents should reduce ghosting and
-improve geometry consistency compared with from-scratch Compact DiT.
+Geometric foundation models (VGGT / StreamVGGT) can serve as the
+representation space for video diffusion, replacing the VAE. StreamVGGT
+compact latents provide geometry-aware structure; a Wan-pretrained video
+prior supplies spatiotemporal dynamics. Adapting Wan to StreamVGGT compact
+residual latents should reduce ghosting and improve geometry consistency
+compared with from-scratch Compact DiT.
 ```
+
+This is distinct from "Repurposing Geometric Foundation Models for
+Multi-view Diffusion": video has temporal motion + disocclusion, not
+viewpoint change of a static scene.
+
+## Current Phase: Reconstruction-First (H200)
+
+Generation experiments are paused. The compact latent reconstructs at ~20
+PSNR with grid textures, which caps every generator. We are running
+diagnostic probes on the 4-card H200 machine to decide the architecture:
+
+```bash
+source scripts/h200/h200_env.sh
+bash scripts/h200/probe_e1_raw_recon.sh    # raw feature PSNR ceiling
+bash scripts/h200/probe_e2_per_level.sh    # per-level info content
+bash scripts/h200/probe_e3_grid_isolation.sh  # grid texture source
+```
+
+Decision rule (see `PROJECT_CONTEXT.md` `Research Risks`):
+- E1 PSNR >= 28 + E2 shallow better -> two-stream latent (z_geo + z_app).
+- E1 PSNR >= 28 + E2 equal -> single stream + capacity increase.
+- E1 PSNR <= 23 -> single geometry latent + decoder hallucinates RGB
+  high-freq via perceptual + optional adversarial training.
+
+Hard gate: reconstruction PSNR < 25 (no grid texture) blocks further scale
+diffusion. The 1.46M-clip scale cache is disposable until the tokenizer is
+finalized.
 
 ## Current Branch And Machine
 
@@ -29,10 +58,12 @@ improve geometry consistency compared with from-scratch Compact DiT.
 ## First Files To Read
 
 1. `PROJECT_CONTEXT.md`: durable project knowledge, architecture, decisions,
-   conventions, known issues, and next tasks.
-2. `scripts/spatialvid_config.sh`: active paths and persistent OBS layout.
-3. `scripts/scale/README.md`: runnable scale-stage command order.
-4. `TOKEN_STATS.md`: latent normalization contract.
+   conventions, known issues, research risks, and next tasks.
+2. `scripts/h200/README.md`: active reconstruction-first probe plan (H200).
+3. `scripts/spatialvid_config.sh`: active paths and persistent OBS layout.
+4. `scripts/scale/README.md`: runnable scale-stage command order (paused
+   until reconstruction passes the gate).
+5. `TOKEN_STATS.md`: latent normalization contract.
 
 Avoid starting from legacy scripts or old output markdown files.
 

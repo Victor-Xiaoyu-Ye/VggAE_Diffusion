@@ -8,24 +8,63 @@ goals, architecture, training order, paths, or important decisions change.
 - Use StreamVGGT as a frozen geometry-aware teacher/encoder.
 - Learn a compact latent space that is reconstructable, cacheable, and easier
   to diffuse than raw StreamVGGT tokens.
-- Use the first RGB frame `I0` to provide appearance and high-frequency detail.
-- Generate future geometry-aware latent residuals, then decode them to RGB with
-  an I0-conditioned decoder.
 - Prove that StreamVGGT compact feature space improves geometry-aware video
   generation when paired with a strong pretrained video prior such as Wan.
+- **Thesis (stated):** repurpose geometric foundation models (VGGT /
+  StreamVGGT) as the representation space for video diffusion, replacing the
+  VAE. This is distinct from "Repurposing Geometric Foundation Models for
+  Multi-view Diffusion" because video has temporal motion + disocclusion,
+  not viewpoint change of a static scene.
+
+## Current Phase: Reconstruction-First (H200)
+
+Generation experiments are paused. The compact latent currently reconstructs
+at ~20 PSNR with grid textures, which caps every downstream generator. We
+are running diagnostic probes on the 4-card H200 machine to answer:
+
+> Does the frozen StreamVGGT feature space carry enough information
+> (especially RGB high-frequency) to reconstruct video at high PSNR?
+
+The answer decides the architecture direction:
+
+```
+E1 (raw feature PSNR ceiling)
+  >= 28 + E2 shallow levels better -> two-stream latent (z_geo + z_app)
+  >= 28 + E2 levels roughly equal  -> single stream + capacity increase
+  <= 23                            -> single geometry latent + decoder
+                                      hallucinates RGB high-freq via
+                                      perceptual + adversarial training
+```
+
+Hard gate: reconstruction PSNR < 25 (with no grid texture) blocks any
+further scale diffusion runs. The 1.46M-clip scale cache is treated as
+disposable until the tokenizer is finalized.
+
+Probes run via `scripts/h200/` (H200 4-GPU), NOT `scripts/scale/` (Ascend
+cluster) or `scripts/10k/` (local A100). See `scripts/h200/README.md`.
 
 ## Current State
 
 - Active branch: `ascend-910b`.
+- **Active phase: reconstruction-first diagnostics on H200.** Generation
+  experiments (from-scratch DiT, Wan 14B) are paused pending a
+  reconstruction fix; the latest Wan run
+  (`outputs/scale/wan_compact_i2v14b480p_v1`, step 36250) shows
+  `generated_std=0.256` vs `target_std=0.279` (under-dispersed) and
+  `velocity_mse` stuck at ~0.53, consistent with a 20-PSNR latent ceiling.
 - Active large-scale dataset: SpatialVID-HQ on OBS.
 - Active local 10K dataset path:
-  `/public2/LiZhen/yexiaoyu/dataset/spatial-vid-hq-oft`.
+  `/public2/LiZhen/yexiaoyu/dataset/spatial-vid-hq-oft` (A100 box).
+- Active H200 dataset path:
+  `/home/yexiaoyu/data/spatial-vid-hq-oft` (H200 4-GPU box).
+- Active H200 encoder checkpoint:
+  `/home/yexiaoyu/data/StreamVGGT/checkpoints.pth`.
 - Active scale dataset path:
   `obs://yw-ads-training-gy1/data/external/personal/g00833899/y50046448/dataset/SpatialVID-HQ`.
 - Active persistent owner OBS root:
   `obs://yw-ads-training-gy1/data/external/personal/g00833899/y50046448`.
 - Active scale latent cache version:
-  `vggae_streamvggt_256x18_v1`.
+  `vggae_streamvggt_256x18_v1` (treated disposable until tokenizer finalized).
 - Active compact latent contract:
   `latent_dim=256`, `latent_grid=18`, `seq_len=8`, target is seven future
   residual frames.
@@ -38,6 +77,13 @@ goals, architecture, training order, paths, or important decisions change.
   initialization: about 3.39B trainable params and a 12.63 GiB allocation.
 - Current Wan default is last-4-QKV finetuning:
   `TRAIN_QKV=1`, `TRAIN_QKV_LAST_N=4`.
+- I0-conditioned decoder is on hold. The I0 path was introduced to supply
+  RGB high-frequency that the latent could not encode, but it created an
+  "I0 = first frame" shortcut: the decoder warps I0 to all frames and
+  motion comes from I0 rather than the geometry latent. The
+  reconstruction-first phase uses the I0-free `train_autoencoder.py` /
+  `CompactDecoder` path so reconstruction and future t2v generation share
+  the same decoder.
 
 ## Architecture
 
@@ -91,6 +137,63 @@ Avoid using:
 
 - `scripts/legacy/` for new experiments.
 - `outputs/` as source documentation.
+
+## Research Risks
+
+These are the open questions that determine architecture direction. Each
+has a defined diagnostic probe and a decision rule.
+
+### Risk: StreamVGGT features may not carry RGB high-frequency
+
+VGGT is trained on geometry objectives (depth / point maps / camera), not
+appearance. Its feature space may not encode RGB texture high-frequency by
+construction. The "Beyond the Last Layer" multi-layer fusion result was
+obtained on DINO/CLIP classification ViTs and does not transfer by
+assumption.
+
+- Probe: `scripts/h200/probe_e1_raw_recon.sh` (raw 37x37 feature ceiling).
+- Decision: PSNR >= 28 -> two-stream latent worth building. PSNR <= 23 ->
+  single geometry latent + decoder-side hallucination.
+- Falsification: if E1 <= 23, no amount of latent engineering (two-stream,
+  capacity increase) will recover RGB high-freq from VGGT; the contribution
+  must shift to "geometry latent + decoder hallucinates appearance."
+
+### Risk: per-level information distribution unknown
+
+The current `GenerativeTokenizer` fuses levels [4,11,17,23] via gated
+softmax, which may dilute shallow-layer high-frequency into deep-layer
+semantics. Whether shallow levels actually carry more reconstructable info
+is unverified.
+
+- Probe: `scripts/h200/probe_e2_per_level.sh`.
+- Decision: if shallow levels (4, 11) significantly outperform deep (17, 23)
+  on PSNR, the deep-LayerNorm-flattening hypothesis holds and a two-stream
+  design using shallow levels for `z_app` is justified. If all levels are
+  roughly equal, the bottleneck is elsewhere (capacity / decoder).
+
+### Risk: grid texture source unidentified
+
+Current reconstructions show grid textures attributed (by hypothesis) to
+three combined sources: PixelShuffle checkerboard, adaptive_avg_pool
+37->18 odd/even misalignment, and VGGT patch-attention boundaries.
+
+- Probe: `scripts/h200/probe_e3_grid_isolation.sh` (PixelShuffle vs
+  resize-conv, same tokenizer).
+- Decision: if resize-conv removes the grid, PixelShuffle was the cause and
+  the production decoder switches to resize-conv. If the grid persists, the
+  cause is upstream (pooling alignment or patch-attn) and requires a
+  tokenizer-level fix.
+
+### Risk: I0 conditioning creates a motion shortcut
+
+The I0 decoder reaches reasonable PSNR by warping I0 to all frames, so
+motion comes from I0 rather than the geometry latent. This blocks t2v and
+makes the generator's motion contribution unmeasurable.
+
+- Mitigation: reconstruction-first phase uses the I0-free
+  `train_autoencoder.py` / `CompactDecoder` path. I0 is reintroduced only
+  if a future i2v ablation is explicitly desired, with I0 dropout +
+  wrong-frame I0 corruption to prevent the shortcut.
 
 ## Decisions
 
@@ -201,9 +304,19 @@ Local checks do not prove NPU/HCCL/MoXing runtime correctness.
 
 ## Known Issues
 
+- Compact latent reconstruction is ~20 PSNR with grid textures. This caps
+  every downstream generator: the latest Wan run shows `generated_std` below
+  `target_std` and `velocity_mse` stuck at ~0.53, consistent with the
+  generator learning a too-narrow distribution over an under-expressive
+  latent. Reconstruction must reach PSNR >= 25 before further scale
+  generation.
+- Grid texture sources (PixelShuffle checkerboard, adaptive_avg_pool
+  37->18 odd/even misalignment, VGGT patch-attention boundaries) are
+  unverified and will be isolated by `probe_e3_grid_isolation.sh`.
+- I0-conditioned decoder reaches higher PSNR by warping I0 to all frames
+  (I0 = first frame = target[0]), creating a motion shortcut. Reconstruction
+  training now uses the I0-free `train_autoencoder.py` path.
 - From-scratch Compact DiT still has ghosting despite larger 768-dim runs.
-- I0 decoder reconstructs recognizable structure but loses high-frequency
-  details; generated latent decode can blur or duplicate objects.
 - Full 14B QKV DDP OOMs on 60 GiB 910B cards.
 - MoXing/OBS logs can show noisy multiprocessing logging rollover errors even
   when transfer succeeds.
@@ -214,33 +327,51 @@ Local checks do not prove NPU/HCCL/MoXing runtime correctness.
 
 ## Next Tasks
 
-1. Rerun Wan smoke with current defaults:
+1. Run E1 raw-feature ceiling probe on H200:
 
    ```bash
-   bash scripts/scale/smoke_wan_compact.sh
+   source scripts/h200/h200_env.sh
+   bash scripts/h200/probe_e1_raw_recon.sh
    ```
 
-2. If smoke passes, start full Wan run:
+   This is the single point that decides two-stream vs single-stream
+   architecture. Do not modify the tokenizer until E1 returns a number.
+
+2. Run E2 per-level and E3 grid-isolation probes (can run after E1 starts):
 
    ```bash
-   bash scripts/scale/05_train_wan_compact.sh
+   bash scripts/h200/probe_e2_per_level.sh
+   bash scripts/h200/probe_e3_grid_isolation.sh
    ```
 
-3. Compare against Compact DiT using:
-   - `eval/velocity_mse`
-   - generated/target latent std
-   - RGB preview ghosting
-   - temporal consistency
-   - sample videos from `06_sample_wan_compact.sh`
+3. Based on E1-E3 results, choose the reconstruction architecture:
+   - E1 >= 28 + E2 shallow better -> two-stream latent (z_geo + z_app).
+   - E1 >= 28 + E2 equal -> single stream + capacity increase
+     (latent_grid 28 or latent_dim 512/768).
+   - E1 <= 23 -> single geometry latent + decoder-side hallucination
+     (perceptual + optional adversarial; RGB high-freq is the decoder's
+     job, not the latent's).
 
-4. If last-4 QKV improves but remains underfit, test:
+4. Rewrite the tokenizer/decoder accordingly and retrain the AE on H200
+   until PSNR >= 25 with no grid texture. `train_autoencoder.py` now
+   supports `--lambda_mse` (per-pixel MSE), `--lambda_adv` (optional
+   PatchGAN, default off), and `--decoder_use_pixel_shuffle 0` (resize-conv).
+
+5. Only after reconstruction passes the gate, retrain the tokenizer, rebuild
+   the latent cache, and resume diffusion experiments. Do NOT rebuild
+   AE/I0/cache before the latent representation contract is finalized by
+   the probe results.
+
+6. When diffusion resumes, before any model-parallel full-QKV Wan run, do
+   the cheap QKV-capacity control:
 
    ```bash
-   TRAIN_QKV_LAST_N=8 bash scripts/scale/smoke_wan_compact.sh
-   TRAIN_QKV_LAST_N=8 bash scripts/scale/05_train_wan_compact.sh
+   TRAIN_QKV=0 bash scripts/scale/smoke_wan_compact.sh        # adapter only
+   TRAIN_QKV=1 TRAIN_QKV_LAST_N=8 bash scripts/scale/smoke_wan_compact.sh
    ```
 
-5. Do not rebuild AE/I0/cache unless the latent representation contract changes.
+   If adapter-only ≈ last-4, QKV is not the bottleneck and full-QKV will
+   not help. Expand to last-8/12 only if last-N improves monotonically.
 
 ## Context Update Protocol
 
