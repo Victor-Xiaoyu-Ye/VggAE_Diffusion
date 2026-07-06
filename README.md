@@ -1,88 +1,45 @@
 # VggAE Diffusion
 
-Geometry-aware video reconstruction and generation using frozen StreamVGGT
-features, a compact generative tokenizer, an I0-conditioned decoder, and latent
-flow matching.
+Active research code for geometry-aware video generation with frozen
+StreamVGGT compact latents, an I0-conditioned decoder, and Compact DiT/Wan
+latent generators.
 
-This branch targets Ascend 910B. Active training uses `torch_npu`, HCCL, and
-FP16 with gradient scaling.
-
-The scale scripts target 6 ModelArts workers with 8 NPUs each. They derive
-the distributed topology from `VC_WORKER_NUM`, `VC_TASK_INDEX`, and
-`VC_WORKER_HOSTS`. SpatialVID-HQ remains on OBS and each MP4 is staged on
-demand into a bounded node-local cache because OpenCV needs a seekable local
-file. External dependencies are read from `/cache/yexiaoyu/vggae_ref`.
-Checkpoints, metrics, previews, stdout, and NPU logs are persisted below
-`$OUTPUT_URL`. Compact latent shards use the fixed owner OBS directory
-`.../y50046448/cache_latents/` and support shard-level resume.
-
-## Active Workflows
-
-Before launching, edit the cluster paths once in:
+For agent handoff and current project state, read:
 
 ```text
-scripts/spatialvid_config.sh
+AGENTS.md
+PROJECT_CONTEXT.md
 ```
 
-The active scripts automatically create deterministic, non-overlapping
-SpatialVID CSV files under `RUN_ROOT/metadata/`. You do not need to extract
-overfit or validation CSV files manually. Experiment hyperparameters are
-grouped at the top of each `.sh`; only distributed launch settings and
-`$OUTPUT_URL` are read from environment variables.
+## Active Scale Path
 
-### 10K experiments
-
-Use [`scripts/10k/`](scripts/10k/README.md) to reproduce and validate the
-current online pipeline:
-
-1. Train the compact geometry autoencoder.
-2. Train the I0-conditioned RGB decoder.
-3. Overfit the decoder and diffusion model on a tiny set.
-4. Train I0-conditioned compact diffusion.
-5. Sample and evaluate.
-
-Run all bring-up gates and write one result report with:
+The main ModelArts/Ascend workflow is under `scripts/scale/`.
 
 ```bash
-bash scripts/10k/run_validation_suite.sh
-bash scripts/10k/collect_results.sh
+bash scripts/scale/smoke_wan_compact.sh
+bash scripts/scale/05_train_wan_compact.sh
+bash scripts/scale/06_sample_wan_compact.sh
 ```
-
-This path decodes video and runs StreamVGGT inside the training loop. The scale
-path is preferred when using the complete SpatialVID metadata CSV.
-
-### Large-scale training
-
-Use [`scripts/scale/`](scripts/scale/README.md). The scale path freezes the
-tokenizer, caches compact I0/future-residual latent tar shards, and trains the
-generator by optimizer step without video decoding in the diffusion loop.
-The active generator baselines are from-scratch Compact DiT and a
-Wan-initialized compact latent adapter on the same cached latent contract.
-
-The design, validation gates, storage estimates, and Wan recommendation are in
-[`SCALE_TRAINING.md`](SCALE_TRAINING.md).
-
-The supported/experimental/legacy version matrix is in
-[`VERSION_STATUS.md`](VERSION_STATUS.md).
 
 ## Current Model Contract
 
 ```text
-video -> frozen StreamVGGT -> tokenizer -> compact latent
-I0 RGB -> appearance CNN ------------------------+
-                                                  |
-I0 latent + seven generated residual latents -> I0 decoder -> RGB video
+I0 RGB -> StreamVGGT + tokenizer -> z0
+future frames -> StreamVGGT + tokenizer -> z1...z7
+generator target = z1...z7 - z0
+decoder input = [z0, z0+r1, ..., z0+r7] + I0 appearance
 ```
 
 Frame 0 is observed and is not a diffusion target.
 
-## Legacy Experiments
+## Documentation
 
-Older DPT decoder, raw-token diffusion, reduced-Wan, and non-I0 compact scripts
-are isolated in [`scripts/legacy/`](scripts/legacy/README.md). They are retained
-only for checkpoint reproduction and should not be used for new scale runs.
-
-Historical design notes are in [`docs/legacy/`](docs/legacy/README.md).
+- `AGENTS.md`: first-read instructions for future agents.
+- `PROJECT_CONTEXT.md`: goals, architecture, decisions, conventions, known
+  issues, and next tasks.
+- `scripts/scale/README.md`: runnable scale-stage command order.
+- `TOKEN_STATS.md`: latent normalization contract.
+- `SCALE_TRAINING.md`: detailed scale plan and validation gates.
 
 ## Setup
 
