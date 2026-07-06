@@ -29,6 +29,13 @@ DECODER_BASE_DIM="${DECODER_BASE_DIM:-384}"
 PROJ_DIM="${PROJ_DIM:-512}"
 # resize-conv by default to avoid PixelShuffle checkerboard in the ceiling probe
 USE_PIXEL_SHUFFLE="${USE_PIXEL_SHUFFLE:-0}"
+# Memory knobs (the probe OOMs without these). Defaults: checkpoint on,
+# cap last feature map at 296x296 then interp to 518, decode 8 frames in
+# chunks of 4. Lower MAX_FEATURE_GRID / FRAMES_CHUNK_SIZE to fit smaller
+# cards; raise them for throughput on big cards.
+USE_CHECKPOINT="${USE_CHECKPOINT:-1}"
+MAX_FEATURE_GRID="${MAX_FEATURE_GRID:-296}"
+FRAMES_CHUNK_SIZE="${FRAMES_CHUNK_SIZE:-4}"
 # ----------------------------------------------------------------------------
 
 EXTRA_ARGS=()
@@ -55,6 +62,9 @@ h200_torchrun "${VGGAE_PROJECT}/probe_feature_recon.py" \
   --decoder_num_resblocks 2 \
   --decoder_use_pixel_shuffle "${USE_PIXEL_SHUFFLE}" \
   --num_temporal_blocks 1 \
+  --max_feature_grid "${MAX_FEATURE_GRID}" \
+  --use_checkpoint "${USE_CHECKPOINT}" \
+  --frames_chunk_size "${FRAMES_CHUNK_SIZE}" \
   --lambda_l1 1.0 --lambda_mse 0.5 --lambda_lpips 1.0 \
   --lambda_grad 0.05 --lambda_temporal 0.05 \
   --batch_size "${BATCH_SIZE}" --accum_steps "${ACCUM_STEPS}" \

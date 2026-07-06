@@ -51,6 +51,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.amp import autocast
+from torch.utils.checkpoint import checkpoint as torch_checkpoint
 from tqdm import tqdm
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
@@ -163,8 +164,16 @@ class ProbeDecoder(nn.Module):
 
     Handles arbitrary input_grid (e.g. 37 for raw features, 18 for
     compressed latents) by computing the number of 2x upsample stages
-    needed to reach >= target_size, then bilinear-interpolating the last
-    feature map to exactly target_size.
+    needed, capped by ``max_feature_grid`` so the largest stored activation
+    stays bounded; the remaining resolution is covered by a final bilinear
+    interpolate to ``target_size``.
+
+    Memory management (the E1 probe OOMs without these):
+    - ``use_checkpoint``: gradient checkpoint each upsample stage and the
+      final refine so activations are recomputed in backward instead of
+      stored. Matches the production CompactDecoder behaviour.
+    - ``frames_chunk_size``: decode the S frames in chunks to bound the
+      per-chunk activation memory.
 
     Args:
         in_dim: input channel dim (proj_dim for raw, latent_dim for others)
@@ -174,15 +183,22 @@ class ProbeDecoder(nn.Module):
         num_resblocks: ResBlocks per upsample stage
         use_pixel_shuffle: False = resize-conv (default, avoids checkerboard)
         num_temporal_blocks: temporal attention blocks (0 disables)
+        max_feature_grid: largest feature map side before final interpolate.
+            Lower values save activation memory at the cost of some spatial
+            precision in the last few conv layers.
+        use_checkpoint: gradient checkpoint stages + final refine.
     """
 
     def __init__(self, in_dim, input_grid=37, target_size=518,
                  base_dim=384, num_resblocks=2, use_pixel_shuffle=False,
-                 num_temporal_blocks=1):
+                 num_temporal_blocks=1, max_feature_grid=296,
+                 use_checkpoint=True):
         super().__init__()
+        import math
         self.input_grid = input_grid
         self.target_size = target_size
         self.base_dim = base_dim
+        self.use_checkpoint = use_checkpoint
 
         C0 = base_dim * 2
         C1 = base_dim
@@ -190,12 +206,20 @@ class ProbeDecoder(nn.Module):
         C3 = base_dim // 2
         C4 = base_dim // 4
 
-        # Compute number of 2x stages so 2^stages * input_grid >= target_size.
-        import math
-        self.num_stages = max(
-            1, int(math.ceil(math.log2(target_size / input_grid))))
-        # Cap at 5 stages to keep memory bounded; final interp handles the rest.
-        self.num_stages = min(self.num_stages, 5)
+        # Number of 2x stages so 2^stages * input_grid >= target_size.
+        full_stages = max(1, int(math.ceil(math.log2(target_size / input_grid))))
+        # Cap by max_feature_grid so the largest stored activation is bounded;
+        # the remaining resolution is handled by a final bilinear interpolate.
+        cap = 0
+        g = input_grid
+        for s in range(full_stages):
+            g_next = g * 2
+            if g_next > max_feature_grid:
+                break
+            cap = s + 1
+            g = g_next
+        self.num_stages = max(cap, 1)
+        self.last_feature_grid = input_grid * (2 ** self.num_stages)
 
         stage_dims = [C0, C1, C2, C3, C4]
         Stage = _PixelShuffleStage if use_pixel_shuffle else _ResizeConvStage
@@ -210,26 +234,32 @@ class ProbeDecoder(nn.Module):
         ])
 
         self.temporal_blocks = nn.ModuleList()
-        # Attach temporal attention at the first two stages (lowest resolution).
+        # Attach temporal attention at the first stages (lowest resolution).
         for i in range(min(num_temporal_blocks, self.num_stages)):
             self.temporal_blocks.append(_TemporalAttn(stage_dims[i]))
 
+        last_dim = stage_dims[self.num_stages - 1]
         self.final_refine = nn.Sequential(
-            _ConvBlock(stage_dims[self.num_stages - 1], C4, 3),
+            _ConvBlock(last_dim, C4, 3),
             _ResBlock(C4), _ConvBlock(C4, C4, 3), _ResBlock(C4))
         self.rgb_head = nn.Sequential(
             _ConvBlock(C4, 64, 3), nn.Conv2d(64, 3, 3, padding=1), nn.Sigmoid())
 
-    def forward(self, feat):
+    def _stage_forward(self, stage, x):
+        if self.use_checkpoint and self.training:
+            return torch_checkpoint(stage, x, use_reentrant=False)
+        return stage(x)
+
+    def _decode_chunk(self, feat):
         """feat: [B, S, input_grid, input_grid, in_dim] -> RGB [B, S, H, W, 3]."""
         B, S, H, W, C = feat.shape
         x = feat.permute(0, 1, 4, 2, 3).contiguous().reshape(B * S, C, H, W)
         x = self.stem(x)
         for i, stage in enumerate(self.stages):
-            x = stage(x)
+            x = self._stage_forward(stage, x)
             if i < len(self.temporal_blocks):
                 x = self.temporal_blocks[i](x, B, S)
-        x = self.final_refine(x)
+        x = self._stage_forward(self.final_refine, x)
         rgb = self.rgb_head(x)
         if rgb.shape[-1] != self.target_size:
             rgb = F.interpolate(
@@ -237,6 +267,21 @@ class ProbeDecoder(nn.Module):
                 mode='bilinear', align_corners=False)
         rgb = rgb.reshape(B, S, 3, self.target_size, self.target_size)
         return rgb.permute(0, 1, 3, 4, 2).contiguous()
+
+    def forward(self, feat, frames_chunk_size=None):
+        """feat: [B, S, input_grid, input_grid, in_dim] -> RGB [B, S, H, W, 3].
+
+        If frames_chunk_size is set and S > frames_chunk_size, decode in
+        temporal chunks to bound activation memory, then concatenate.
+        """
+        B, S = feat.shape[0], feat.shape[1]
+        if frames_chunk_size is None or S <= frames_chunk_size:
+            return self._decode_chunk(feat)
+        outs = []
+        for start in range(0, S, frames_chunk_size):
+            end = min(start + frames_chunk_size, S)
+            outs.append(self._decode_chunk(feat[:, start:end]))
+        return torch.cat(outs, dim=1)
 
 
 class _TemporalAttn(nn.Module):
@@ -395,6 +440,17 @@ def parse_args():
                    help='0=resize-conv (default, avoids checkerboard), '
                         '1=PixelShuffle.')
     p.add_argument('--num_temporal_blocks', type=int, default=1)
+    p.add_argument('--max_feature_grid', type=int, default=296,
+                   help='Largest decoder feature map side before final '
+                        'bilinear interpolate to target_size. Lower saves '
+                        'activation memory. 296 keeps 37->74->148->296 then '
+                        'interpolates to 518, avoiding the 592x592 stage.')
+    p.add_argument('--use_checkpoint', type=int, default=1, choices=[0, 1],
+                   help='Gradient checkpoint decoder stages + final refine. '
+                        'On by default; matches production CompactDecoder.')
+    p.add_argument('--frames_chunk_size', type=int, default=4,
+                   help='Decode the S frames in chunks of this size to bound '
+                        'activation memory. 0 = decode all S frames at once.')
 
     # Losses
     p.add_argument('--lambda_l1', type=float, default=1.0)
@@ -539,7 +595,9 @@ def main():
             target_size=args.target_size, base_dim=args.decoder_base_dim,
             num_resblocks=args.decoder_num_resblocks,
             use_pixel_shuffle=bool(args.decoder_use_pixel_shuffle),
-            num_temporal_blocks=args.num_temporal_blocks).to(device=device)
+            num_temporal_blocks=args.num_temporal_blocks,
+            max_feature_grid=args.max_feature_grid,
+            use_checkpoint=bool(args.use_checkpoint)).to(device=device)
         feat_dim = args.proj_dim
     elif args.mode == 'per_level':
         lvl = args.per_level if args.per_level >= 0 else args.levels[0]
@@ -555,7 +613,9 @@ def main():
             target_size=args.target_size, base_dim=args.decoder_base_dim,
             num_resblocks=args.decoder_num_resblocks,
             use_pixel_shuffle=bool(args.decoder_use_pixel_shuffle),
-            num_temporal_blocks=args.num_temporal_blocks).to(device=device)
+            num_temporal_blocks=args.num_temporal_blocks,
+            max_feature_grid=args.max_feature_grid,
+            use_checkpoint=bool(args.use_checkpoint)).to(device=device)
         feat_dim = args.latent_dim
         if main_process:
             print(f'  per_level: probing level {lvl}, '
@@ -572,7 +632,7 @@ def main():
             output_dim=3, output_depth=False, img_size=args.target_size,
             latent_grid=args.latent_grid, num_resblocks=args.decoder_num_resblocks,
             use_pixel_shuffle=bool(args.decoder_use_pixel_shuffle),
-            use_checkpoint=False).to(device=device)
+            use_checkpoint=bool(args.use_checkpoint)).to(device=device)
         feat_dim = args.latent_dim
 
     total_p = sum(p.numel() for p in projector.parameters()) + \
@@ -703,6 +763,7 @@ def main():
                 ctx = autocast(device_type=device_type, dtype=dtype)
             else:
                 ctx = _nullcontext()
+            chunk = args.frames_chunk_size if args.frames_chunk_size > 0 else None
             with ctx:
                 if args.mode == 'compressed':
                     z_g, z_flat = projector(tokens_list)
@@ -711,13 +772,13 @@ def main():
                         z_g_in = z_g + torch.randn_like(z_g) * noise_std
                     else:
                         z_g_in = z_g
-                    preds, _ = dec_mod(z_g_in)
+                    preds, _ = dec_mod(z_g_in, frames_chunk_size=chunk)
                 else:
                     feat = projector(tokens_list)
                     noise_std = args.latent_noise_std
                     if noise_std > 0 and projector.training:
                         feat = feat + torch.randn_like(feat) * noise_std
-                    preds = dec_mod(feat)
+                    preds = dec_mod(feat, frames_chunk_size=chunk)
                     z_flat = feat.reshape(feat.shape[0], feat.shape[1], -1, feat.shape[-1])
 
             pred_rgb = preds[..., :3].permute(0, 1, 4, 2, 3).contiguous().float()

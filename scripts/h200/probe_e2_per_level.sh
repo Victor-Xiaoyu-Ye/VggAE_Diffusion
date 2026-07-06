@@ -27,6 +27,10 @@ LATENT_DIM="${LATENT_DIM:-512}"
 # skip compression and measure the per-level raw ceiling at full resolution.
 LATENT_GRID="${LATENT_GRID:-18}"
 USE_PIXEL_SHUFFLE="${USE_PIXEL_SHUFFLE:-0}"
+# Memory knobs (see probe_e1_raw_recon.sh for rationale).
+USE_CHECKPOINT="${USE_CHECKPOINT:-1}"
+MAX_FEATURE_GRID="${MAX_FEATURE_GRID:-296}"
+FRAMES_CHUNK_SIZE="${FRAMES_CHUNK_SIZE:-4}"
 # ----------------------------------------------------------------------------
 
 for LVL in ${LEVELS_TO_PROBE}; do
@@ -51,10 +55,13 @@ for LVL in ${LEVELS_TO_PROBE}; do
     --per_level "${LVL}" \
     --latent_dim "${LATENT_DIM}" \
     --latent_grid "${LATENT_GRID}" \
-    --decoder_base_dim "${DECODER_BASE_DIM}" \
-    --decoder_num_resblocks 2 \
-    --decoder_use_pixel_shuffle "${USE_PIXEL_SHUFFLE}" \
-    --num_temporal_blocks 1 \
+  --decoder_base_dim "${DECODER_BASE_DIM}" \
+  --decoder_num_resblocks 2 \
+  --decoder_use_pixel_shuffle "${USE_PIXEL_SHUFFLE}" \
+  --num_temporal_blocks 1 \
+  --max_feature_grid "${MAX_FEATURE_GRID}" \
+  --use_checkpoint "${USE_CHECKPOINT}" \
+  --frames_chunk_size "${FRAMES_CHUNK_SIZE}" \
     --lambda_l1 1.0 --lambda_mse 0.5 --lambda_lpips 1.0 \
     --lambda_grad 0.05 --lambda_temporal 0.05 \
     --batch_size "${BATCH_SIZE}" --accum_steps "${ACCUM_STEPS}" \
