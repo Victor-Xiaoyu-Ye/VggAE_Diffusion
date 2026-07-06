@@ -735,7 +735,7 @@ def main():
                     scaler.unscale_(optimizer)
                     grad_norm = torch.nn.utils.clip_grad_norm_(
                         params, args.max_grad_norm)
-                    scaler.step(optimizer); scaler.update()
+                    scaler.step(optimizer)
                 else:
                     grad_norm = torch.nn.utils.clip_grad_norm_(
                         params, args.max_grad_norm)
@@ -744,6 +744,8 @@ def main():
                 # Discriminator update (hinge PatchGAN). Done after the
                 # generator optimizer step and only every adv_every steps so
                 # the generator has time to use the adversarial gradient.
+                # NOTE: with a shared GradScaler, all scaler.step() calls must
+                # precede a single scaler.update() below.
                 disc_loss_val = 0.0
                 if args.lambda_adv > 0 and discriminator is not None \
                         and global_step % args.adv_every == 0:
@@ -764,6 +766,10 @@ def main():
                         disc_loss.backward()
                         disc_optimizer.step()
                     disc_loss_val = disc_loss.item()
+
+                # Single scaler.update() after all scaler.step() calls.
+                if use_scaler:
+                    scaler.update()
 
                 optimizer.zero_grad(set_to_none=True)
                 ema.update(nn.ModuleList([

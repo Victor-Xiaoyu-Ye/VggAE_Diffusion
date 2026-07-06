@@ -504,30 +504,23 @@ def parse_args():
 
 @torch.no_grad()
 def eval_recon(encoder, projector, decoder, eval_frames, device, out_dir,
-               epoch, compute_dtype, device_type, mode):
+               epoch, compute_dtype, device_type, mode, frames_chunk_size=None):
     import numpy as np
     from PIL import Image as PImage
     os.makedirs(out_dir, exist_ok=True)
     projector.eval(); decoder.eval()
     frames = eval_frames.to(device=device, dtype=compute_dtype)
-    with torch.no_grad():
+    ctx = autocast(device_type=device_type, dtype=compute_dtype) \
+        if compute_dtype != torch.float32 else _nullcontext()
+    with ctx:
         tokens_list, psi = encoder(frames)
         tokens_list = strip_special_tokens(tokens_list, psi)
-        if compute_dtype != torch.float32:
-            with autocast(device_type=device_type, dtype=compute_dtype):
-                feat = projector(tokens_list) if projector is not None else None
-                if mode == 'compressed':
-                    z_g, _ = projector(tokens_list)
-                    recon = decoder(z_g)
-                else:
-                    recon = decoder(feat)
+        if mode == 'compressed':
+            z_g, _ = projector(tokens_list)
+            recon, _ = decoder(z_g, frames_chunk_size=frames_chunk_size)
         else:
-            feat = projector(tokens_list) if projector is not None else None
-            if mode == 'compressed':
-                z_g, _ = projector(tokens_list)
-                recon = decoder(z_g)
-            else:
-                recon = decoder(feat)
+            feat = projector(tokens_list)
+            recon = decoder(feat, frames_chunk_size=frames_chunk_size)
     recon = recon.clamp(0, 1)
     orig = frames.permute(0, 1, 3, 4, 2).clamp(0, 1)
     S = recon.shape[1]
@@ -658,9 +651,6 @@ def main():
             projector.module if use_ddp else projector,
             decoder.module if use_ddp else decoder]),
         lr=args.lr, wd=args.wd)
-
-    steps_per_epoch = (len(None) if False else 0)  # placeholder; set after loader
-    # We will set scheduler after dataloader length is known.
 
     # ---- Dataset ----
     dataset = SpatialVidDataset(
@@ -860,7 +850,9 @@ def main():
             metrics = eval_recon(
                 encoder, proj_mod, dec_mod, eval_frames, device,
                 os.path.join(args.output_dir, 'samples'), epoch,
-                dtype, device_type, args.mode)
+                dtype, device_type, args.mode,
+                frames_chunk_size=(args.frames_chunk_size
+                                   if args.frames_chunk_size > 0 else None))
             metrics.update({
                 'step': global_step, 'epoch': epoch,
                 'probe': args.probe_name, 'mode': args.mode,
