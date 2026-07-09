@@ -26,22 +26,20 @@ viewpoint change of a static scene.
 
 ## Current Phase: Reconstruction-First (H200)
 
-Generation experiments are paused. The compact latent reconstructs at ~20
-PSNR with grid textures, which caps every generator. We are running
-diagnostic probes on the 4-card H200 machine to decide the architecture:
+Generation experiments are paused. E1–E4 showed frozen StreamVGGT features
+plateau at ~20 PSNR on SpatialVID (DPT decoder does not break the ceiling).
+Appearance high-frequency must come from an explicit TextureEncoder, not
+from VGGT shallow levels and not from decoder-side hallucination first.
+
+Active probe:
 
 ```bash
-source scripts/h200/h200_env.sh
-bash scripts/h200/probe_e1_raw_recon.sh    # raw feature PSNR ceiling
-bash scripts/h200/probe_e2_per_level.sh    # per-level info content
-bash scripts/h200/probe_e3_grid_isolation.sh  # grid texture source
+bash scripts/h200/probe_e5_texture_recon.sh                 # oracle z_tex
+TEX_MODE=zero bash scripts/h200/probe_e5_texture_recon.sh   # geo-only ablation
 ```
 
-Decision rule (see `PROJECT_CONTEXT.md` `Research Risks`):
-- E1 PSNR >= 28 + E2 shallow better -> two-stream latent (z_geo + z_app).
-- E1 PSNR >= 28 + E2 equal -> single stream + capacity increase.
-- E1 PSNR <= 23 -> single geometry latent + decoder hallucinates RGB
-  high-freq via perceptual + optional adversarial training.
+Contract: decoder reconstructs from `(z_geo, z_tex)` only — no RGB skip —
+so both streams remain diffusion targets. Gate: oracle PSNR >= 25.
 
 Hard gate: reconstruction PSNR < 25 (no grid texture) blocks further scale
 diffusion. The 1.46M-clip scale cache is disposable until the tokenizer is

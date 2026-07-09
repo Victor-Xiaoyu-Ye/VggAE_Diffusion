@@ -143,33 +143,35 @@ Avoid using:
 These are the open questions that determine architecture direction. Each
 has a defined diagnostic probe and a decision rule.
 
-### Risk: StreamVGGT features may not carry RGB high-frequency
+### Risk: StreamVGGT features may not carry RGB high-frequency — CONFIRMED
 
 VGGT is trained on geometry objectives (depth / point maps / camera), not
-appearance. Its feature space may not encode RGB texture high-frequency by
-construction. The "Beyond the Last Layer" multi-layer fusion result was
-obtained on DINO/CLIP classification ViTs and does not transfer by
-assumption.
+appearance. Empirically confirmed on SpatialVID 10k:
 
-- Probe: `scripts/h200/probe_e1_raw_recon.sh` (raw 37x37 feature ceiling).
-- Decision: PSNR >= 28 -> two-stream latent worth building. PSNR <= 23 ->
-  single geometry latent + decoder-side hallucination.
-- Falsification: if E1 <= 23, no amount of latent engineering (two-stream,
-  capacity increase) will recover RGB high-freq from VGGT; the contribution
-  must shift to "geometry latent + decoder hallucinates appearance."
+| Probe | Best PSNR | Best LPIPS | Note |
+|-------|-----------|------------|------|
+| E1 raw 4-level + generic decoder | 20.60 | 0.215 | plateau ~ep17 |
+| E4 b0 DPTHead (no compact) | 20.30 | 0.324 | DPT does not beat E1 |
+| E4 b1 compact + DPT decoder | 17.31 | 0.525 | ~3 dB compression cost |
 
-### Risk: per-level information distribution unknown
+- Falsified: "swap to DPT decoder and PSNR jumps" (4DLangRecon single-scene
+  result does not transfer to SpatialVID).
+- Falsified: "VGGT shallow levels as z_app" (E2 level4 alone = 18.62 < E1).
+- Consequence: appearance must come from an explicit RGB TextureEncoder.
 
-The current `GenerativeTokenizer` fuses levels [4,11,17,23] via gated
-softmax, which may dilute shallow-layer high-frequency into deep-layer
-semantics. Whether shallow levels actually carry more reconstructable info
-is unverified.
+### Decision: Dual-stream latent (z_geo + z_tex from TextureEncoder)
 
-- Probe: `scripts/h200/probe_e2_per_level.sh`.
-- Decision: if shallow levels (4, 11) significantly outperform deep (17, 23)
-  on PSNR, the deep-LayerNorm-flattening hypothesis holds and a two-stream
-  design using shallow levels for `z_app` is justified. If all levels are
-  roughly equal, the bottleneck is elsewhere (capacity / decoder).
+- Content: `z_geo` = CompactCompressor(frozen VGGT); `z_tex` =
+  TextureEncoder(per-frame RGB), multi-scale packed into the same GxG grid;
+  DualStreamDecoder reconstructs from `(z_geo, z_tex)` only (no RGB skip).
+- Reason: E1/E4 ceiling; TexturePredictor(z_geo->z_tex) is information-
+  theoretically blocked and is disabled. Decoder-side GAN/hallucination is
+  deferred until the dual-stream reconstruction gate is measured.
+- Probe: `scripts/h200/probe_e5_texture_recon.sh` (`TEX_MODE=oracle|zero`).
+- Gate: oracle PSNR >= 25 -> proceed to Wan diffusion on both streams
+  (or z_tex conditioned on z_geo). oracle still ~20 -> raise tex capacity.
+- Rejected for now: VGGT-shallow z_app; I0 AppearanceCNN shortcut;
+  TexturePredictor; decoder-first adversarial icing.
 
 ### Risk: grid texture source unidentified
 
@@ -327,40 +329,23 @@ Local checks do not prove NPU/HCCL/MoXing runtime correctness.
 
 ## Next Tasks
 
-1. Run E1 raw-feature ceiling probe on H200:
+1. Run E5 dual-stream reconstruction probe on H200 (4 GPUs):
 
    ```bash
-   source scripts/h200/h200_env.sh
-   bash scripts/h200/probe_e1_raw_recon.sh
+   bash scripts/h200/probe_e5_texture_recon.sh                 # oracle
+   TEX_MODE=zero bash scripts/h200/probe_e5_texture_recon.sh   # ablation
    ```
 
-   This is the single point that decides two-stream vs single-stream
-   architecture. Do not modify the tokenizer until E1 returns a number.
+   Decision: oracle PSNR >= 25 -> dual-stream viable for Wan. Still ~20 ->
+   raise `TEX_DIM` / `TEX_BASE_CH` or keep a higher-res tex grid.
 
-2. Run E2 per-level and E3 grid-isolation probes (can run after E1 starts):
+2. If E5 oracle passes the gate, wire production AE training to
+   CompactCompressor + TextureEncoder + DualStreamDecoder (replace the
+   single-stream GenerativeTokenizer path for reconstruction).
 
-   ```bash
-   bash scripts/h200/probe_e2_per_level.sh
-   bash scripts/h200/probe_e3_grid_isolation.sh
-   ```
-
-3. Based on E1-E3 results, choose the reconstruction architecture:
-   - E1 >= 28 + E2 shallow better -> two-stream latent (z_geo + z_app).
-   - E1 >= 28 + E2 equal -> single stream + capacity increase
-     (latent_grid 28 or latent_dim 512/768).
-   - E1 <= 23 -> single geometry latent + decoder-side hallucination
-     (perceptual + optional adversarial; RGB high-freq is the decoder's
-     job, not the latent's).
-
-4. Rewrite the tokenizer/decoder accordingly and retrain the AE on H200
-   until PSNR >= 25 with no grid texture. `train_autoencoder.py` now
-   supports `--lambda_mse` (per-pixel MSE), `--lambda_adv` (optional
-   PatchGAN, default off), and `--decoder_use_pixel_shuffle 0` (resize-conv).
-
-5. Only after reconstruction passes the gate, retrain the tokenizer, rebuild
-   the latent cache, and resume diffusion experiments. Do NOT rebuild
-   AE/I0/cache before the latent representation contract is finalized by
-   the probe results.
+3. Only after reconstruction passes the gate, rebuild the latent cache
+   (now both z_geo and z_tex) and resume Wan diffusion. Do NOT rebuild
+   cache before the dual-stream contract is finalized by E5.
 
 6. When diffusion resumes, before any model-parallel full-QKV Wan run, do
    the cheap QKV-capacity control:
