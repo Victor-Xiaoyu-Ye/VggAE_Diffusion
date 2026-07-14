@@ -35,6 +35,7 @@ from models.compact_decoder import CompactDecoder
 from models.generative_tokenizer import GenerativeTokenizer
 from models.i0_decoder import I0ConditionalDecoder, load_i0_decoder_state_dict
 from streamvggt.models.streamvggt import StreamVGGT
+from utils.encoder_loader import load_encoder_checkpoint
 from utils.device import configure_backend_compatibility, get_device, get_device_name, resolve_dtype
 
 
@@ -102,7 +103,7 @@ def load_models(args, device, compute_dtype):
     disable_temporal_mixer = bool(ae_args.get("disable_temporal_mixer", False))
 
     encoder = StreamVGGT(img_size=args.target_size, patch_size=14, embed_dim=1024)
-    encoder.load_state_dict(torch.load(args.encoder_ckpt, map_location="cpu"), strict=False)
+    load_encoder_checkpoint(encoder, args.encoder_ckpt)
     encoder = encoder.to(device=device, dtype=compute_dtype).eval()
     for parameter in encoder.parameters():
         parameter.requires_grad_(False)

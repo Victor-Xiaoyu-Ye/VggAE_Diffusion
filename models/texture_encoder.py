@@ -72,6 +72,15 @@ class TextureEncoder(nn.Module):
         out_grid: spatial grid, must match z_geo (default 18).
         base_ch: width of the first stage (default 64).
         img_size: expected input resolution (518); used only for docs/asserts.
+        pack_mode: how multi-scale features reach out_grid.
+            'avgpool' (legacy): adaptive_avg_pool2d per scale. Average
+                pooling low-passes exactly the high frequency z_tex exists
+                to carry; kept as the A/B control.
+            's2d': input resized to 32*out_grid (576 for grid 18) so every
+                stage map is an integer multiple of the grid; each scale is
+                channel-reduced by 1x1 then packed losslessly into channels
+                with pixel_unshuffle (space-to-depth). No fractional
+                pooling, no low-pass.
 
     Forward:
         frames [B, S, 3, H, W] -> z_tex [B, S, G, G, out_dim]
@@ -83,8 +92,13 @@ class TextureEncoder(nn.Module):
         out_grid: int = 18,
         base_ch: int = 64,
         img_size: int = 518,
+        zero_init_last: bool = False,
+        pack_mode: str = 'avgpool',
     ):
         super().__init__()
+        if pack_mode not in ('avgpool', 's2d'):
+            raise ValueError(f'unknown pack_mode {pack_mode!r}')
+        self.pack_mode = pack_mode
         self.out_dim = out_dim
         self.out_grid = out_grid
         self.base_ch = base_ch
@@ -117,14 +131,26 @@ class TextureEncoder(nn.Module):
             ResBlock(c3),
         )
 
-        # Per-scale 1x1 before pooling so each scale contributes a clean slice.
-        self.to_grid = nn.ModuleList([
-            nn.Conv2d(c0, c0, 1, bias=False),
-            nn.Conv2d(c1, c1, 1, bias=False),
-            nn.Conv2d(c2, c2, 1, bias=False),
-            nn.Conv2d(c3, c3, 1, bias=False),
-        ])
-        fused_ch = c0 + c1 + c2 + c3
+        # Per-scale 1x1 before packing so each scale contributes a clean slice.
+        if pack_mode == 's2d':
+            # Input is resized to 32*G, so stage maps sit at exact multiples
+            # of the grid: 16G, 8G, 4G, 2G. Each scale is channel-reduced,
+            # then pixel_unshuffle folds space into channels losslessly.
+            self.s2d_ratios = (16, 8, 4, 2)
+            s2d_ch = (1, 2, 8, 32)  # -> (256,128,128,128) ch after unshuffle
+            self.to_grid = nn.ModuleList([
+                nn.Conv2d(c, k, 1, bias=False)
+                for c, k in zip((c0, c1, c2, c3), s2d_ch)])
+            fused_ch = sum(
+                k * r * r for k, r in zip(s2d_ch, self.s2d_ratios))
+        else:
+            self.to_grid = nn.ModuleList([
+                nn.Conv2d(c0, c0, 1, bias=False),
+                nn.Conv2d(c1, c1, 1, bias=False),
+                nn.Conv2d(c2, c2, 1, bias=False),
+                nn.Conv2d(c3, c3, 1, bias=False),
+            ])
+            fused_ch = c0 + c1 + c2 + c3
         self.fuse = nn.Sequential(
             nn.Conv2d(fused_ch, out_dim, 1, bias=False),
             _gn(out_dim),
@@ -133,11 +159,15 @@ class TextureEncoder(nn.Module):
             nn.Conv2d(out_dim, out_dim, 3, padding=1),
         )
 
-        # Zero-init last conv so early training is dominated by z_geo path
-        # when jointly trained; TextureEncoder still learns via residual.
-        nn.init.zeros_(self.fuse[-1].weight)
-        if self.fuse[-1].bias is not None:
-            nn.init.zeros_(self.fuse[-1].bias)
+        # Optional zero-init of the last conv so early joint training is
+        # dominated by the z_geo path. Off by default: with the tex-stat
+        # regularizer active, a constant-zero z_tex puts std() at its
+        # non-differentiable point, and reconstruction probes measuring the
+        # texture ceiling should not handicap the texture stream.
+        if zero_init_last:
+            nn.init.zeros_(self.fuse[-1].weight)
+            if self.fuse[-1].bias is not None:
+                nn.init.zeros_(self.fuse[-1].bias)
 
     def _pool_to_grid(self, x: torch.Tensor) -> torch.Tensor:
         if x.shape[-2] != self.out_grid or x.shape[-1] != self.out_grid:
@@ -151,17 +181,30 @@ class TextureEncoder(nn.Module):
         B, S, C, H, W = frames.shape
         x = frames.reshape(B * S, C, H, W)
 
+        if self.pack_mode == 's2d':
+            side = 32 * self.out_grid  # 576 for grid 18
+            if H != side or W != side:
+                x = F.interpolate(
+                    x, size=(side, side), mode='bilinear', align_corners=False)
+
         s0 = self.stage0(x)
         s1 = self.stage1(s0)
         s2 = self.stage2(s1)
         s3 = self.stage3(s2)
 
-        packed = torch.cat([
-            self._pool_to_grid(self.to_grid[0](s0)),
-            self._pool_to_grid(self.to_grid[1](s1)),
-            self._pool_to_grid(self.to_grid[2](s2)),
-            self._pool_to_grid(self.to_grid[3](s3)),
-        ], dim=1)
+        if self.pack_mode == 's2d':
+            packed = torch.cat([
+                F.pixel_unshuffle(proj(s), r)
+                for proj, s, r in zip(
+                    self.to_grid, (s0, s1, s2, s3), self.s2d_ratios)
+            ], dim=1)
+        else:
+            packed = torch.cat([
+                self._pool_to_grid(self.to_grid[0](s0)),
+                self._pool_to_grid(self.to_grid[1](s1)),
+                self._pool_to_grid(self.to_grid[2](s2)),
+                self._pool_to_grid(self.to_grid[3](s3)),
+            ], dim=1)
         z = self.fuse(packed)  # [B*S, out_dim, G, G]
         z = z.reshape(B, S, self.out_dim, self.out_grid, self.out_grid)
         return z.permute(0, 1, 3, 4, 2).contiguous()  # [B, S, G, G, out_dim]

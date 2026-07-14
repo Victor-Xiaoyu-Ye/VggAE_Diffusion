@@ -16,6 +16,7 @@ from data.video_dataset import SpatialVidDataset, collate_fn
 from models.generative_tokenizer import GenerativeTokenizer
 from streamvggt.models.streamvggt import StreamVGGT
 from utils.device import get_device, get_device_name, resolve_dtype
+from utils.encoder_loader import load_encoder_checkpoint
 
 
 def parse_args():
@@ -261,8 +262,7 @@ def main():
 
     encoder = StreamVGGT(
         img_size=args.target_size, patch_size=14, embed_dim=1024)
-    encoder.load_state_dict(
-        torch.load(args.encoder_ckpt, map_location="cpu"), strict=False)
+    load_encoder_checkpoint(encoder, args.encoder_ckpt)
     encoder = encoder.to(device=device, dtype=dtype).eval()
 
     tokenizer = GenerativeTokenizer(

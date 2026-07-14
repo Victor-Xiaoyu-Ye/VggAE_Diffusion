@@ -143,21 +143,30 @@ Avoid using:
 These are the open questions that determine architecture direction. Each
 has a defined diagnostic probe and a decision rule.
 
-### Risk: StreamVGGT features may not carry RGB high-frequency — CONFIRMED
+### Risk: StreamVGGT features may not carry RGB high-frequency — NEEDS RE-VERIFICATION
 
 VGGT is trained on geometry objectives (depth / point maps / camera), not
-appearance. Empirically confirmed on SpatialVID 10k:
+appearance. Measured on SpatialVID 10k, BUT all numbers below predate the
+2026-07 probe-infrastructure fixes (DDP forward bypass, single-clip eval,
+unverified encoder checkpoint loading, no-residual temporal attention) and
+must be re-measured before being treated as ceilings:
 
 | Probe | Best PSNR | Best LPIPS | Note |
 |-------|-----------|------------|------|
-| E1 raw 4-level + generic decoder | 20.60 | 0.215 | plateau ~ep17 |
-| E4 b0 DPTHead (no compact) | 20.30 | 0.324 | DPT does not beat E1 |
-| E4 b1 compact + DPT decoder | 17.31 | 0.525 | ~3 dB compression cost |
+| E1 raw 4-level + generic decoder | 20.60 | 0.215 | plateau ~ep17; single-clip eval; encoder load unverified |
+| E4 b0 DPTHead (no compact) | 20.30 | 0.324 | ran with DDP grad-sync bug (4x independent single-GPU) |
+| E4 b1 compact + DPT decoder | 17.31 | 0.525 | same DDP bug; "~3 dB compression cost" unreliable |
 
-- Falsified: "swap to DPT decoder and PSNR jumps" (4DLangRecon single-scene
-  result does not transfer to SpatialVID).
-- Falsified: "VGGT shallow levels as z_app" (E2 level4 alone = 18.62 < E1).
-- Consequence: appearance must come from an explicit RGB TextureEncoder.
+- Falsified (subject to re-verification): "swap to DPT decoder and PSNR
+  jumps"; "VGGT shallow levels as z_app" (E2 level4 alone = 18.62 < E1 —
+  note E2 compressed 37->18 by default, conflating level info with
+  compression cost).
+- External context (2026-07 survey): ~20 PSNR matches what frozen semantic
+  encoders give with plain reconstruction decoders; RAE/GLD-style works
+  recover high fidelity by training the decoder with L1+LPIPS+**GAN** loss.
+  GLD (arXiv:2603.22275) reports 35.41 dB PSNR reconstruction from frozen
+  geometric-foundation features with an adversarially trained decoder. The
+  ceiling may therefore be the decoder training recipe, not the features.
 
 ### Decision: Dual-stream latent (z_geo + z_tex from TextureEncoder)
 
@@ -306,15 +315,62 @@ Local checks do not prove NPU/HCCL/MoXing runtime correctness.
 
 ## Known Issues
 
+- 2026-07 probe-infrastructure bugs (FIXED in code; prior results affected):
+  1. DDP forward bypass: E4/E5 (and E1-3 decoder path) called sub-modules
+     via `.module` instead of the DDP wrapper, so gradient all-reduce never
+     ran; multi-GPU probes degraded to independent single-GPU runs. All
+     probes now route the full forward through a single DDP-wrapped core
+     module (`ProbeCore` / `DualStreamCore`). E4 results were affected;
+     E1-3 escaped only because h200_env.sh pinned 1 GPU.
+  2. E5 oracle NaN: TextureEncoder last-conv zero-init + `std()`-based
+     tex_reg had a NaN gradient at zero variance, poisoning all params via
+     clip_grad_norm_ on step 1. Fixed: `sqrt(var+1e-6)` and zero-init now
+     opt-in (`zero_init_last=False` default).
+  3. Encoder checkpoint loading: several entry points did
+     `load_state_dict(strict=False)` with no unwrap/verification — a wrapped
+     checkpoint would silently load ZERO weights. All entry points that load
+     the StreamVGGT encoder (probes, train_autoencoder, cache_compact_latents,
+     train_i0_autoencoder, train_compact_diffusion, sample_compact_i0,
+     inference_autoencoder, diagnose_* scripts) now use
+     `utils/encoder_loader.load_encoder_checkpoint`, which unwraps containers
+     and raises unless >=90% of keys match. E1/E2/E3 historical runs used the
+     unverified loader; whether their encoder actually loaded must be
+     confirmed on H200 (the loader now prints match counts).
+  4. Temporal attention had no residual connection (attention output REPLACED
+     features) in probe/dual-stream decoders AND in the production
+     `models/compact_decoder.py` CompactDecoder used by E1-3 compressed mode,
+     train_autoencoder, and train_compact_diffusion. All sites now use
+     pre-norm residual. E1 (num_temporal_blocks=1), E5, and all historical
+     CompactDecoder-based results affected. Old CompactDecoder checkpoints
+     still load (same parameters) but decode differently through the fixed
+     forward.
+  5. Probe eval used a single clip (batch 1 of eval loader). Single-clip
+     PSNR varies more than the 2-5 dB decision gates. All probes now
+     evaluate over `--eval_clips` (default 32, `EVAL_CLIPS` in wrappers)
+     and report psnr±std; eval datasets use `temporal_jitter=False` and
+     `num_workers=0` so every eval pass (and every probe) scores the same
+     deterministic clip windows.
+- Probe loss configs are inconsistent across probes (E1 lambda_lpips=1.0
+  vs E4/E5 0.1); PSNR comparisons across probes are not clean, and heavy
+  LPIPS depresses PSNR. A pure L1+MSE E1 variant is needed to measure the
+  true feature-space PSNR ceiling.
 - Compact latent reconstruction is ~20 PSNR with grid textures. This caps
   every downstream generator: the latest Wan run shows `generated_std` below
   `target_std` and `velocity_mse` stuck at ~0.53, consistent with the
   generator learning a too-narrow distribution over an under-expressive
   latent. Reconstruction must reach PSNR >= 25 before further scale
-  generation.
+  generation. (Note: under-dispersion can also come from flow-matching
+  mean-reversion; re-check after reconstruction is fixed.)
+- TextureEncoder legacy `pack_mode='avgpool'` packs scales via
+  adaptive_avg_pool to 18x18 — average pooling low-passes exactly the high
+  frequency z_tex must carry. `pack_mode='s2d'` (E5 R1 default) resizes
+  input to 576=32x18 and packs losslessly via pixel_unshuffle; avgpool is
+  kept only as the A/B control arm.
 - Grid texture sources (PixelShuffle checkerboard, adaptive_avg_pool
   37->18 odd/even misalignment, VGGT patch-attention boundaries) are
-  unverified and will be isolated by `probe_e3_grid_isolation.sh`.
+  unverified and will be isolated by `probe_e3_grid_isolation.sh`. The
+  non-integer 37->18 adaptive pool alternates kernel sizes and is itself a
+  plausible periodic-artifact source; grid=19 or crop-to-36+stride2 avoids it.
 - I0-conditioned decoder reaches higher PSNR by warping I0 to all frames
   (I0 = first frame = target[0]), creating a motion shortcut. Reconstruction
   training now uses the I0-free `train_autoencoder.py` path.
@@ -329,23 +385,57 @@ Local checks do not prove NPU/HCCL/MoXing runtime correctness.
 
 ## Next Tasks
 
-1. Run E5 dual-stream reconstruction probe on H200 (4 GPUs):
+0. Verify encoder checkpoint loading on H200 (one-time): run any probe and
+   check the new `[encoder] ... matched N/M keys` line. If historical
+   E1/E2/E3 ran with an unloaded (random) encoder, all ceiling conclusions
+   reset.
 
-   ```bash
-   bash scripts/h200/probe_e5_texture_recon.sh                 # oracle
-   TEX_MODE=zero bash scripts/h200/probe_e5_texture_recon.sh   # ablation
-   ```
+1. Re-run E4 (both bottleneck modes) with the fixed DDP path and multi-clip
+   eval to get trustworthy "DPT vs generic" and "compression cost" numbers.
+   Also run one E1 variant with `--lambda_lpips 0 --lambda_mse 0.5` to
+   measure the pure-PSNR feature ceiling.
 
-   Decision: oracle PSNR >= 25 -> dual-stream viable for Wan. Still ~20 ->
-   raise `TEX_DIM` / `TEX_BASE_CH` or keep a higher-res tex grid.
+2. Run the E5 dual-stream matrix on H200 (4 GPUs) — full matrix and gates
+   in `scripts/h200/README.md` ("E5 run matrix"). Summary:
 
-2. If E5 oracle passes the gate, wire production AE training to
+   - R1 `TEX_PACK=s2d TEX_REG_MODE=match_geo` — best guess: space-to-depth
+     packing (avg-pool low-passes the high freq z_tex must carry; input
+     resized 518->576 internally so all scales are integer multiples of
+     grid 18) + SVG-style z_tex-stats-match-z_geo regularizer.
+   - R2 avgpool + match_geo — isolates packing's contribution (only if R1
+     passes).
+   - R3 `TEX_MODE=zero` — geo-only floor.
+   - R4 `TEX_MODE=tex_only` — proves z_geo is load-bearing (reviewer
+     question #1; z_geo zeroed, compressor+encoder skipped).
+   - R5 `FEAT_WEIGHT=0.5` — VGGT feature-consistency loss (MIRA P-DINO
+     analogue), the no-GAN fidelity lift; run if R1 lands in 23-25.
+
+   Dual gate before any cache rebuild: (a) oracle PSNR >= 25 over 32
+   clips, no grid texture; (b) `diagnose_latent_diffusability.py` on the
+   winning checkpoint shows z_tex spectra/eigenspectrum not materially
+   worse than z_geo (SSVAE criteria; guards against MIRA's
+   "sharper-but-undiffusable" failure mode). Historical note: last-k /
+   multi-level mean aggregation was already tried in the legacy phase
+   (docs/legacy/PROJECT.md: mean over levels DEGRADED to 18.2 dB vs 22.3
+   single-level) — do not re-run it as-is; the E5 matrix supersedes it.
+
+3. Benchmark alternative gate (2026-07 survey): GLD/RAE recover high PSNR
+   from frozen features by training the decoder with L1+LPIPS+GAN. Before
+   committing to dual-stream, a cheap E6 = E1 setup + adversarial decoder
+   loss would test whether the "missing high-frequency" is recoverable
+   decoder-side (single geo latent, no z_tex, generative decoder). Watch
+   temporal flicker of hallucinated texture (temporal LPIPS across frames).
+
+4. If E5 oracle passes the gate, wire production AE training to
    CompactCompressor + TextureEncoder + DualStreamDecoder (replace the
    single-stream GenerativeTokenizer path for reconstruction).
 
-3. Only after reconstruction passes the gate, rebuild the latent cache
+5. Only after reconstruction passes the gate, rebuild the latent cache
    (now both z_geo and z_tex) and resume Wan diffusion. Do NOT rebuild
-   cache before the dual-stream contract is finalized by E5.
+   cache before the dual-stream contract is finalized by E5. When diffusion
+   resumes, add geometry-consistency eval (re-encode generated video with
+   frozen VGGT; reprojection error / depth consistency — see RPE/RVE from
+   Geometry Forcing, arXiv:2507.07982) alongside velocity_mse.
 
 6. When diffusion resumes, before any model-parallel full-QKV Wan run, do
    the cheap QKV-capacity control:
@@ -357,6 +447,168 @@ Local checks do not prove NPU/HCCL/MoXing runtime correctness.
 
    If adapter-only ≈ last-4, QKV is not the bottleneck and full-QKV will
    not help. Expand to last-8/12 only if last-N improves monotonically.
+
+## Related Work Map (2026-07 survey)
+
+Direct novelty threats and must-cite baselines for the paper. Verified via
+web survey 2026-07-13; re-check before submission.
+
+### 2026-07-14 survey additions (actionable)
+
+Decoder recipe (E6 / reconstruction gate):
+
+- **MIRA** (arXiv:2607.05352, General Intuition/Kyutai/Epic, 2026-07): video
+  world model on frozen DINOv3-L RAE latent WITH RGB decode. Codec recipe
+  (their Table 9): frozen DINOv3-L, **aggregate blocks {11,13,15,17,19,21,23}**,
+  linear bottleneck to 32ch, 2x2 spatial + 2x temporal downsample; space-time
+  causal ViT decoder (1152w/28d); losses **L1(1.0) + LPIPS(1.0, 25% frames) +
+  DINO-feature perceptual "P-DINO"(1.0, 25% frames), NO GAN** — adaptive
+  gradient-norm weighting; AdamW lr 2e-4, batch 32, 250k steps, 8xH100.
+  Key ablation: from-scratch encoder reconstructs sharper (PSNR 32.2 vs
+  29.7) but generates far worse (gFID 22.5 vs 10.7) and drifts 1.7x more in
+  rollout — frozen-feature smoothness is what stabilizes generation. This is
+  (a) evidence GAN is optional if LPIPS+P-DINO are combined, (b) a direct
+  partial novelty threat: temporal video + frozen encoder latent + RGB
+  decode, though game-domain (Rocket League), DINOv3 not geometry-aware,
+  and single-scene. Must cite.
+- **RAEv2** (arXiv:2605.18324, Adobe/NYU, 2026-05): summing the **last k
+  encoder layers** (not just final layer) greatly improves RAE
+  reconstruction with a frozen encoder; 10x faster convergence. Cheap to
+  try in our tokenizer: we already fuse levels [4,11,17,23]; test a
+  last-k-sum variant (e.g. sum of last 6-8 aggregator levels) before adding
+  capacity. Also: REPA is complementary to RAE (usable later for the
+  generator).
+- **DecQ** (arXiv:2605.22777) and **LV-RAE** (arXiv:2602.08620): 2026 RAE
+  follow-ups closing the pixel-fidelity gap via a lightweight low-level
+  pathway reading INTERMEDIATE VFM features (learned queries / shallow
+  encoder for "local variations"). Same design family as our z_tex; cite as
+  concurrent image-domain precedent. RAE-AR (arXiv:2604.01545) confirms
+  RAE latents match VAE rFID but lag on PSNR/SSIM — our ~20 PSNR plateau is
+  the expected frozen-feature result, not a bug.
+- **SVG detail branch specifics** (arXiv:2510.15301 + SVG-T2I
+  arXiv:2512.11749, open-sourced incl. autoencoder): residual encoder output
+  is **normalized to match the batch mean/std of the frozen DINOv3 features
+  before channel-concat** — that distribution alignment is their mechanism
+  for keeping the detail stream from disturbing semantic structure. Adopt
+  for z_tex (align z_tex stats to z_geo stats instead of/in addition to the
+  N(0,1) tex_reg). SVG-T2I also found the residual encoder becomes
+  unnecessary at higher input resolution — the frozen features already
+  carry detail; relevant to whether 518px VGGT features are being
+  under-exploited by our 37->18 compression.
+
+Latent diffusability (before rebuilding the cache):
+
+- **SSVAE / latent spectral biasing** (arXiv:2512.05394, code
+  zai-org/SSVAE): two properties predict video-latent diffusability —
+  low-frequency-biased spatio-temporal spectrum and a channel eigenspectrum
+  dominated by few modes; two cheap regularizers (local correlation +
+  latent masked reconstruction) give 3x faster T2V convergence. Directly
+  applicable to tokenizer training; also gives us MEASUREMENTS to run on
+  our current latent (spectrum + eigenspectrum) to quantify "diffusability"
+  before/after fixes.
+- **Diffusing in the Right Space** (arXiv:2606.03578) and
+  **Prior-Aligned Autoencoders** (arXiv:2605.07915): systematic studies of
+  what makes latents diffusion-friendly; use as citation cover for the
+  latent-normalization contract and for choosing regularization.
+- Under-dispersion note: MIRA/DINO-world both diffuse in frozen-feature
+  space successfully with x0/clean-target-style objectives; combined with
+  VGGT-World's velocity collapse in 1024-dim VGGT space, the evidence now
+  strongly favors **switching our Wan/DiT objective to x0(z)-prediction**
+  when diffusion resumes, keeping flow-matching sampling.
+
+Video decoder artifacts (E3 context):
+
+- Production video VAEs (**Wan, HunyuanVideo, CogVideoX**) all use
+  **interpolate/resize + stride-1 conv** upsampling, NOT PixelShuffle;
+  LTX-Video uses PixelShuffle and has documented grid-artifact issues
+  (Lightricks/LTX-2#202) plus a finetune released specifically to reduce
+  checkerboard. If E3 confirms PixelShuffle as a grid source, switching to
+  resize-conv matches industry practice; ICNR init or fixed post-blur
+  (VFM-VAE style) are the fallback if PixelShuffle must stay for speed.
+- **FeatUp** (ICLR 2024) + successors (LoftUp, UPLiFT, ViT-Up
+  arXiv:2606.14024): learned ViT-feature upsampling to break the 14px
+  patch grid; candidate fix if E3 shows patch-boundary artifacts survive
+  the resize-conv switch.
+
+Metrics/eval (for the paper):
+
+- **GeCo** (arXiv:2512.22274): differentiable geometric-consistency metric
+  (flow rigidity + depth-reprojection cues); newest standard alongside
+  RPE/RVE, MEt3R, Sampson error (GeoFlow arXiv:2605.18365 reports
+  MEt3R+Sampson splits; GeoVideo arXiv:2512.03453 reports MVCS+RPE on
+  DL3DV). Plan: report RPE/RVE + Sampson + GeCo.
+- **minWM** (arXiv:2605.30263) negative result: Wan2.1 trained on
+  SpatialVID did not reach reliable camera-controllable generation —
+  suspected MegaSaM pose noise. Not our task (we don't do explicit camera
+  control), but cite when justifying SpatialVID and expect reviewers to ask.
+- SpatialVID is now CVPR 2026 (cite the CVPR version).
+
+Closest existing work (novelty threats):
+
+- **GLD — "Repurposing Geometric Foundation Models for Multi-view Diffusion"**
+  (arXiv:2603.22275): geometric-foundation-model feature space as the
+  diffusion latent for **multi-view NVS** (static scenes). Decoder trained
+  with L1+LPIPS+GAN (adaptive weight, Taming-Transformers style); reports
+  35.41 dB PSNR reconstruction (vs SD-VAE 34.53) and >4.4x training speedup
+  vs VAE latent. Our differentiation is exactly the one already stated in
+  AGENTS.md: video = temporal motion + disocclusion, not viewpoint change.
+  This is now the single most important paper to cite and compare against.
+- **Gen3R** (arXiv:2601.04090): recasts VGGT as an asymmetric geometry VAE;
+  adapter aligns VGGT tokens with a **pretrained video diffusion (Wan /
+  CogVideoX) appearance latent**; jointly generates RGB + geometry. Key
+  reported lesson: naively compressing VGGT tokens is insufficient — their
+  distribution differs strongly from appearance latents; alignment is
+  required. Very close in spirit to our Wan adapter path.
+- **VGGT-World** (arXiv:2603.12655): frozen VGGT tokens as autoregressive
+  world state (geometry forecasting only, no RGB decode). Directly relevant
+  technical caveat: **velocity-prediction flow matching collapsed in the
+  1024-dim VGGT feature space**; they needed clean-target (z/x0-prediction)
+  parameterization + flow-forcing curriculum. Our velocity-prediction
+  under-dispersion symptom may be the same phenomenon.
+- **Geometry Forcing** (arXiv:2507.07982, ICLR 2026): keeps VAE latent, adds
+  angular+scale alignment of diffusion internals to VGGT features. FVD
+  364->243 on RE10K. This is the strong REPA-style baseline our "replace the
+  representation" thesis must beat or complement. Their RPE / RVE metrics
+  are the community standard we should adopt for geometric consistency.
+
+Representation-space diffusion (image domain, establishes feasibility):
+
+- **RAE** (arXiv:2510.11690, ICLR 2026): frozen DINOv2/SigLIP + ViT decoder
+  trained with LPIPS+L1+**GAN**; rFID beats SD-VAE; DiT in that latent hits
+  FID 1.13-1.51 on ImageNet. Frozen encoders are viable latent spaces when
+  the decoder is trained generatively.
+- **SVG** (arXiv:2510.15301, Kling): frozen DINOv3 + **lightweight residual
+  branch for fine detail** — architecturally the closest published analogue
+  of our dual-stream (z_geo + z_tex) design; cite as precedent that a
+  semantic stream + detail stream factorization works for diffusion.
+- **l-DeTok** (arXiv:2507.15856) / **DiTo** (arXiv:2501.18593): latent
+  denoising / diffusion-decoder tokenizers; relevant if we later make the
+  decoder generative.
+
+Factorized video latents (precedent for dual-stream in video): CMD
+(arXiv:2403.14148, content frame + motion latent), VidTwin (arXiv:2412.17726,
+structure/dynamics), Video-LaVIT, CoordTok. None uses a geometry foundation
+model — that remains our gap.
+
+Geometric-consistency evaluation (for the paper's metrics section):
+RPE/RVE (Geometry Forcing), DROID-SLAM-based RPE (WorldMark, MultiWorld),
+DA3-based epipolar+reprojection with non-adjacent revisit pairs (MBench,
+arXiv:2606.00793; WBench, arXiv:2605.25874). Plan: re-encode generated
+videos with frozen VGGT/DA3 and report reprojection error + revisit error.
+
+Positioning summary: nobody has yet shipped "geometry-foundation-model
+latent space **replacing the VAE** for **temporal video** diffusion with
+RGB decode" — GLD covers multi-view static, Gen3R keeps the Wan appearance
+latent and aligns to it, VGGT-World forecasts geometry without RGB. The
+lane is open but narrow and moving fast (GLD is 2026-03, Gen3R 2026-01).
+2026-07 update: **MIRA** (2607.05352) now does temporal video diffusion in
+a frozen-encoder latent WITH RGB decode — but with DINOv3 (semantic, not
+geometry-aware), on a single game domain, with no geometry outputs or
+geometric-consistency claims. Our lane narrows to "**geometry** foundation
+model latent for **real-world** video with geometric-consistency
+evaluation"; the geometry axis is now the load-bearing differentiator and
+the RPE/RVE/GeCo numbers must beat semantic-encoder baselines (a
+DINOv3-latent ablation arm becomes near-mandatory for the paper).
 
 ## Context Update Protocol
 

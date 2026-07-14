@@ -36,6 +36,7 @@ OUTPUT_DIR="${VGGAE_H200_RUN_ROOT}/probes/${PROBE_NAME}"
 RESUME="${RESUME:-}"
 
 EPOCHS="${EPOCHS:-40}"
+EVAL_CLIPS="${EVAL_CLIPS:-32}"
 BATCH_SIZE="${BATCH_SIZE:-2}"
 ACCUM_STEPS="${ACCUM_STEPS:-4}"
 LEARNING_RATE="${LEARNING_RATE:-1e-4}"
@@ -79,5 +80,6 @@ h200_torchrun "${VGGAE_PROJECT}/probe_e4_dpt_recon.py" \
   --num_workers 8 --dtype bf16 \
   --output_dir "${OUTPUT_DIR}" \
   --eval_every 2 --save_every 5 --log_every 50 \
+  --eval_clips "${EVAL_CLIPS}" \
   "${EXTRA_ARGS[@]}" \
   2>&1 | tee -a "${OUTPUT_DIR}/logs/train.log"

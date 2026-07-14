@@ -4,35 +4,54 @@
 # Tests whether an explicit per-frame appearance latent can break the ~20 PSNR
 # VGGT-only ceiling from E1/E4. Decoder sees (z_geo, z_tex) only — no RGB skip.
 #
-#   TEX_MODE=oracle (default): TextureEncoder(RGB) -> z_tex  (reconstruction ceiling)
-#   TEX_MODE=zero:             z_tex = 0                   (geo-only ablation)
+#   TEX_MODE=oracle (default): TextureEncoder(RGB) -> z_tex (recon ceiling)
+#   TEX_MODE=zero:             z_tex = 0            (geo-only ablation)
+#   TEX_MODE=tex_only:         z_geo = 0            (proves geo load-bearing)
 #
-# Run:
+# Ablation knobs (2026-07 survey; see PROJECT_CONTEXT.md):
+#   TEX_PACK=s2d          space-to-depth packing instead of avg-pool
+#   TEX_REG_MODE=match_geo SVG-style stat alignment to z_geo instead of N(0,1)
+#   FEAT_WEIGHT=0.5       VGGT feature-consistency loss (MIRA P-DINO analogue)
+#
+# Run matrix (see scripts/h200/README.md):
 #   bash scripts/h200/probe_e5_texture_recon.sh
 #   TEX_MODE=zero bash scripts/h200/probe_e5_texture_recon.sh
+#   TEX_PACK=s2d TEX_REG_MODE=match_geo bash scripts/h200/probe_e5_texture_recon.sh
+#   TEX_MODE=tex_only TEX_PACK=s2d bash scripts/h200/probe_e5_texture_recon.sh
 set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# Capture a user-provided port BEFORE h200_env.sh fills in its own default,
+# otherwise the E5-specific default below can never take effect.
+USER_MASTER_PORT="${VGGAE_MASTER_PORT:-}"
 source "${SCRIPT_DIR}/h200_env.sh"
 ensure_h200_splits
 
 # E5 uses all 4 H200 cards.
 export VGGAE_NUM_GPUS=4
 export VGGAE_GPU_IDS=0,1,2,3
-# Avoid colliding with a leftover E4 master port.
-export VGGAE_MASTER_PORT="${VGGAE_MASTER_PORT:-29550}"
+# Avoid colliding with a leftover E4 master port (h200_env default 29540).
+export VGGAE_MASTER_PORT="${USER_MASTER_PORT:-29550}"
 
 # ----------------------------- editable settings -----------------------------
 TEX_MODE="${TEX_MODE:-oracle}"
-if [[ "${TEX_MODE}" == "zero" ]]; then
-  PROBE_NAME="e5_dual_stream_zero"
-else
-  PROBE_NAME="e5_dual_stream_oracle"
+TEX_PACK="${TEX_PACK:-avgpool}"       # avgpool | s2d
+TEX_REG_MODE="${TEX_REG_MODE:-n01}"   # n01 | match_geo
+FEAT_WEIGHT="${FEAT_WEIGHT:-0}"       # >0 enables VGGT feature-consistency loss
+FEAT_FRAMES="${FEAT_FRAMES:-2}"
+
+PROBE_NAME="e5_${TEX_MODE}_${TEX_PACK}"
+if [[ "${TEX_REG_MODE}" != "n01" ]]; then
+  PROBE_NAME="${PROBE_NAME}_${TEX_REG_MODE}"
+fi
+if [[ "${FEAT_WEIGHT}" != "0" ]]; then
+  PROBE_NAME="${PROBE_NAME}_feat${FEAT_WEIGHT}"
 fi
 OUTPUT_DIR="${VGGAE_H200_RUN_ROOT}/probes/${PROBE_NAME}"
 RESUME="${RESUME:-}"
 
 EPOCHS="${EPOCHS:-40}"
+EVAL_CLIPS="${EVAL_CLIPS:-32}"
 BATCH_SIZE="${BATCH_SIZE:-2}"
 ACCUM_STEPS="${ACCUM_STEPS:-4}"
 LEARNING_RATE="${LEARNING_RATE:-1e-4}"
@@ -42,6 +61,7 @@ TEX_BASE_CH="${TEX_BASE_CH:-64}"
 LATENT_GRID="${LATENT_GRID:-18}"
 DECODER_BASE_DIM="${DECODER_BASE_DIM:-384}"
 LPIPS_WEIGHT="${LPIPS_WEIGHT:-0.1}"
+TEX_REG_WEIGHT="${TEX_REG_WEIGHT:-0.01}"
 USE_CHECKPOINT="${USE_CHECKPOINT:-1}"
 FRAMES_CHUNK_SIZE="${FRAMES_CHUNK_SIZE:-4}"
 # ----------------------------------------------------------------------------
@@ -54,10 +74,13 @@ elif [[ -s "${OUTPUT_DIR}/checkpoint_latest.pt" ]]; then
 fi
 
 mkdir -p "${OUTPUT_DIR}/logs"
-echo "[E5] tex_mode=${TEX_MODE} -> ${OUTPUT_DIR} (${VGGAE_NUM_GPUS} GPUs)"
+echo "[E5] tex_mode=${TEX_MODE} pack=${TEX_PACK} reg=${TEX_REG_MODE}" \
+     "feat=${FEAT_WEIGHT} -> ${OUTPUT_DIR} (${VGGAE_NUM_GPUS} GPUs)"
 
 h200_torchrun "${VGGAE_PROJECT}/probe_e5_texture_recon.py" \
   --tex_mode "${TEX_MODE}" \
+  --tex_pack "${TEX_PACK}" \
+  --tex_reg_mode "${TEX_REG_MODE}" \
   --probe_name "${PROBE_NAME}" \
   --csv "${VGGAE_TRAIN_10K_CSV}" \
   --video_root "${VGGAE_VIDEO_ROOT}" \
@@ -70,7 +93,9 @@ h200_torchrun "${VGGAE_PROJECT}/probe_e5_texture_recon.py" \
   --tex_base_ch "${TEX_BASE_CH}" \
   --latent_grid "${LATENT_GRID}" \
   --decoder_base_dim "${DECODER_BASE_DIM}" \
-  --lambda_l1 1.0 --lambda_lpips "${LPIPS_WEIGHT}" --lambda_tex_reg 0.01 \
+  --lambda_l1 1.0 --lambda_lpips "${LPIPS_WEIGHT}" \
+  --lambda_feat "${FEAT_WEIGHT}" --feat_frames "${FEAT_FRAMES}" \
+  --lambda_tex_reg "${TEX_REG_WEIGHT}" \
   --batch_size "${BATCH_SIZE}" --accum_steps "${ACCUM_STEPS}" \
   --epochs "${EPOCHS}" --lr "${LEARNING_RATE}" --wd 1e-2 \
   --warmup_steps 200 --ema_decay 0.999 \
@@ -80,5 +105,6 @@ h200_torchrun "${VGGAE_PROJECT}/probe_e5_texture_recon.py" \
   --num_workers 8 --dtype bf16 \
   --output_dir "${OUTPUT_DIR}" \
   --eval_every 2 --save_every 5 --log_every 50 \
+  --eval_clips "${EVAL_CLIPS}" \
   "${EXTRA_ARGS[@]}" \
   2>&1 | tee -a "${OUTPUT_DIR}/logs/train.log"

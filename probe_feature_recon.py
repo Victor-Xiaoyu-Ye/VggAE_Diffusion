@@ -74,6 +74,7 @@ from utils.training import (
     restore_rng_state,
 )
 from utils.distributed import setup_ddp, is_main_process
+from utils.encoder_loader import load_encoder_checkpoint
 from utils.device import (
     configure_backend_compatibility,
     create_grad_scaler,
@@ -294,8 +295,11 @@ class _TemporalAttn(nn.Module):
         BS, C, H, W = x.shape
         x_t = x.reshape(B, S, C, H * W).permute(0, 3, 1, 2).contiguous().reshape(
             B * H * W, S, C)
-        x_t = self.norm(x_t)
-        x_t, _ = self.attn(x_t, x_t, x_t)
+        # Pre-norm residual: without the residual, attention output REPLACES
+        # the decoder features and caps reconstruction quality.
+        normed = self.norm(x_t)
+        attn_out, _ = self.attn(normed, normed, normed)
+        x_t = x_t + attn_out
         x = x_t.reshape(B, H * W, S, C).permute(0, 2, 3, 1).contiguous().reshape(
             B * S, C, H, W)
         return x
@@ -368,6 +372,41 @@ class PerLevelProjector(nn.Module):
             z = z.reshape(B, S, self.latent_dim, self.latent_grid, self.latent_grid)
             z = z.permute(0, 1, 3, 4, 2).contiguous()
         return z
+
+
+# ---------------------------------------------------------------------------
+# Trainable core (projector + decoder) — DDP wraps THIS module
+# ---------------------------------------------------------------------------
+
+class ProbeCore(nn.Module):
+    """Full trainable forward (projector -> decoder) in one module.
+
+    DDP must wrap this module and every training forward must go through the
+    DDP wrapper. Calling projector/decoder separately with one of them
+    unwrapped (``.module``) silently skips the gradient all-reduce for it and
+    multi-GPU training degrades to independent single-GPU runs.
+    """
+
+    def __init__(self, projector, decoder, mode):
+        super().__init__()
+        self.projector = projector
+        self.decoder = decoder
+        self.mode = mode
+
+    def forward(self, tokens_list, noise_std=0.0, frames_chunk_size=None):
+        """Returns (preds [B,S,H,W,C], z_flat)."""
+        if self.mode == 'compressed':
+            z_g, z_flat = self.projector(tokens_list)
+            if noise_std > 0 and self.training:
+                z_g = z_g + torch.randn_like(z_g) * noise_std
+            preds, _ = self.decoder(z_g, frames_chunk_size=frames_chunk_size)
+            return preds, z_flat
+        feat = self.projector(tokens_list)
+        if noise_std > 0 and self.training:
+            feat = feat + torch.randn_like(feat) * noise_std
+        preds = self.decoder(feat, frames_chunk_size=frames_chunk_size)
+        z_flat = feat.reshape(feat.shape[0], feat.shape[1], -1, feat.shape[-1])
+        return preds, z_flat
 
 
 # ---------------------------------------------------------------------------
@@ -492,6 +531,9 @@ def parse_args():
     p.add_argument('--resume', type=str, default='')
     p.add_argument('--log_every', type=int, default=50)
     p.add_argument('--eval_every', type=int, default=2)
+    p.add_argument('--eval_clips', type=int, default=32,
+                   help='Number of eval clips; metrics are means over these. '
+                        'Single-clip PSNR varies more than the decision gates.')
     p.add_argument('--save_every', type=int, default=5)
     p.add_argument('--seed', type=int, default=42)
     p.add_argument('--local_rank', type=int, default=0)
@@ -503,45 +545,57 @@ def parse_args():
 # ---------------------------------------------------------------------------
 
 @torch.no_grad()
-def eval_recon(encoder, projector, decoder, eval_frames, device, out_dir,
-               epoch, compute_dtype, device_type, mode, frames_chunk_size=None):
+def eval_recon(encoder, core, eval_loader, device, out_dir,
+               epoch, compute_dtype, device_type, frames_chunk_size=None):
+    """Evaluate over the whole eval loader; metrics are per-clip means.
+
+    Single-clip PSNR varies by several dB — more than the 2-5 dB gaps the
+    probe decision rules (>=28 / <=23 / >=25) discriminate.
+    """
     import numpy as np
     from PIL import Image as PImage
     os.makedirs(out_dir, exist_ok=True)
-    projector.eval(); decoder.eval()
-    frames = eval_frames.to(device=device, dtype=compute_dtype)
-    ctx = autocast(device_type=device_type, dtype=compute_dtype) \
-        if compute_dtype != torch.float32 else _nullcontext()
-    with ctx:
-        tokens_list, psi = encoder(frames)
-        tokens_list = strip_special_tokens(tokens_list, psi)
-        if mode == 'compressed':
-            z_g, _ = projector(tokens_list)
-            recon, _ = decoder(z_g, frames_chunk_size=frames_chunk_size)
-        else:
-            feat = projector(tokens_list)
-            recon = decoder(feat, frames_chunk_size=frames_chunk_size)
-    recon = recon.clamp(0, 1)
-    orig = frames.permute(0, 1, 3, 4, 2).clamp(0, 1)
-    S = recon.shape[1]
-    rows = [torch.cat([orig[0, s], recon[0, s]], dim=1) for s in range(S)]
-    grid = torch.cat(rows, dim=0)
-    PImage.fromarray((grid.float().cpu().numpy() * 255).astype(np.uint8)).save(
-        os.path.join(out_dir, f'epoch{epoch:04d}_grid.png'))
-
-    mse = F.mse_loss(recon, orig).item()
-    psnr = -10 * np.log10(mse) if mse > 0 else float('inf')
-    l1 = F.l1_loss(recon, orig).item()
-    metrics = {'psnr': psnr, 'l1': l1, 'mse': mse}
-    try:
-        lpips_fn = get_lpips(device)
-        rn = recon.permute(0, 1, 4, 2, 3).reshape(-1, 3, recon.shape[2], recon.shape[3])
-        on = orig.permute(0, 1, 4, 2, 3).reshape(-1, 3, orig.shape[2], orig.shape[3])
-        metrics['lpips'] = lpips_fn(rn * 2 - 1, on * 2 - 1).mean().item()
-    except Exception as exc:
-        metrics['lpips'] = float('nan')
-    projector.train(); decoder.train()
-    return metrics
+    was_training = core.training
+    core.eval()
+    psnrs, l1s, mses, lpips_vals = [], [], [], []
+    grid_saved = False
+    for batch in eval_loader:
+        frames = batch['frames'].to(device=device, dtype=compute_dtype)
+        ctx = autocast(device_type=device_type, dtype=compute_dtype) \
+            if compute_dtype != torch.float32 else _nullcontext()
+        with ctx:
+            tokens_list, psi = encoder(frames)
+            tokens_list = strip_special_tokens(tokens_list, psi)
+            recon, _ = core(tokens_list, frames_chunk_size=frames_chunk_size)
+        recon = recon[..., :3].clamp(0, 1)
+        orig = frames.permute(0, 1, 3, 4, 2).clamp(0, 1)
+        if not grid_saved:
+            S = recon.shape[1]
+            rows = [torch.cat([orig[0, s], recon[0, s]], dim=1) for s in range(S)]
+            grid = torch.cat(rows, dim=0)
+            PImage.fromarray((grid.float().cpu().numpy() * 255).astype(np.uint8)).save(
+                os.path.join(out_dir, f'epoch{epoch:04d}_grid.png'))
+            grid_saved = True
+        mse = F.mse_loss(recon.float(), orig.float()).item()
+        mses.append(mse)
+        psnrs.append(-10 * np.log10(max(mse, 1e-10)))
+        l1s.append(F.l1_loss(recon.float(), orig.float()).item())
+        try:
+            lpips_fn = get_lpips(device)
+            rn = recon.float().permute(0, 1, 4, 2, 3).reshape(-1, 3, recon.shape[2], recon.shape[3])
+            on = orig.float().permute(0, 1, 4, 2, 3).reshape(-1, 3, orig.shape[2], orig.shape[3])
+            lpips_vals.append(lpips_fn(rn * 2 - 1, on * 2 - 1).mean().item())
+        except Exception:
+            pass
+    core.train(was_training)
+    return {
+        'psnr': float(np.mean(psnrs)),
+        'psnr_std': float(np.std(psnrs)),
+        'l1': float(np.mean(l1s)),
+        'mse': float(np.mean(mses)),
+        'lpips': float(np.mean(lpips_vals)) if lpips_vals else float('nan'),
+        'eval_clips': len(psnrs),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -570,8 +624,7 @@ def main():
 
     # ---- Encoder ----
     encoder = StreamVGGT(img_size=args.target_size, patch_size=14, embed_dim=1024)
-    state = torch.load(args.encoder_ckpt, map_location='cpu')
-    encoder.load_state_dict(state, strict=False)
+    load_encoder_checkpoint(encoder, args.encoder_ckpt, verbose=main_process)
     encoder = encoder.to(device=device, dtype=dtype).eval()
     for p in encoder.parameters():
         p.requires_grad_(False)
@@ -635,22 +688,17 @@ def main():
         print(f'  Decoder:   {sum(p.numel() for p in decoder.parameters()) / 1e6:.1f}M')
         print(f'  Total:     {total_p / 1e6:.1f}M')
 
-    ema = EMA(
-        nn.ModuleList([projector, decoder]),
-        decay=args.ema_decay, dtype=torch.float32).to(device)
+    core = ProbeCore(projector, decoder, args.mode).to(device=device)
+    ema = EMA(core, decay=args.ema_decay, dtype=torch.float32).to(device)
 
-    # DDP
+    # DDP: wrap the single core module; all train forwards go through `model`.
     if use_ddp:
-        projector = nn.parallel.DistributedDataParallel(
-            projector, device_ids=[local_rank], output_device=local_rank)
-        decoder = nn.parallel.DistributedDataParallel(
-            decoder, device_ids=[local_rank], output_device=local_rank)
+        model = nn.parallel.DistributedDataParallel(
+            core, device_ids=[local_rank], output_device=local_rank)
+    else:
+        model = core
 
-    optimizer = build_optimizer(
-        nn.ModuleList([
-            projector.module if use_ddp else projector,
-            decoder.module if use_ddp else decoder]),
-        lr=args.lr, wd=args.wd)
+    optimizer = build_optimizer(core, lr=args.lr, wd=args.wd)
 
     # ---- Dataset ----
     dataset = SpatialVidDataset(
@@ -676,36 +724,47 @@ def main():
     scheduler = build_scheduler(
         optimizer, warmup_steps=warmup, total_steps=max(total_steps, 1))
 
-    # Eval batch
-    eval_frames = None
+    # Eval loader (multi-clip; metrics are per-clip means)
     if args.eval_csv:
         eval_dataset = SpatialVidDataset(
             csv_path=args.eval_csv,
             video_root=args.eval_video_root or args.video_root,
             seq_len=args.seq_len, target_size=args.target_size,
-            max_videos=4, num_frames_per_video=args.num_frames_per_video,
+            max_videos=args.eval_clips,
+            num_frames_per_video=args.num_frames_per_video,
             max_frame_span=args.max_frame_span,
             clip_duration_seconds=args.clip_duration_seconds,
-            decode_retries=args.decode_retries)
+            decode_retries=args.decode_retries,
+            temporal_jitter=False)
         eval_loader = DataLoader(
             eval_dataset, batch_size=1, shuffle=False, num_workers=0,
             collate_fn=collate_fn)
-        eval_frames = next(iter(eval_loader))['frames'].clone()
     else:
-        # Fallback: grab one batch from train as eval visual.
+        # Fallback: evaluate on the first clips of the train set.
+        eval_subset = torch.utils.data.Subset(
+            dataset, list(range(min(args.eval_clips, len(dataset)))))
         eval_loader = DataLoader(
-            dataset, batch_size=1, shuffle=False, num_workers=0,
+            eval_subset, batch_size=1, shuffle=False, num_workers=0,
             collate_fn=collate_fn)
-        eval_frames = next(iter(eval_loader))['frames'].clone()
 
     # Resume
     global_step = 0
     start_epoch = 0
     if args.resume and os.path.exists(args.resume):
         ckpt = torch.load(args.resume, map_location='cpu', weights_only=False)
-        (projector.module if use_ddp else projector).load_state_dict(ckpt['projector'])
-        (decoder.module if use_ddp else decoder).load_state_dict(ckpt['decoder'])
-        ema.load_state_dict(ckpt['ema']); ema = ema.to(device)
+        core.projector.load_state_dict(ckpt['projector'])
+        core.decoder.load_state_dict(ckpt['decoder'])
+        # Pre-refactor checkpoints stored EMA under ModuleList keys
+        # ('0.xxx'/'1.xxx'); loading them would silently freeze the EMA
+        # (EMA.update only touches keys already in the shadow).
+        if any(k in ckpt['ema'] for k in core.state_dict()):
+            ema.load_state_dict(ckpt['ema']); ema = ema.to(device)
+        else:
+            if main_process:
+                print('[WARN] checkpoint EMA keys do not match the current '
+                      'core layout (pre-refactor checkpoint?); '
+                      'reinitializing EMA from resumed weights.')
+            ema = EMA(core, decay=args.ema_decay, dtype=torch.float32).to(device)
         optimizer.load_state_dict(ckpt['optimizer'])
         scheduler.load_state_dict(ckpt['scheduler'])
         global_step = ckpt.get('global_step', 0)
@@ -722,18 +781,13 @@ def main():
         writer = None
     metrics_path = os.path.join(args.output_dir, 'metrics.jsonl')
 
-    params = list(
-        (projector.module if use_ddp else projector).parameters()) + \
-        list((decoder.module if use_ddp else decoder).parameters())
+    params = list(core.parameters())
 
     if main_process:
         print(f'\nTraining: {args.epochs} epochs, {steps_per_epoch} steps/epoch')
 
-    proj_mod = projector.module if use_ddp else projector
-    dec_mod = decoder.module if use_ddp else decoder
-
     for epoch in range(start_epoch, args.epochs):
-        projector.train(); decoder.train()
+        model.train()
         if use_ddp:
             sampler.set_epoch(epoch)
         optimizer.zero_grad()
@@ -755,21 +809,9 @@ def main():
                 ctx = _nullcontext()
             chunk = args.frames_chunk_size if args.frames_chunk_size > 0 else None
             with ctx:
-                if args.mode == 'compressed':
-                    z_g, z_flat = projector(tokens_list)
-                    noise_std = args.latent_noise_std
-                    if noise_std > 0 and projector.training:
-                        z_g_in = z_g + torch.randn_like(z_g) * noise_std
-                    else:
-                        z_g_in = z_g
-                    preds, _ = dec_mod(z_g_in, frames_chunk_size=chunk)
-                else:
-                    feat = projector(tokens_list)
-                    noise_std = args.latent_noise_std
-                    if noise_std > 0 and projector.training:
-                        feat = feat + torch.randn_like(feat) * noise_std
-                    preds = dec_mod(feat, frames_chunk_size=chunk)
-                    z_flat = feat.reshape(feat.shape[0], feat.shape[1], -1, feat.shape[-1])
+                preds, z_flat = model(
+                    tokens_list, noise_std=args.latent_noise_std,
+                    frames_chunk_size=chunk)
 
             pred_rgb = preds[..., :3].permute(0, 1, 4, 2, 3).contiguous().float()
             target_rgb = frames.float().clamp(0, 1)
@@ -816,7 +858,7 @@ def main():
                         params, args.max_grad_norm)
                     optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
-                ema.update(nn.ModuleList([proj_mod, dec_mod]))
+                ema.update(core)
                 scheduler.step()
                 global_step += 1
                 throughput_meter.update(count_latent_tokens(z_flat))
@@ -848,9 +890,9 @@ def main():
 
         if main_process and (epoch + 1) % args.eval_every == 0:
             metrics = eval_recon(
-                encoder, proj_mod, dec_mod, eval_frames, device,
+                encoder, core, eval_loader, device,
                 os.path.join(args.output_dir, 'samples'), epoch,
-                dtype, device_type, args.mode,
+                dtype, device_type,
                 frames_chunk_size=(args.frames_chunk_size
                                    if args.frames_chunk_size > 0 else None))
             metrics.update({
@@ -863,13 +905,14 @@ def main():
                     if writer:
                         writer.add_scalar(f'eval/{k}', v, global_step)
             print(f'  [eval] epoch {epoch}: '
-                  f'psnr={metrics["psnr"]:.2f} l1={metrics["l1"]:.4f} '
+                  f'psnr={metrics["psnr"]:.2f}±{metrics["psnr_std"]:.2f} '
+                  f'({metrics["eval_clips"]} clips) l1={metrics["l1"]:.4f} '
                   f'lpips={metrics.get("lpips", float("nan")):.4f}')
 
         if main_process and (epoch + 1) % args.save_every == 0:
             payload = {
-                'projector': proj_mod.state_dict(),
-                'decoder': dec_mod.state_dict(),
+                'projector': core.projector.state_dict(),
+                'decoder': core.decoder.state_dict(),
                 'ema': ema.state_dict(),
                 'optimizer': optimizer.state_dict(),
                 'scheduler': scheduler.state_dict(),

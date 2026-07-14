@@ -1,4 +1,4 @@
-#!/bin bash
+#!/bin/bash
 # E3: Grid artifact isolation.
 #
 # Same compressed pipeline (GenerativeTokenizer + CompactDecoder), three
@@ -26,6 +26,7 @@ ensure_h200_splits
 
 # ----------------------------- editable settings -----------------------------
 EPOCHS="${EPOCHS:-30}"
+EVAL_CLIPS="${EVAL_CLIPS:-32}"
 BATCH_SIZE="${BATCH_SIZE:-2}"
 ACCUM_STEPS="${ACCUM_STEPS:-8}"
 LEARNING_RATE="${LEARNING_RATE:-1e-4}"
@@ -39,9 +40,9 @@ run_variant() {
   local use_ps="$2"    # 1 | 0
   local PROBE_NAME="e3_${variant}"
   local OUTPUT_DIR="${VGGAE_H200_RUN_ROOT}/probes/${PROBE_NAME}"
-  local RESUME=""
+  local RESUME_ARGS=()
   if [[ -s "${OUTPUT_DIR}/checkpoint_latest.pt" ]]; then
-    RESUME="--resume ${OUTPUT_DIR}/checkpoint_latest.pt"
+    RESUME_ARGS+=(--resume "${OUTPUT_DIR}/checkpoint_latest.pt")
   fi
   mkdir -p "${OUTPUT_DIR}/logs"
   echo "[E3] variant=${variant} use_pixel_shuffle=${use_ps} -> ${OUTPUT_DIR}"
@@ -71,7 +72,8 @@ run_variant() {
     --num_workers 8 --dtype bf16 \
     --output_dir "${OUTPUT_DIR}" \
     --eval_every 2 --save_every 5 --log_every 50 \
-    ${RESUME} \
+    --eval_clips "${EVAL_CLIPS}" \
+    "${RESUME_ARGS[@]}" \
     2>&1 | tee -a "${OUTPUT_DIR}/logs/train.log"
 }
 

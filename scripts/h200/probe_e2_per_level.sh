@@ -18,6 +18,7 @@ ensure_h200_splits
 # ----------------------------- editable settings -----------------------------
 LEVELS_TO_PROBE="${LEVELS_TO_PROBE:-4 11 17 23}"
 EPOCHS="${EPOCHS:-30}"
+EVAL_CLIPS="${EVAL_CLIPS:-32}"
 BATCH_SIZE="${BATCH_SIZE:-2}"
 ACCUM_STEPS="${ACCUM_STEPS:-8}"
 LEARNING_RATE="${LEARNING_RATE:-1e-4}"
@@ -36,9 +37,9 @@ FRAMES_CHUNK_SIZE="${FRAMES_CHUNK_SIZE:-4}"
 for LVL in ${LEVELS_TO_PROBE}; do
   PROBE_NAME="e2_level${LVL}"
   OUTPUT_DIR="${VGGAE_H200_RUN_ROOT}/probes/${PROBE_NAME}"
-  RESUME=""
+  RESUME_ARGS=()
   if [[ -s "${OUTPUT_DIR}/checkpoint_latest.pt" ]]; then
-    RESUME="--resume ${OUTPUT_DIR}/checkpoint_latest.pt"
+    RESUME_ARGS+=(--resume "${OUTPUT_DIR}/checkpoint_latest.pt")
   fi
   mkdir -p "${OUTPUT_DIR}/logs"
   echo "[E2] level ${LVL} -> ${OUTPUT_DIR}"
@@ -71,7 +72,8 @@ for LVL in ${LEVELS_TO_PROBE}; do
     --num_workers 8 --dtype bf16 \
     --output_dir "${OUTPUT_DIR}" \
     --eval_every 2 --save_every 5 --log_every 50 \
-    ${RESUME} \
+    --eval_clips "${EVAL_CLIPS}" \
+    "${RESUME_ARGS[@]}" \
     2>&1 | tee -a "${OUTPUT_DIR}/logs/train.log"
 done
 

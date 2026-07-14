@@ -56,6 +56,7 @@ from utils.training import (
     build_optimizer, build_scheduler, capture_rng_state, restore_rng_state,
 )
 from utils.distributed import setup_ddp, is_main_process
+from utils.encoder_loader import load_encoder_checkpoint
 from utils.device import (
     configure_backend_compatibility, create_grad_scaler, get_device,
     get_device_name, manual_seed_all, resolve_dtype,
@@ -130,6 +131,9 @@ def parse_args():
     p.add_argument('--resume', type=str, default='')
     p.add_argument('--log_every', type=int, default=50)
     p.add_argument('--eval_every', type=int, default=2)
+    p.add_argument('--eval_clips', type=int, default=32,
+                   help='Number of eval clips; metrics are means over these. '
+                        'Single-clip PSNR varies more than the decision gates.')
     p.add_argument('--save_every', type=int, default=5)
     p.add_argument('--seed', type=int, default=42)
     p.add_argument('--local_rank', type=int, default=0)
@@ -162,48 +166,80 @@ def _run_forward(bottleneck, encoder, compressor, decoder, dpt_head, frames,
         return pred_rgb, z_flat
 
 
+class ProbeCore(nn.Module):
+    """Single trainable module whose forward covers the whole trainable path.
+
+    DDP must wrap THIS module and every training forward must go through the
+    DDP wrapper; calling sub-modules via ``.module`` silently skips the
+    gradient all-reduce and multi-GPU training degrades to independent
+    single-GPU runs.
+    """
+
+    def __init__(self, bottleneck, compressor=None, decoder=None, dpt_head=None):
+        super().__init__()
+        self.bottleneck = bottleneck
+        self.compressor = compressor
+        self.decoder = decoder
+        self.dpt_head = dpt_head
+
+    def forward(self, encoder, frames, use_amp, device_type, dtype, chunk,
+                patch_start_idx_holder):
+        return _run_forward(
+            self.bottleneck, encoder, self.compressor, self.decoder,
+            self.dpt_head, frames, use_amp, device_type, dtype, chunk,
+            patch_start_idx_holder)
+
+
 @torch.no_grad()
-def eval_recon(bottleneck, encoder, compressor, decoder, dpt_head, eval_frames,
-               device, out_dir, epoch, dtype, device_type, chunk):
+def eval_recon(core, encoder, eval_loader, device, out_dir, epoch, dtype,
+               device_type, chunk):
+    """Evaluate over the whole eval loader; metrics are per-clip means.
+
+    Single-clip PSNR varies by several dB — more than the 2-5 dB gaps the
+    probe decision rules discriminate.
+    """
     from PIL import Image as PImage
     os.makedirs(out_dir, exist_ok=True)
-    if compressor is not None:
-        compressor.eval()
-    if decoder is not None:
-        decoder.eval()
-    if dpt_head is not None:
-        dpt_head.eval()
-    frames = eval_frames.to(device=device, dtype=dtype)
+    was_training = core.training
+    core.eval()
+    psnrs, l1s, mses, lpips_vals = [], [], [], []
+    grid_saved = False
     holder = [0]
-    pred_rgb, _ = _run_forward(
-        bottleneck, encoder, compressor, decoder, dpt_head, frames,
-        use_amp=(dtype != torch.float32), device_type=device_type, dtype=dtype,
-        chunk=chunk, patch_start_idx_holder=holder)
-    recon = pred_rgb.permute(0, 1, 3, 4, 2).clamp(0, 1)  # [B,S,H,W,3]
-    orig = frames.permute(0, 1, 3, 4, 2).float().clamp(0, 1)
-    S = recon.shape[1]
-    rows = [torch.cat([orig[0, s], recon[0, s]], dim=1) for s in range(S)]
-    grid = torch.cat(rows, dim=0)
-    PImage.fromarray((grid.float().cpu().numpy() * 255).astype(np.uint8)).save(
-        os.path.join(out_dir, f'epoch{epoch:04d}_grid.png'))
-    mse = F.mse_loss(recon, orig).item()
-    psnr = -10 * np.log10(mse) if mse > 0 else float('inf')
-    l1 = F.l1_loss(recon, orig).item()
-    metrics = {'psnr': psnr, 'l1': l1, 'mse': mse}
-    try:
-        lpips_fn = get_lpips(device)
-        rn = recon.permute(0, 1, 4, 2, 3).reshape(-1, 3, recon.shape[2], recon.shape[3])
-        on = orig.permute(0, 1, 4, 2, 3).reshape(-1, 3, orig.shape[2], orig.shape[3])
-        metrics['lpips'] = lpips_fn(rn * 2 - 1, on * 2 - 1).mean().item()
-    except Exception:
-        metrics['lpips'] = float('nan')
-    if compressor is not None:
-        compressor.train()
-    if decoder is not None:
-        decoder.train()
-    if dpt_head is not None:
-        dpt_head.train()
-    return metrics
+    for batch in eval_loader:
+        frames = batch['frames'].to(device=device, dtype=dtype)
+        pred_rgb, _ = core(
+            encoder, frames, use_amp=(dtype != torch.float32),
+            device_type=device_type, dtype=dtype, chunk=chunk,
+            patch_start_idx_holder=holder)
+        recon = pred_rgb.permute(0, 1, 3, 4, 2).clamp(0, 1)  # [B,S,H,W,3]
+        orig = frames.permute(0, 1, 3, 4, 2).float().clamp(0, 1)
+        if not grid_saved:
+            S = recon.shape[1]
+            rows = [torch.cat([orig[0, s], recon[0, s]], dim=1) for s in range(S)]
+            grid = torch.cat(rows, dim=0)
+            PImage.fromarray((grid.float().cpu().numpy() * 255).astype(np.uint8)).save(
+                os.path.join(out_dir, f'epoch{epoch:04d}_grid.png'))
+            grid_saved = True
+        mse = F.mse_loss(recon, orig).item()
+        mses.append(mse)
+        psnrs.append(-10 * np.log10(max(mse, 1e-10)))
+        l1s.append(F.l1_loss(recon, orig).item())
+        try:
+            lpips_fn = get_lpips(device)
+            rn = recon.permute(0, 1, 4, 2, 3).reshape(-1, 3, recon.shape[2], recon.shape[3])
+            on = orig.permute(0, 1, 4, 2, 3).reshape(-1, 3, orig.shape[2], orig.shape[3])
+            lpips_vals.append(lpips_fn(rn * 2 - 1, on * 2 - 1).mean().item())
+        except Exception:
+            pass
+    core.train(was_training)
+    return {
+        'psnr': float(np.mean(psnrs)),
+        'psnr_std': float(np.std(psnrs)),
+        'l1': float(np.mean(l1s)),
+        'mse': float(np.mean(mses)),
+        'lpips': float(np.mean(lpips_vals)) if lpips_vals else float('nan'),
+        'eval_clips': len(psnrs),
+    }
 
 
 def main():
@@ -227,10 +263,7 @@ def main():
 
     # ---- Frozen encoder ----
     encoder = StreamVGGT(img_size=args.target_size, patch_size=14, embed_dim=1024)
-    state = torch.load(args.encoder_ckpt, map_location='cpu')
-    if isinstance(state, dict) and 'model_state_dict' in state:
-        state = state['model_state_dict']
-    encoder.load_state_dict(state, strict=False)
+    load_encoder_checkpoint(encoder, args.encoder_ckpt, verbose=main_process)
     encoder = encoder.to(device=device, dtype=dtype).eval()
     for p in encoder.parameters():
         p.requires_grad_(False)
@@ -246,37 +279,32 @@ def main():
         dpt_head = DPTHead(
             dim_in=args.token_dim, patch_size=14, output_dim=4,
             activation='sigmoid', conf_activation='sigmoid',
-            features=args.dpt_features).to(device=device)
-        trainable = nn.ModuleList([dpt_head])
+            features=args.dpt_features)
     else:
         compressor = CompactCompressor(
             levels=args.levels, token_dim=args.token_dim, cdim=args.cdim,
-            latent_grid=args.latent_grid, input_grid=input_grid).to(device=device)
+            latent_grid=args.latent_grid, input_grid=input_grid)
         decoder = DPTLatentDecoder(
             cdim=args.cdim, latent_grid=args.latent_grid,
             features=args.dpt_features, img_size=args.target_size,
-            use_checkpoint=bool(args.use_checkpoint)).to(device=device)
-        trainable = nn.ModuleList([compressor, decoder])
+            use_checkpoint=bool(args.use_checkpoint))
+    core = ProbeCore(args.bottleneck, compressor=compressor,
+                     decoder=decoder, dpt_head=dpt_head).to(device=device)
 
-    n_params = sum(p.numel() for p in trainable.parameters())
+    n_params = sum(p.numel() for p in core.parameters())
     if main_process:
         print(f'  Trainable params: {n_params / 1e6:.1f}M')
 
-    ema = EMA(trainable, decay=args.ema_decay, dtype=torch.float32).to(device)
+    ema = EMA(core, decay=args.ema_decay, dtype=torch.float32).to(device)
 
     if use_ddp:
-        trainable_ddp = nn.parallel.DistributedDataParallel(
-            trainable, device_ids=[local_rank], output_device=local_rank,
+        # All train forwards go through `model` (the DDP wrapper); calling
+        # core directly would silently skip the gradient all-reduce.
+        model = nn.parallel.DistributedDataParallel(
+            core, device_ids=[local_rank], output_device=local_rank,
             find_unused_parameters=False)
-        core = trainable_ddp.module
     else:
-        trainable_ddp = trainable
-        core = trainable
-
-    if args.bottleneck == 0:
-        dpt_head = core[0]
-    else:
-        compressor, decoder = core[0], core[1]
+        model = core
 
     optimizer = build_optimizer(core, lr=args.lr, wd=args.wd)
 
@@ -301,21 +329,24 @@ def main():
     warmup = min(args.warmup_steps, max(total_steps - 1, 0))
     scheduler = build_scheduler(optimizer, warmup_steps=warmup, total_steps=max(total_steps, 1))
 
-    # Eval batch
+    # Eval loader (multi-clip; metrics are per-clip means)
     if args.eval_csv:
         eval_dataset = SpatialVidDataset(
             csv_path=args.eval_csv, video_root=args.eval_video_root or args.video_root,
-            seq_len=args.seq_len, target_size=args.target_size, max_videos=4,
+            seq_len=args.seq_len, target_size=args.target_size,
+            max_videos=args.eval_clips,
             num_frames_per_video=args.num_frames_per_video,
             max_frame_span=args.max_frame_span,
             clip_duration_seconds=args.clip_duration_seconds,
-            decode_retries=args.decode_retries)
+            decode_retries=args.decode_retries,
+            temporal_jitter=False)
         eval_loader = DataLoader(eval_dataset, batch_size=1, shuffle=False,
                                  num_workers=0, collate_fn=collate_fn)
     else:
-        eval_loader = DataLoader(dataset, batch_size=1, shuffle=False,
+        eval_subset = torch.utils.data.Subset(
+            dataset, list(range(min(args.eval_clips, len(dataset)))))
+        eval_loader = DataLoader(eval_subset, batch_size=1, shuffle=False,
                                  num_workers=0, collate_fn=collate_fn)
-    eval_frames = next(iter(eval_loader))['frames'].clone()
 
     # Resume
     global_step = 0
@@ -341,7 +372,7 @@ def main():
         print(f'\nTraining: {args.epochs} epochs, {steps_per_epoch} steps/epoch')
 
     for epoch in range(start_epoch, args.epochs):
-        trainable_ddp.train()
+        model.train()
         if use_ddp:
             sampler.set_epoch(epoch)
         optimizer.zero_grad(set_to_none=True)
@@ -352,9 +383,8 @@ def main():
 
         for batch_idx, batch in enumerate(pbar):
             frames = batch['frames'].to(device=device, dtype=dtype)
-            pred_rgb, z_flat = _run_forward(
-                args.bottleneck, encoder, compressor, decoder, dpt_head, frames,
-                use_amp, device_type, dtype, chunk, holder)
+            pred_rgb, z_flat = model(
+                encoder, frames, use_amp, device_type, dtype, chunk, holder)
             target_rgb = frames.float().clamp(0, 1)
 
             l1 = F.l1_loss(pred_rgb, target_rgb)
@@ -413,8 +443,8 @@ def main():
 
         if main_process and (epoch + 1) % args.eval_every == 0:
             metrics = eval_recon(
-                args.bottleneck, encoder, compressor, decoder, dpt_head,
-                eval_frames, device, os.path.join(args.output_dir, 'samples'),
+                core, encoder, eval_loader, device,
+                os.path.join(args.output_dir, 'samples'),
                 epoch, dtype, device_type, chunk)
             metrics.update({'step': global_step, 'epoch': epoch,
                             'probe': args.probe_name, 'bottleneck': args.bottleneck})
@@ -423,7 +453,8 @@ def main():
                 for k, v in metrics.items():
                     if isinstance(v, (int, float)) and not isinstance(v, bool):
                         writer.add_scalar(f'eval/{k}', v, global_step)
-            print(f'  [eval] ep{epoch}: psnr={metrics["psnr"]:.2f} '
+            print(f'  [eval] ep{epoch}: psnr={metrics["psnr"]:.2f}'
+                  f'±{metrics["psnr_std"]:.2f} ({metrics["eval_clips"]} clips) '
                   f'l1={metrics["l1"]:.4f} lpips={metrics.get("lpips", float("nan")):.4f}')
 
         if main_process and (epoch + 1) % args.save_every == 0:

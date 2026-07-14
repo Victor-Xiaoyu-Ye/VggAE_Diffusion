@@ -19,6 +19,7 @@ PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PROJECT_ROOT)
 
 from streamvggt.models.streamvggt import StreamVGGT
+from utils.encoder_loader import load_encoder_checkpoint
 from models.generative_tokenizer import GenerativeTokenizer
 from models.compact_decoder import CompactDecoder
 from data.video_dataset import SpatialVidDataset, collate_fn
@@ -124,8 +125,7 @@ def load_model(args, device, compute_dtype):
         f'levels={args.levels}')
 
     encoder = StreamVGGT(img_size=args.target_size, patch_size=14, embed_dim=1024)
-    state = torch.load(args.encoder_ckpt, map_location='cpu')
-    encoder.load_state_dict(state, strict=False)
+    load_encoder_checkpoint(encoder, args.encoder_ckpt)
     encoder = encoder.to(device=device, dtype=compute_dtype).eval()
     for p in encoder.parameters():
         p.requires_grad_(False)

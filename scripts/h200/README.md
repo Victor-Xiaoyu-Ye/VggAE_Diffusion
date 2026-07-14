@@ -81,6 +81,59 @@ bash scripts/h200/probe_e3_grid_isolation.sh
 
 Identifies which component produces the grid texture.
 
+## E5 run matrix (2026-07-14, 4x H200)
+
+The single most likely fix (survey-driven, see PROJECT_CONTEXT.md
+"2026-07-14 survey additions"): avg-pool packing low-passes the high
+frequency z_tex exists to carry, and z_tex regularized toward N(0,1)
+drifts off z_geo's distribution family. Run in this order — each run is
+~1 day on 4 cards; stop early when the decision is already forced.
+
+```bash
+# R1 — new best guess: s2d packing + SVG-style stat alignment
+TEX_PACK=s2d TEX_REG_MODE=match_geo bash scripts/h200/probe_e5_texture_recon.sh
+
+# R2 — packing ablation control (only if R1 passes): isolate s2d's share
+TEX_REG_MODE=match_geo bash scripts/h200/probe_e5_texture_recon.sh
+
+# R3 — geo-only floor (cheap, can run on the idle card alongside R1)
+TEX_MODE=zero bash scripts/h200/probe_e5_texture_recon.sh
+
+# R4 — anti-bypass proof (required for the paper once R1 passes)
+TEX_MODE=tex_only TEX_PACK=s2d bash scripts/h200/probe_e5_texture_recon.sh
+
+# R5 — feature-consistency loss arm (MIRA P-DINO analogue; run if R1
+#      lands in the 23-25 gray zone — it lifts fidelity without GAN)
+TEX_PACK=s2d TEX_REG_MODE=match_geo FEAT_WEIGHT=0.5 \
+  bash scripts/h200/probe_e5_texture_recon.sh
+```
+
+Decision gates (BOTH must pass before any cache rebuild):
+
+1. R1 oracle PSNR >= 25 (32-clip mean, no grid texture in samples).
+2. Diffusability spectra sane — run on the R1 checkpoint:
+
+```bash
+"$VGGAE_PYTHON_BIN" "$VGGAE_PROJECT/diagnose_latent_diffusability.py" \
+  --ckpt  "$VGGAE_H200_RUN_ROOT/probes/e5_oracle_s2d_match_geo/checkpoint_latest.pt" \
+  --csv "$VGGAE_EVAL_CSV" --video_root "$VGGAE_VIDEO_ROOT" \
+  --encoder_ckpt "$VGGAE_ENCODER_CKPT" \
+  --output_json "$VGGAE_H200_RUN_ROOT/probes/e5_oracle_s2d_match_geo/diffusability.json"
+```
+
+   Gate: z_tex spatial_band_high not >> z_geo's, top32_var high (few-mode
+   eigenspectrum), kurtosis near 3, and the residual streams
+   (z_*_residual — what diffusion actually predicts) at least as tame as
+   the absolute streams. A latent that passes PSNR but fails this is
+   MIRA's "sharper but undiffusable" failure mode — fix packing/reg
+   before raising capacity.
+
+3. R4 tex_only must be clearly below R1 oracle (geometry load-bearing).
+
+If R1 still lands ~20: capacity is next (TEX_DIM=384 TEX_BASE_CH=96),
+NOT more packing changes — s2d already removed the information bottleneck,
+so a persistent plateau means decoder or fusion capacity.
+
 ## After the probes
 
 Decision tree (see PROJECT_CONTEXT.md `Research Risks`):

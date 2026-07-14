@@ -23,6 +23,7 @@ from data.video_dataset import SpatialVidDataset, collate_fn
 from models.generative_tokenizer import GenerativeTokenizer
 from streamvggt.models.streamvggt import StreamVGGT
 from utils.distributed import is_main_process, setup_ddp
+from utils.encoder_loader import load_encoder_checkpoint
 from utils.device import get_device, get_device_name, resolve_dtype
 from utils.file_signature import sampled_file_signature
 from utils.latent_stats import (
@@ -208,8 +209,8 @@ def safe_collate_fn(batch):
 def load_models(args, device, compute_dtype):
     encoder = StreamVGGT(
         img_size=args.target_size, patch_size=14, embed_dim=1024)
-    encoder_state = torch.load(args.encoder_ckpt, map_location="cpu")
-    encoder.load_state_dict(encoder_state, strict=False)
+    load_encoder_checkpoint(
+        encoder, args.encoder_ckpt, verbose=is_main_process())
     encoder = encoder.to(device=device, dtype=compute_dtype).eval()
     for parameter in encoder.parameters():
         parameter.requires_grad_(False)

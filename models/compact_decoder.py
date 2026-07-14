@@ -104,8 +104,11 @@ class TemporalAttnBlock(nn.Module):
     def forward(self, x, B, S):
         BS, C, H, W = x.shape
         x_t = x.reshape(B, S, C, H * W).permute(0, 3, 1, 2).contiguous().reshape(B * H * W, S, C)
-        x_t = self.norm(x_t)
-        x_t, _ = self.attn(x_t, x_t, x_t)
+        # Pre-norm residual: without the residual, attention output REPLACES
+        # the decoder features and caps reconstruction quality.
+        normed = self.norm(x_t)
+        attn_out, _ = self.attn(normed, normed, normed)
+        x_t = x_t + attn_out
         x = x_t.reshape(B, H * W, S, C).permute(0, 2, 3, 1).contiguous().reshape(B * S, C, H, W)
         return x
 

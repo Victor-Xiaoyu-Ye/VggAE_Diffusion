@@ -22,6 +22,7 @@ OUTPUT_DIR="${VGGAE_H200_RUN_ROOT}/probes/${PROBE_NAME}"
 RESUME="${RESUME:-}"
 
 EPOCHS="${EPOCHS:-40}"
+EVAL_CLIPS="${EVAL_CLIPS:-32}"
 # Memory guide (single card, raw 37-grid probe): ~31G at batch 2.
 # Fixed cost (StreamVGGT encoder + LPIPS VGG + weights) is roughly constant,
 # activations scale ~linearly with batch. Rough single-card estimate:
@@ -80,5 +81,6 @@ h200_torchrun "${VGGAE_PROJECT}/probe_feature_recon.py" \
   --num_workers 8 --dtype bf16 \
   --output_dir "${OUTPUT_DIR}" \
   --eval_every 2 --save_every 5 --log_every 50 \
+  --eval_clips "${EVAL_CLIPS}" \
   "${EXTRA_ARGS[@]}" \
   2>&1 | tee -a "${OUTPUT_DIR}/logs/train.log"

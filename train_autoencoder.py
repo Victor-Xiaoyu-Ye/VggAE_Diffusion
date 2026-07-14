@@ -49,6 +49,7 @@ from utils.training import (
     restore_rng_state,
 )
 from utils.distributed import setup_ddp, is_main_process
+from utils.encoder_loader import load_encoder_checkpoint
 from utils.device import (
     configure_backend_compatibility,
     create_grad_scaler,
@@ -431,8 +432,7 @@ def main():
     if main_process:
         print(f'\n[1/4] Loading frozen VGGT encoder...')
     encoder = StreamVGGT(img_size=args.target_size, patch_size=14, embed_dim=1024)
-    state = torch.load(args.encoder_ckpt, map_location='cpu')
-    encoder.load_state_dict(state, strict=False)
+    load_encoder_checkpoint(encoder, args.encoder_ckpt, verbose=main_process)
     encoder = encoder.to(device=device, dtype=dtype).eval()
     for p in encoder.parameters():
         p.requires_grad_(False)

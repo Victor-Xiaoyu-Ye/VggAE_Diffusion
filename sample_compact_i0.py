@@ -17,6 +17,7 @@ from models.generative_tokenizer import GenerativeTokenizer
 from models.i0_decoder import I0ConditionalDecoder, load_i0_decoder_state_dict
 from models.wan_compact_adapter import WanCompactAdapter
 from streamvggt.models.streamvggt import StreamVGGT
+from utils.encoder_loader import load_encoder_checkpoint
 from utils.device import (
     configure_backend_compatibility,
     get_device,
@@ -192,12 +193,7 @@ def main():
             normalization["cond"], 1, latent_dim, name="condition")
 
     encoder = StreamVGGT(img_size=target_size, patch_size=14, embed_dim=1024)
-    load_info = encoder.load_state_dict(
-        torch.load(args.encoder_ckpt, map_location="cpu"), strict=False)
-    if load_info.missing_keys or load_info.unexpected_keys:
-        print(
-            f"[WARN] Encoder checkpoint mismatch: missing={len(load_info.missing_keys)}, "
-            f"unexpected={len(load_info.unexpected_keys)}")
+    load_encoder_checkpoint(encoder, args.encoder_ckpt)
     encoder = encoder.to(device=device, dtype=dtype).eval()
 
     tokenizer = GenerativeTokenizer(
