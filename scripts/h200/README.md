@@ -91,10 +91,11 @@ drifts off z_geo's distribution family. Run in this order — each run is
 
 ```bash
 # R0 — smoke (~10 min, 1 card): exercises s2d + match_geo + feat loss in one
-#      short run, prints the [encoder] key-match line (Next Tasks #0), and
-#      PROBE_SUFFIX keeps its checkpoint out of the real runs' auto-resume.
-VGGAE_NUM_GPUS=1 VGGAE_GPU_IDS=0 EPOCHS=1 EVAL_CLIPS=4 PROBE_SUFFIX=smoke \
-  TEX_PACK=s2d TEX_REG_MODE=match_geo FEAT_WEIGHT=0.5 \
+#      short run over 64 videos, prints the [encoder] key-match line
+#      (Next Tasks #0), and reaches eval + checkpoint save. PROBE_SUFFIX keeps
+#      its checkpoint out of the real runs' auto-resume.
+VGGAE_NUM_GPUS=1 VGGAE_GPU_IDS=0 EPOCHS=1 EVAL_CLIPS=4 MAX_VIDEOS=64 \
+  PROBE_SUFFIX=smoke TEX_PACK=s2d TEX_REG_MODE=match_geo FEAT_WEIGHT=0.5 \
   bash scripts/h200/probe_e5_texture_recon.sh
 
 # R1 — new best guess: s2d packing + SVG-style stat alignment
@@ -110,8 +111,10 @@ TEX_MODE=zero bash scripts/h200/probe_e5_texture_recon.sh
 TEX_MODE=tex_only TEX_PACK=s2d bash scripts/h200/probe_e5_texture_recon.sh
 
 # R5 — feature-consistency loss arm (MIRA P-DINO analogue; run if R1
-#      lands in the 23-25 gray zone — it lifts fidelity without GAN)
+#      lands in the 23-25 gray zone — it lifts fidelity without GAN).
+#      feat loss adds a grad-carrying encoder forward: keep batch at 2.
 TEX_PACK=s2d TEX_REG_MODE=match_geo FEAT_WEIGHT=0.5 \
+  BATCH_SIZE=2 ACCUM_STEPS=4 \
   bash scripts/h200/probe_e5_texture_recon.sh
 ```
 
@@ -120,6 +123,14 @@ Output dirs are derived from the knobs: R1 ->
 R3 -> `probes/e5_zero_avgpool`, R4 -> `probes/e5_tex_only_s2d`, R5 ->
 `probes/e5_oracle_s2d_match_geo_feat0.5`. Each auto-resumes from its own
 `checkpoint_latest.pt`, so re-running a command continues that arm.
+
+Memory/speed levers (H200 141G; batch 2 + feat loss measured ~75G/card):
+`BATCH_SIZE=4 ACCUM_STEPS=2` is the no-feat-loss default. If nvidia-smi
+still shows lots of headroom after the first R1 steps, the next lever is
+`USE_CHECKPOINT=0` (drops gradient checkpointing: more memory, noticeably
+faster) and then `FRAMES_CHUNK_SIZE=0` (decode all 8 frames in one pass).
+Changing batch/accum mid-arm is safe on resume (optimizer state is
+per-parameter, the schedule just recomputes); keep batch*accum = 8.
 
 Decision gates (BOTH must pass before any cache rebuild):
 

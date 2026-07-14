@@ -60,8 +60,13 @@ RESUME="${RESUME:-}"
 
 EPOCHS="${EPOCHS:-40}"
 EVAL_CLIPS="${EVAL_CLIPS:-32}"
-BATCH_SIZE="${BATCH_SIZE:-2}"
-ACCUM_STEPS="${ACCUM_STEPS:-4}"
+MAX_VIDEOS="${MAX_VIDEOS:-0}"   # 0 = full train csv; set small (e.g. 64) for smoke
+# Memory guide (H200 141G, measured 2026-07-14): batch 2 + feat loss ~ 75G on
+# one card, so without feat loss batch 4 fits comfortably and is the default.
+# With FEAT_WEIGHT>0 (R5) drop to BATCH_SIZE=2 ACCUM_STEPS=4. Keep
+# batch*accum = 8 per card (global 32 on 4 cards) so LR needs no retuning.
+BATCH_SIZE="${BATCH_SIZE:-4}"
+ACCUM_STEPS="${ACCUM_STEPS:-2}"
 LEARNING_RATE="${LEARNING_RATE:-1e-4}"
 GEO_DIM="${GEO_DIM:-256}"
 TEX_DIM="${TEX_DIM:-256}"
@@ -95,6 +100,7 @@ h200_torchrun "${VGGAE_PROJECT}/probe_e5_texture_recon.py" \
   --eval_csv "${VGGAE_EVAL_CSV}" \
   --eval_video_root "${VGGAE_VIDEO_ROOT}" \
   --encoder_ckpt "${VGGAE_ENCODER_CKPT}" \
+  --max_videos "${MAX_VIDEOS}" \
   --levels 4 11 17 23 \
   --geo_dim "${GEO_DIM}" \
   --tex_dim "${TEX_DIM}" \
