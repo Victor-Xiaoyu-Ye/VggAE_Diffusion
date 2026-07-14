@@ -461,9 +461,14 @@ def main():
                 # frozen encoder is its own perceptual metric, and it directly
                 # optimizes what the geometric-consistency eval later measures.
                 # Only k frames per clip are re-encoded to bound the cost.
+                # Features are L2-normalized along channels before the MSE
+                # (MIRA's latent-consistency variant): compare feature
+                # DIRECTIONS, not magnitudes — raw VGGT token norms differ by
+                # orders of magnitude across levels and would dominate.
                 B, S = pred.shape[:2]
                 k = min(args.feat_frames, S)
-                idx = torch.randperm(S, device=pred.device)[:k]
+                # Sorted: StreamVGGT attention is causal, frame order matters.
+                idx = torch.randperm(S, device=pred.device)[:k].sort().values
                 pred_sub = pred[:, idx].clamp(0, 1).to(dtype)
                 with torch.no_grad():
                     tgt_tokens, tgt_psi = encoder(frames[:, idx])
@@ -471,7 +476,9 @@ def main():
                 pred_tokens, pred_psi = encoder(pred_sub)
                 pred_feats = strip_special_tokens(pred_tokens, pred_psi)
                 feat_loss = sum(
-                    F.l1_loss(pred_feats[lvl].float(), tgt_feats[lvl].float())
+                    F.mse_loss(
+                        F.normalize(pred_feats[lvl].float(), dim=-1),
+                        F.normalize(tgt_feats[lvl].float(), dim=-1))
                     for lvl in args.levels) / len(args.levels)
                 loss = loss + args.lambda_feat * feat_loss
                 metrics['train/feat'] = feat_loss.detach()
