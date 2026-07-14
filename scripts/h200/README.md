@@ -90,13 +90,20 @@ drifts off z_geo's distribution family. Run in this order — each run is
 ~1 day on 4 cards; stop early when the decision is already forced.
 
 ```bash
+# R0 — smoke (~10 min, 1 card): exercises s2d + match_geo + feat loss in one
+#      short run, prints the [encoder] key-match line (Next Tasks #0), and
+#      PROBE_SUFFIX keeps its checkpoint out of the real runs' auto-resume.
+VGGAE_NUM_GPUS=1 VGGAE_GPU_IDS=0 EPOCHS=1 EVAL_CLIPS=4 PROBE_SUFFIX=smoke \
+  TEX_PACK=s2d TEX_REG_MODE=match_geo FEAT_WEIGHT=0.5 \
+  bash scripts/h200/probe_e5_texture_recon.sh
+
 # R1 — new best guess: s2d packing + SVG-style stat alignment
 TEX_PACK=s2d TEX_REG_MODE=match_geo bash scripts/h200/probe_e5_texture_recon.sh
 
 # R2 — packing ablation control (only if R1 passes): isolate s2d's share
 TEX_REG_MODE=match_geo bash scripts/h200/probe_e5_texture_recon.sh
 
-# R3 — geo-only floor (cheap, can run on the idle card alongside R1)
+# R3 — geo-only floor (cheap; run after R1, or on a spare card)
 TEX_MODE=zero bash scripts/h200/probe_e5_texture_recon.sh
 
 # R4 — anti-bypass proof (required for the paper once R1 passes)
@@ -107,6 +114,12 @@ TEX_MODE=tex_only TEX_PACK=s2d bash scripts/h200/probe_e5_texture_recon.sh
 TEX_PACK=s2d TEX_REG_MODE=match_geo FEAT_WEIGHT=0.5 \
   bash scripts/h200/probe_e5_texture_recon.sh
 ```
+
+Output dirs are derived from the knobs: R1 ->
+`probes/e5_oracle_s2d_match_geo`, R2 -> `probes/e5_oracle_avgpool_match_geo`,
+R3 -> `probes/e5_zero_avgpool`, R4 -> `probes/e5_tex_only_s2d`, R5 ->
+`probes/e5_oracle_s2d_match_geo_feat0.5`. Each auto-resumes from its own
+`checkpoint_latest.pt`, so re-running a command continues that arm.
 
 Decision gates (BOTH must pass before any cache rebuild):
 

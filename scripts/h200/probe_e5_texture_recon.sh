@@ -21,15 +21,18 @@
 set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-# Capture a user-provided port BEFORE h200_env.sh fills in its own default,
-# otherwise the E5-specific default below can never take effect.
+# Capture user-provided overrides BEFORE h200_env.sh / the E5 defaults below
+# hard-assign them (needed for single-card smoke runs).
 USER_MASTER_PORT="${VGGAE_MASTER_PORT:-}"
+USER_NUM_GPUS="${VGGAE_NUM_GPUS:-}"
+USER_GPU_IDS="${VGGAE_GPU_IDS:-}"
 source "${SCRIPT_DIR}/h200_env.sh"
 ensure_h200_splits
 
-# E5 uses all 4 H200 cards.
-export VGGAE_NUM_GPUS=4
-export VGGAE_GPU_IDS=0,1,2,3
+# E5 default: all 4 H200 cards. Env overrides (captured above) win, e.g.
+#   VGGAE_NUM_GPUS=1 VGGAE_GPU_IDS=0 EPOCHS=1 bash .../probe_e5_texture_recon.sh
+export VGGAE_NUM_GPUS="${USER_NUM_GPUS:-4}"
+export VGGAE_GPU_IDS="${USER_GPU_IDS:-0,1,2,3}"
 # Avoid colliding with a leftover E4 master port (h200_env default 29540).
 export VGGAE_MASTER_PORT="${USER_MASTER_PORT:-29550}"
 
@@ -46,6 +49,11 @@ if [[ "${TEX_REG_MODE}" != "n01" ]]; then
 fi
 if [[ "${FEAT_WEIGHT}" != "0" ]]; then
   PROBE_NAME="${PROBE_NAME}_feat${FEAT_WEIGHT}"
+fi
+# Set PROBE_SUFFIX=smoke for throwaway runs so their checkpoints never get
+# auto-resumed by a later real run with the same knob combination.
+if [[ -n "${PROBE_SUFFIX:-}" ]]; then
+  PROBE_NAME="${PROBE_NAME}_${PROBE_SUFFIX}"
 fi
 OUTPUT_DIR="${VGGAE_H200_RUN_ROOT}/probes/${PROBE_NAME}"
 RESUME="${RESUME:-}"
