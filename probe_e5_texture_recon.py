@@ -310,8 +310,9 @@ def main():
     if main_process:
         os.makedirs(os.path.join(args.output_dir, 'samples'), exist_ok=True)
         os.makedirs(os.path.join(args.output_dir, 'logs'), exist_ok=True)
-        print(f'E5 probe: tex_mode={args.tex_mode} geo={args.geo_dim} '
-              f'tex={args.tex_dim} grid={args.latent_grid} '
+        print(f'E5 probe: tex_mode={args.tex_mode} pack={args.tex_pack} '
+              f'reg={args.tex_reg_mode} feat={args.lambda_feat} '
+              f'geo={args.geo_dim} tex={args.tex_dim} grid={args.latent_grid} '
               f'device={device_type} dtype={args.dtype}')
 
     # Frozen VGGT
