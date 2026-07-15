@@ -132,7 +132,7 @@ def main():
     args = parse_args()
     device = get_device(0)
     dtype = resolve_dtype(args.dtype)
-    print(f'Device: {get_device_name(device)}')
+    print(f'Device: {device} (backend={get_device_name()})')
 
     ckpt = torch.load(args.ckpt, map_location='cpu', weights_only=False)
     ck_args = ckpt.get('args', {})
