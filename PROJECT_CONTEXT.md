@@ -46,12 +46,22 @@ cluster) or `scripts/10k/` (local A100). See `scripts/h200/README.md`.
 ## Current State
 
 - Active branch: `ascend-910b`.
-- **Active phase: reconstruction-first diagnostics on H200.** Generation
-  experiments (from-scratch DiT, Wan 14B) are paused pending a
-  reconstruction fix; the latest Wan run
-  (`outputs/scale/wan_compact_i2v14b480p_v1`, step 36250) shows
-  `generated_std=0.256` vs `target_std=0.279` (under-dispersed) and
-  `velocity_mse` stuck at ~0.53, consistent with a 20-PSNR latent ceiling.
+- **Active phase: reconstruction-first diagnostics on H200.**
+- **R1 RESULT (2026-07-15, e5_oracle_s2d_match_geo, 40 epochs, 4x H200):
+  eval PSNR 24.92 ± 2.62 (32 clips), LPIPS 0.257, train l1 0.033 vs eval
+  l1 0.037 (no overfitting — the plateau is real). This breaks the ~20 dB
+  single-stream ceiling by ~4.3 dB and lands within one standard error of
+  the 25 dB gate. Dual-stream + s2d packing + match_geo regularization is
+  validated as the right direction; the remaining gap goes to R5 (VGGT
+  feature-consistency loss).**
+- Diffusability (final R1 checkpoint, 64 clips): absolute streams PASS
+  (z_geo/z_tex low-freq dominant, top32_var 0.77/0.65, kurtosis ~3.2/3.6);
+  RESIDUAL streams FAIL (high-freq 0.49/0.70, eff-rank 110/132, kurtosis
+  6.5) — see the residual-target re-evaluation under Decisions.
+- Generation experiments (from-scratch DiT, Wan 14B) remain paused; the
+  latest Wan run (`outputs/scale/wan_compact_i2v14b480p_v1`, step 36250)
+  showed under-dispersion consistent with both the old 20-PSNR latent and
+  the whitened residual target.
 - Active large-scale dataset: SpatialVID-HQ on OBS.
 - Active local 10K dataset path:
   `/public2/LiZhen/yexiaoyu/dataset/spatial-vid-hq-oft` (A100 box).
@@ -182,18 +192,20 @@ must be re-measured before being treated as ceilings:
 - Rejected for now: VGGT-shallow z_app; I0 AppearanceCNN shortcut;
   TexturePredictor; decoder-first adversarial icing.
 
-### Risk: grid texture source unidentified
+### Risk: grid texture source unidentified — RESOLVED (2026-07-15)
 
-Current reconstructions show grid textures attributed (by hypothesis) to
-three combined sources: PixelShuffle checkerboard, adaptive_avg_pool
-37->18 odd/even misalignment, and VGGT patch-attention boundaries.
-
-- Probe: `scripts/h200/probe_e3_grid_isolation.sh` (PixelShuffle vs
-  resize-conv, same tokenizer).
-- Decision: if resize-conv removes the grid, PixelShuffle was the cause and
-  the production decoder switches to resize-conv. If the grid persists, the
-  cause is upstream (pooling alignment or patch-attn) and requires a
-  tokenizer-level fix.
+R1 (e5_oracle_s2d_match_geo) samples show NO grid/checkerboard texture.
+The dual-stream path differs from the old grid-textured pipeline in two
+ways: resize-conv upsampling in DualStreamDecoder (no PixelShuffle) and
+s2d packing (no fractional adaptive_avg_pool in the tex stream). This
+matches industry practice (Wan/Hunyuan/CogVideoX decoders all use
+resize+conv; LTX's PixelShuffle has documented grid artifacts). The
+standalone E3 isolation probe is no longer needed for the main line; run
+it only if a future architecture reintroduces PixelShuffle or fractional
+pooling. Remaining reconstruction gap is SOFTNESS (missing high-freq
+detail), not artifacts — the known signature of L1 + weak-LPIPS decoding;
+addressed by R5 (feature-consistency loss) and, in production, stronger
+perceptual training per the MIRA/GLD recipes.
 
 ### Risk: I0 conditioning creates a motion shortcut
 
@@ -208,7 +220,7 @@ makes the generator's motion contribution unmeasurable.
 
 ## Decisions
 
-### Decision: Diffuse Future Residuals, Not Full Latents
+### Decision: Diffuse Future Residuals, Not Full Latents — UNDER RE-EVALUATION (2026-07)
 
 - Content: frame 0 is condition only; generator predicts seven residual
   latents `zt - z0`.
@@ -217,6 +229,21 @@ makes the generator's motion contribution unmeasurable.
   predicting RGB directly; predicting raw StreamVGGT tokens.
 - Impact: sampling must prepend `z0`; checkpoints with old eight-target layout
   are not resume-compatible.
+- **2026-07-15 evidence against (diffusability measurement, mid-R1
+  checkpoint, 64 eval clips):** the residual streams are spectrally far
+  harder to diffuse than the absolute streams — z_geo residual: high-freq
+  band 0.49 vs 0.24 absolute, effective rank 110 vs 45, kurtosis 6.5 vs
+  3.2; z_tex residual: high-freq 0.70, eff rank 132. Subtracting z0
+  removes the shared low-frequency content and whitens the target —
+  exactly the anti-SSVAE profile. Combined with (a) the old Wan run's
+  under-dispersion symptom and (b) MIRA / DINO-world / VGGT-World all
+  predicting ABSOLUTE latents (MIRA conditions on clean past frames
+  instead of subtracting them), the leading candidate fix when diffusion
+  resumes is: **predict absolute normalized z_1..z_7 with z_0 as a
+  clean-past condition (MIRA-style), not residuals.** Decide after R1
+  completes + final-checkpoint rerun of diagnose_latent_diffusability.py.
+  The latent cache contract (cond=z0, target=residuals) must NOT be
+  rebuilt before this decision.
 
 ### Decision: Cache Compact Latents Before Scale Diffusion
 
