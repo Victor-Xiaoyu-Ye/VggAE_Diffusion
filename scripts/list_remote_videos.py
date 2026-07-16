@@ -4,8 +4,11 @@ per line.
 
 Used to build the --available_list for prepare_spatialvid_splits.py when the
 dataset mirror is SPARSE (e.g. spatial-vid-hq-oft holds only the 10k subset's
-files while sharing the full 360k metadata CSV). Listing the actual tree once
-reproduces, on the cluster, what the local isfile check does on the H200 box.
+files while sharing the full 360k metadata CSV). The root must be the exact
+directory that contains the group_* folders — mirror layouts differ (the
+-oft OBS mirror uses videos/SpatialVid/HQ/videos, see
+scripts/legacy/train_diffusion_wan.sh), so the caller passes the confirmed
+path rather than guessing.
 """
 
 from __future__ import annotations
@@ -18,7 +21,8 @@ import tempfile
 def parse_args():
     p = argparse.ArgumentParser(description='List (remote) video tree')
     p.add_argument('--root', required=True,
-                   help='local dir or obs:// / s3:// prefix')
+                   help='local dir or obs:// / s3:// prefix that directly '
+                        'contains the group_* folders')
     p.add_argument('--output', required=True,
                    help='output text file, one relative path per line')
     p.add_argument('--suffix', default='.mp4')

@@ -23,11 +23,13 @@ source "${SCRIPT_DIR}/../spatialvid_config.sh"
 source "${SCRIPT_DIR}/../lib/spatialvid.sh"
 source "${SCRIPT_DIR}/../lib/modelarts.sh"
 
-# --- dataset override: the -oft mirror (same content/layout as the H200 box)
+# --- dataset override: the -oft mirror (the 10k subset; same content as the
+# H200 box). NOTE its inner layout differs from the full HQ tree:
+# videos/SpatialVid/HQ/videos/group_* (confirmed by the user and by
+# scripts/legacy/train_diffusion_wan.sh which ran against this mirror).
 SPATIALVID_OFT_ROOT="obs://yw-ads-training-gy1/data/external/personal/g00833899/y50046448/spatial-vid-hq-oft"
 SPATIALVID_METADATA_URL="${SPATIALVID_OFT_ROOT}/data/train/SpatialVID_HQ_metadata.csv"
-SPATIALVID_VIDEO_ROOT="${SPATIALVID_OFT_ROOT}/videos/SpatialVID/videos"
-SPATIALVID_DEPTH_ROOT="${SPATIALVID_OFT_ROOT}/depths/SpatialVID/depths"
+SPATIALVID_VIDEO_ROOT="${SPATIALVID_OFT_ROOT}/videos/SpatialVid/HQ/videos"
 SPATIALVID_METADATA="${LOCAL_CACHE_ROOT}/metadata/SpatialVID_HQ_metadata_oft.csv"
 SPATIALVID_SPLIT_DIR="${RUN_ROOT}/metadata/spatialvid_oft_seed${SPLIT_SEED}"
 SPATIALVID_TRAIN_10K_CSV="${SPATIALVID_SPLIT_DIR}/train_10k.csv"

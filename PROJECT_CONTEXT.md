@@ -71,6 +71,14 @@ cluster) or `scripts/10k/` (local A100). See `scripts/h200/README.md`.
   `/home/yexiaoyu/data/StreamVGGT/checkpoints.pth`.
 - Active scale dataset path:
   `obs://yw-ads-training-gy1/data/external/personal/g00833899/y50046448/dataset/SpatialVID-HQ`.
+- 10k subset OBS mirror (same content as the H200/A100 local copies, used by
+  the small-scale E7 path): `obs://.../y50046448/spatial-vid-hq-oft` —
+  NOTE its inner layout differs from the HQ tree AND from the local copies:
+  videos live under `videos/SpatialVid/HQ/videos/group_*` (not
+  `videos/SpatialVID/videos`); metadata at
+  `data/train/SpatialVID_HQ_metadata.csv` is the FULL 360k CSV, so split
+  generation against this mirror must use the availability filter
+  (`ensure_spatialvid_subset_splits`), never `--skip_file_check`.
 - Active persistent owner OBS root:
   `obs://yw-ads-training-gy1/data/external/personal/g00833899/y50046448`.
 - Active scale latent cache version:
