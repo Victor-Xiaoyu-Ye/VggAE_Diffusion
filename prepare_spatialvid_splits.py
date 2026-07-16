@@ -33,9 +33,42 @@ def parse_args():
     parser.add_argument(
         "--skip_file_check", action="store_true",
         help="Trust metadata paths (required for large remote OBS datasets)")
+    parser.add_argument(
+        "--available_list", default="",
+        help="Text file of video paths (relative to video_root) that "
+             "actually exist. Replaces the local isfile check — required "
+             "for SPARSE remote mirrors (e.g. spatial-vid-hq-oft) whose "
+             "metadata CSV covers a much larger dataset.")
     parser.add_argument("--write_full_train", action="store_true")
     parser.add_argument("--force", action="store_true")
     return parser.parse_args()
+
+
+def _relative_video_key(metadata_path):
+    rel = metadata_path.strip().replace("\\", "/")
+    if rel.startswith("videos/"):
+        rel = rel[len("videos/"):]
+    return rel
+
+
+def load_available_set(path):
+    available = set()
+    with open(path) as handle:
+        for line in handle:
+            rel = line.strip()
+            if rel:
+                available.add(_relative_video_key(rel))
+    if not available:
+        raise ValueError(f"--available_list {path} is empty")
+    return available
+
+
+def _content_hash(path):
+    digest = hashlib.blake2b(digest_size=16)
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(65536), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def file_signature(path):
@@ -79,6 +112,8 @@ def expected_manifest(args):
         "seed": args.seed,
         "candidate_multiplier": args.candidate_multiplier,
         "skip_file_check": args.skip_file_check,
+        "available_list": (
+            _content_hash(args.available_list) if args.available_list else ""),
     }
 
 
@@ -127,6 +162,16 @@ def select_rows(args):
         raise ValueError("At least one split count must be positive")
     if args.candidate_multiplier < 1:
         raise ValueError("--candidate_multiplier must be >= 1")
+    available = (
+        load_available_set(args.available_list)
+        if args.available_list else None)
+
+    def row_exists(row):
+        if available is not None:
+            return _relative_video_key(row["video path"]) in available
+        return os.path.isfile(
+            resolve_video_path(args.video_root, row["video path"]))
+
     candidate_limit = max(
         requested * args.candidate_multiplier,
         requested + 1024,
@@ -167,9 +212,7 @@ def select_rows(args):
     missing_files = 0
     for _, _, row in candidates:
         if not args.skip_file_check:
-            video_path = resolve_video_path(
-                args.video_root, row["video path"])
-            if not os.path.isfile(video_path):
+            if not row_exists(row):
                 missing_files += 1
                 continue
         selected.append(row)
@@ -195,9 +238,7 @@ def select_rows(args):
                     continue
                 if num_frames < args.min_frames:
                     continue
-                video_path = resolve_video_path(
-                    args.video_root, row["video path"])
-                if not os.path.isfile(video_path):
+                if not row_exists(row):
                     missing_files += 1
                     continue
                 score = stable_score(args.seed, row_index, row)

@@ -68,7 +68,10 @@ MASTER_PORT=29640
 configure_modelarts_distributed
 require_scale_cluster
 require_output_url
-ensure_spatialvid_splits
+# Subset splits: the -oft mirror is SPARSE (only the 10k subset's videos);
+# the availability-filtered split reproduces the H200 seed-42 split instead
+# of sampling nonexistent files from the full 360k metadata.
+ensure_spatialvid_subset_splits
 
 # Stage the dual-AE checkpoint from OBS if a URL is given and the local ref
 # copy is absent.
