@@ -20,9 +20,37 @@
 set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# Capture an explicit user override BEFORE the config's candidate list runs —
+# that list prefers the leftover 14B checkpoint in the ref dir, which with
+# full-QKV unfreeze is exactly the 3.2B-trainable / 12.6GiB-reducer OOM.
+USER_WAN_CKPT_DIR="${WAN_CKPT_DIR:-}"
 source "${SCRIPT_DIR}/../spatialvid_config.sh"
 source "${SCRIPT_DIR}/../lib/spatialvid.sh"
 source "${SCRIPT_DIR}/../lib/modelarts.sh"
+
+# --- Wan checkpoint: 1.3B ONLY for this stage ---------------------------------
+if [[ -n "${USER_WAN_CKPT_DIR}" ]]; then
+  WAN_CKPT_DIR="${USER_WAN_CKPT_DIR}"
+else
+  WAN_CKPT_DIR=""
+  for candidate in \
+    "${VGGAE_REF_ROOT}/Wan2.1/checkpoints/Wan2.1-T2V-1.3B" \
+    "${VGGAE_REF_ROOT}/Wan2.1-T2V-1.3B" \
+    "${VGGAE_REF_ROOT}/checkpoints/Wan2.1-T2V-1.3B" \
+    "${PROJECT}/Wan2.1/checkpoints/Wan2.1-T2V-1.3B"; do
+    if [[ -d "${candidate}" ]]; then
+      WAN_CKPT_DIR="${candidate}"
+      break
+    fi
+  done
+fi
+if [[ "${WAN_CKPT_DIR}" == *14B* && "${ALLOW_WAN_14B:-0}" != "1" ]]; then
+  echo "Refusing 14B checkpoint '${WAN_CKPT_DIR}' for this stage:" \
+       "full-QKV 14B OOMs the 910B reducer (12.6GiB buckets). Point" \
+       "WAN_CKPT_DIR at Wan2.1-T2V-1.3B, or set ALLOW_WAN_14B=1 plus" \
+       "TRAIN_QKV_LAST_N<=4 if you really mean 14B." >&2
+  exit 1
+fi
 
 # --- dataset override: identical to 07 (the sparse -oft 10k mirror) ---------
 SPATIALVID_OFT_ROOT="obs://yw-ads-training-gy1/data/external/personal/g00833899/y50046448/spatial-vid-hq-oft"
@@ -65,9 +93,9 @@ require_output_url
 ensure_spatialvid_subset_splits
 
 if [[ -z "${WAN_CKPT_DIR}" || ! -d "${WAN_CKPT_DIR}" ]]; then
-  echo "WAN_CKPT_DIR not found (got '${WAN_CKPT_DIR}'). Expected the" \
-       "Wan2.1-T2V-1.3B checkpoint via the spatialvid_config.sh candidate" \
-       "list or an explicit WAN_CKPT_DIR export." >&2
+  echo "Wan2.1-T2V-1.3B checkpoint not found (searched the 1.3B candidates" \
+       "under VGGAE_REF_ROOT=${VGGAE_REF_ROOT} and the repo). Export" \
+       "WAN_CKPT_DIR=<path-to-Wan2.1-T2V-1.3B> and relaunch." >&2
   exit 1
 fi
 

@@ -388,6 +388,12 @@ def main():
         amp_ctx = contextlib.nullcontext
     n_params = sum(p.numel() for p in core.parameters())
     n_train = sum(p.numel() for p in core.parameters() if p.requires_grad)
+    if args.generator == 'wan' and n_train > 1.5e9:
+        raise RuntimeError(
+            f'{n_train / 1e9:.2f}B trainable parameters would need a '
+            f'{n_train * 4 / 1e9:.1f}GB DDP gradient bucket — this is the '
+            f'known 14B full-QKV OOM. Use the Wan2.1-T2V-1.3B checkpoint, '
+            f'or --train_qkv_last_n 4 for larger backbones.')
     if main_process:
         print(f'  generator={args.generator}: {n_train / 1e6:.1f}M trainable '
               f'/ {n_params / 1e6:.1f}M total  '
