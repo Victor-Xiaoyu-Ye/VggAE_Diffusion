@@ -29,6 +29,8 @@ from __future__ import annotations
 
 import argparse
 import os
+import time
+from datetime import datetime
 
 import torch
 import torch.distributed as dist
@@ -52,7 +54,7 @@ from utils.device import (
 from utils.distributed import is_main_process, setup_ddp
 from utils.encoder_loader import load_encoder_checkpoint
 from utils.training import (
-    EMA, ThroughputMeter, append_metrics, atomic_torch_save,
+    EMA, append_metrics, atomic_torch_save,
     build_optimizer, build_scheduler, capture_rng_state, restore_rng_state,
 )
 
@@ -474,7 +476,11 @@ def main():
     writer = SummaryWriter(os.path.join(args.output_dir, 'tb')) \
         if main_process else None
     metrics_path = os.path.join(args.output_dir, 'metrics.jsonl')
-    meter = ThroughputMeter()
+    # Windowed throughput counters (reset at every log line): the cluster
+    # convention is tokens/s/npu measured over the recent window, not a
+    # run-lifetime average.
+    window_tokens = 0
+    window_start = time.time()
 
     def save_ckpt(step):
         payload = {
@@ -631,24 +637,40 @@ def main():
             scheduler.step()
             ema.update(core)
             global_step += 1
-            meter.update(x1.shape[0] * x1.shape[1] * world_size)
+            # DI_throughput: tokens/s/npu over the window since the last log
+            # line (cluster monitoring convention). tokens = latent tokens
+            # consumed per optimizer step per rank: batch x accum x (S-1
+            # future frames) x N tokens/frame.
+            window_tokens += (x1.shape[0] * args.accum_steps
+                              * x1.shape[1] * x1.shape[2])
 
             if main_process and global_step % args.log_every == 0:
+                now = time.time()
+                di_throughput = window_tokens / max(now - window_start, 1e-12)
+                window_tokens = 0
+                window_start = now
                 row = {
                     'step': global_step, 'target_mode': args.target_mode,
                     'train/loss': float(loss.item() * args.accum_steps),
                     'train/grad_norm': float(grad_norm),
                     'train/lr': scheduler.get_last_lr()[0],
-                    'DI_throughput': meter.rate(),
+                    'DI_throughput': di_throughput,
                 }
                 append_metrics(metrics_path, row)
                 if writer:
                     for k, v_ in row.items():
                         if isinstance(v_, (int, float)):
                             writer.add_scalar(k, v_, global_step)
-                pbar.set_postfix(
-                    loss=f'{row["train/loss"]:.4f}',
-                    DI=f'{row["DI_throughput"]:.1f}')
+                timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                pbar.write(
+                    f'{timestamp}: [train {epoch + 1} '
+                    f'{global_step}/{args.max_steps}] '
+                    f'loss: {row["train/loss"]:.4f} | '
+                    f'DI_throughput: {di_throughput:.2f} tokens/s/npu')
+                pbar.set_postfix({
+                    'loss': f'{row["train/loss"]:.4f}',
+                    'DI_throughput': f'{di_throughput:.2f}',
+                })
 
             if main_process and global_step % args.eval_every == 0:
                 run_eval(global_step)
