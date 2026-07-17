@@ -372,6 +372,7 @@ def main():
         core.eval()
         vmse, n = 0.0, 0
         gen_stds, tgt_stds = [], []
+        motion_ratios = []
         saved = 0
         for i, batch in enumerate(eval_loader):
             frames = batch['frames'].to(device)
@@ -387,6 +388,15 @@ def main():
                 gen = cfm_sample(cond, x1.shape)
                 gen_stds.append(gen.float().std().item())
                 tgt_stds.append(x1.float().std().item())
+                # z0-copy guard: motion magnitude ||z_t - z_0|| in the
+                # UNNORMALIZED space, generated vs target. ~1 = real
+                # dynamics; <<1 = the generator is copying the condition.
+                z_gen = denorm_to_full(gen, stats, args.target_mode,
+                                       z[:, :1], device)
+                m_gen = (z_gen[:, 1:] - z[:, :1]).flatten(2).norm(dim=2)
+                m_tgt = (z[:, 1:] - z[:, :1]).flatten(2).norm(dim=2)
+                motion_ratios.append(
+                    (m_gen / m_tgt.clamp(min=1e-8)).mean().item())
                 torch.save(
                     {'sampled_x1': gen.float().cpu(),
                      'target_x1': x1.float().cpu(),
@@ -406,13 +416,16 @@ def main():
         }
         row['eval/gen_std_ratio'] = (
             row['eval/gen_std'] / max(row['eval/target_std'], 1e-8))
+        row['eval/motion_ratio'] = float(
+            sum(motion_ratios) / max(len(motion_ratios), 1))
         append_metrics(metrics_path, row)
         if writer:
             for k, v_ in row.items():
                 if isinstance(v_, (int, float)):
                     writer.add_scalar(k, v_, step)
         print(f'  [eval] step {step}: vmse={row["eval/velocity_mse"]:.4f} '
-              f'gen_std_ratio={row["eval/gen_std_ratio"]:.3f}')
+              f'gen_std_ratio={row["eval/gen_std_ratio"]:.3f} '
+              f'motion_ratio={row["eval/motion_ratio"]:.3f}')
         core.train()
 
     preview_ok = [True]
@@ -496,7 +509,7 @@ def main():
                     'train/loss': float(loss.item() * args.accum_steps),
                     'train/grad_norm': float(grad_norm),
                     'train/lr': scheduler.get_last_lr()[0],
-                    'train/DI_throughput': meter.rate(),
+                    'DI_throughput': meter.rate(),
                 }
                 append_metrics(metrics_path, row)
                 if writer:
@@ -505,7 +518,7 @@ def main():
                             writer.add_scalar(k, v_, global_step)
                 pbar.set_postfix(
                     loss=f'{row["train/loss"]:.4f}',
-                    DI=f'{row["train/DI_throughput"]:.1f}')
+                    DI=f'{row["DI_throughput"]:.1f}')
 
             if main_process and global_step % args.eval_every == 0:
                 run_eval(global_step)
