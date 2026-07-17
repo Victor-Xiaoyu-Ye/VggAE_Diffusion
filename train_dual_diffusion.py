@@ -61,6 +61,16 @@ def parse_args():
     p = argparse.ArgumentParser(description='E7 dual-latent diffusion smoke')
     p.add_argument('--target_mode', type=str, required=True,
                    choices=['absolute', 'residual'])
+    p.add_argument('--generator', type=str, default='dit',
+                   choices=['dit', 'wan'],
+                   help='dit = from-scratch CompactLatentDiT (E7 baseline); '
+                        'wan = pretrained Wan backbone via WanCompactAdapter '
+                        '(same forward interface, one-variable comparison)')
+    p.add_argument('--wan_ckpt_dir', type=str, default='',
+                   help='Wan2.1 checkpoint dir (required for --generator wan)')
+    p.add_argument('--train_qkv_last_n', type=int, default=0,
+                   help='wan: unfreeze QKV of the last N blocks; 0 = all '
+                        '(affordable on 1.3B, unlike the 14B last-4 limit)')
     p.add_argument('--csv', type=str, required=True)
     p.add_argument('--video_root', type=str, required=True)
     p.add_argument('--eval_csv', type=str, required=True)
@@ -251,6 +261,82 @@ def denorm_to_full(x1, stats, target_mode, z0, device):
     return torch.cat([z0, z_future], dim=1)
 
 
+# --------------------------------------------------------------------------
+# Wan adapter support (patterns proven on the cluster by
+# train_cached_wan_compact_diffusion.py): the full Wan backbone is loaded
+# from --wan_ckpt_dir on every run; checkpoints carry ONLY the trainable
+# parameters (adapters + modulation + time path + unfrozen QKV), and the
+# EMA shadows only those. Frozen parameters are cast to bf16 to halve
+# resident memory; trainable ones stay fp32 (so the adapter's lazy
+# time-embedding float32 conversion is a no-op and cannot break DDP
+# gradient buckets).
+# --------------------------------------------------------------------------
+
+def cast_frozen_parameters(model, dtype):
+    for parameter in model.parameters():
+        if parameter.requires_grad or not parameter.is_floating_point():
+            continue
+        parameter.data = parameter.data.to(dtype=dtype)
+
+
+def trainable_state_dict(model):
+    trainable = {
+        name for name, parameter in model.named_parameters()
+        if parameter.requires_grad}
+    return {name: value.detach().cpu()
+            for name, value in model.state_dict().items()
+            if name in trainable}
+
+
+def load_trainable_state_dict(model, state_dict, label):
+    parameters = dict(model.named_parameters())
+    missing = []
+    for name, parameter in parameters.items():
+        if not parameter.requires_grad:
+            continue
+        if name not in state_dict:
+            missing.append(name)
+            continue
+        parameter.data.copy_(state_dict[name].to(
+            device=parameter.device, dtype=parameter.dtype))
+    unexpected = sorted(set(state_dict) - set(parameters))
+    if missing or unexpected:
+        raise ValueError(
+            f'{label} trainable state mismatch: '
+            f'missing={missing[:8]}, unexpected={unexpected[:8]}')
+
+
+class TrainableEMA:
+    """EMA over trainable parameters only (the Wan backbone is excluded)."""
+
+    def __init__(self, model, decay=0.999):
+        self.decay = decay
+        self.shadow = {
+            name: parameter.detach().float().clone()
+            for name, parameter in model.named_parameters()
+            if parameter.requires_grad}
+
+    def update(self, model):
+        for name, parameter in model.named_parameters():
+            if name not in self.shadow:
+                continue
+            self.shadow[name] = self.shadow[name].to(parameter.device)
+            self.shadow[name].mul_(self.decay).add_(
+                parameter.detach().float(), alpha=1 - self.decay)
+
+    def state_dict(self):
+        return {name: value.detach().cpu()
+                for name, value in self.shadow.items()}
+
+    def load_state_dict(self, state_dict):
+        self.shadow = {name: value.detach().float().clone()
+                       for name, value in state_dict.items()}
+
+    def to(self, device):
+        self.shadow = {k: v.to(device) for k, v in self.shadow.items()}
+        return self
+
+
 def main():
     args = parse_args()
     use_ddp, rank, local_rank, world_size = setup_ddp()
@@ -272,17 +358,41 @@ def main():
     num_tokens = grid * grid
     future = args.seq_len - 1
 
-    core = CompactLatentDiT(
-        latent_dim=latent_dim, num_tokens=num_tokens,
-        model_dim=args.model_dim, spatial_depth=args.spatial_depth,
-        temporal_depth=args.temporal_depth, num_heads=args.num_heads,
-        seq_len=future, text_cond=False, i0_condition=True).to(device)
+    if args.generator == 'wan':
+        if not args.wan_ckpt_dir or not os.path.isdir(args.wan_ckpt_dir):
+            raise FileNotFoundError(
+                f'--generator wan requires --wan_ckpt_dir, '
+                f'got {args.wan_ckpt_dir!r}')
+        # Lazy import: pulls the vendored Wan2.1 package only on this path.
+        from models.wan_compact_adapter import WanCompactAdapter
+        core = WanCompactAdapter(
+            args.wan_ckpt_dir, latent_dim=latent_dim, latent_grid=grid,
+            seq_len=future, i0_condition=True, train_text_adapter=False,
+            train_qkv=True, train_qkv_last_n=args.train_qkv_last_n)
+        # Frozen backbone -> bf16 (memory); trainable stay fp32.
+        cast_frozen_parameters(core, dtype)
+        core = core.to(device)
+        ema = TrainableEMA(core, decay=args.ema_decay)
+        # Wan matmuls need autocast (frozen bf16 x fp32 adapters); the DiT
+        # baseline stays pure fp32 so E7-a numbers remain comparable.
+        import contextlib
+        amp_ctx = lambda: torch.autocast(device_type=device_type, dtype=dtype)
+    else:
+        core = CompactLatentDiT(
+            latent_dim=latent_dim, num_tokens=num_tokens,
+            model_dim=args.model_dim, spatial_depth=args.spatial_depth,
+            temporal_depth=args.temporal_depth, num_heads=args.num_heads,
+            seq_len=future, text_cond=False, i0_condition=True).to(device)
+        ema = EMA(core, decay=args.ema_decay, dtype=torch.float32).to(device)
+        import contextlib
+        amp_ctx = contextlib.nullcontext
     n_params = sum(p.numel() for p in core.parameters())
+    n_train = sum(p.numel() for p in core.parameters() if p.requires_grad)
     if main_process:
-        print(f'  DiT params: {n_params / 1e6:.1f}M  '
+        print(f'  generator={args.generator}: {n_train / 1e6:.1f}M trainable '
+              f'/ {n_params / 1e6:.1f}M total  '
               f'tokens/frame={num_tokens} latent_dim={latent_dim}')
 
-    ema = EMA(core, decay=args.ema_decay, dtype=torch.float32).to(device)
     if use_ddp:
         model = nn.parallel.DistributedDataParallel(
             core, device_ids=[local_rank], output_device=local_rank,
@@ -324,11 +434,18 @@ def main():
     stats = None
     if args.resume and os.path.isfile(args.resume):
         ckpt = torch.load(args.resume, map_location='cpu', weights_only=False)
-        if ckpt['args'].get('target_mode') != args.target_mode:
-            raise RuntimeError(
-                f'resume target_mode {ckpt["args"].get("target_mode")} != '
-                f'requested {args.target_mode}')
-        core.load_state_dict(ckpt['model'])
+        for key in ('target_mode', 'generator'):
+            if ckpt['args'].get(key, 'dit' if key == 'generator' else None) \
+                    != getattr(args, key):
+                raise RuntimeError(
+                    f'resume {key} {ckpt["args"].get(key)} != '
+                    f'requested {getattr(args, key)}')
+        if args.generator == 'wan':
+            # Checkpoints carry trainable params only; the frozen backbone
+            # was already loaded fresh from --wan_ckpt_dir.
+            load_trainable_state_dict(core, ckpt['model'], 'model')
+        else:
+            core.load_state_dict(ckpt['model'])
         ema.load_state_dict(ckpt['ema']); ema = ema.to(device)
         optimizer.load_state_dict(ckpt['optimizer'])
         scheduler.load_state_dict(ckpt['scheduler'])
@@ -355,7 +472,9 @@ def main():
 
     def save_ckpt(step):
         payload = {
-            'model': core.state_dict(), 'ema': ema.state_dict(),
+            'model': (trainable_state_dict(core) if args.generator == 'wan'
+                      else core.state_dict()),
+            'ema': ema.state_dict(),
             'optimizer': optimizer.state_dict(),
             'scheduler': scheduler.state_dict(),
             'global_step': step, 'args': vars(args),
@@ -381,8 +500,9 @@ def main():
             x0 = torch.randn_like(x1)
             t = torch.rand((x1.shape[0],), device=device, dtype=x1.dtype)
             te = t.view(-1, 1, 1, 1)
-            v = core((1 - te) * x0 + te * x1, t, cond=cond)
-            vmse += torch.nn.functional.mse_loss(v, x1 - x0).item()
+            with amp_ctx():
+                v = core((1 - te) * x0 + te * x1, t, cond=cond)
+            vmse += torch.nn.functional.mse_loss(v.float(), x1 - x0).item()
             n += 1
             if saved < args.sample_clips:
                 gen = cfm_sample(cond, x1.shape)
@@ -472,7 +592,9 @@ def main():
         for i in range(n_steps):
             t = torch.full((shape[0],), i / n_steps, device=device,
                            dtype=cond.dtype)
-            z = z + core(z, t, cond=cond) / n_steps
+            with amp_ctx():
+                v = core(z, t, cond=cond)
+            z = z + v.float() / n_steps
         return z
 
     if main_process:
@@ -490,12 +612,14 @@ def main():
             frames = batch['frames'].to(device)
             z = encode_tokens(encoder, compressor, tex_encoder, frames, dtype)
             x1, cond = build_targets(z, stats, args.target_mode, device)
-            loss = cfm.compute_loss(x1, cond=cond) / args.accum_steps
+            with amp_ctx():
+                loss = cfm.compute_loss(x1, cond=cond) / args.accum_steps
             loss.backward()
             if (it_idx + 1) % args.accum_steps != 0:
                 continue
             grad_norm = torch.nn.utils.clip_grad_norm_(
-                core.parameters(), args.max_grad_norm)
+                [p for p in core.parameters() if p.requires_grad],
+                args.max_grad_norm)
             optimizer.step()
             optimizer.zero_grad(set_to_none=True)
             scheduler.step()

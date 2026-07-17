@@ -57,7 +57,15 @@ cluster) or `scripts/10k/` (local A100). See `scripts/h200/README.md`.
 - Diffusability (final R1 checkpoint, 64 clips): absolute streams PASS
   (z_geo/z_tex low-freq dominant, top32_var 0.77/0.65, kurtosis ~3.2/3.6);
   RESIDUAL streams FAIL (high-freq 0.49/0.70, eff-rank 110/132, kurtosis
-  6.5) — see the residual-target re-evaluation under Decisions.
+  6.5) — residual contract overturned, see Decisions.
+- **E7 smoke diffusion COMPLETE (2026-07-16, 48x910B): the dual-stream
+  latent is learnable by flow-matching diffusion. Absolute-target arm
+  healthy (vmse 0.78 @6k and falling, std_ratio 0.95, no z0-copying,
+  z0-anchored coherent scenes); residual arm plateaued/oscillating —
+  parameterization decision is now measured, not assumed. R3 zero-arm
+  reproduced the single-stream ceiling (20.77 vs historical 20.6),
+  pinning z_tex's contribution at +4.15 dB. Remaining E5 matrix item: R4
+  tex_only anti-bypass proof.**
 - Generation experiments (from-scratch DiT, Wan 14B) remain paused; the
   latest Wan run (`outputs/scale/wan_compact_i2v14b480p_v1`, step 36250)
   showed under-dispersion consistent with both the old 20-PSNR latent and
@@ -228,30 +236,33 @@ makes the generator's motion contribution unmeasurable.
 
 ## Decisions
 
-### Decision: Diffuse Future Residuals, Not Full Latents — UNDER RE-EVALUATION (2026-07)
+### Decision: Diffuse Future Residuals, Not Full Latents — OVERTURNED (2026-07-16, E7)
 
-- Content: frame 0 is condition only; generator predicts seven residual
-  latents `zt - z0`.
-- Reason: reduces target entropy and uses I0 as stable scene/appearance anchor.
-- Rejected alternatives: predicting all eight latents including frame 0;
-  predicting RGB directly; predicting raw StreamVGGT tokens.
-- Impact: sampling must prepend `z0`; checkpoints with old eight-target layout
-  are not resume-compatible.
-- **2026-07-15 evidence against (diffusability measurement, mid-R1
-  checkpoint, 64 eval clips):** the residual streams are spectrally far
-  harder to diffuse than the absolute streams — z_geo residual: high-freq
-  band 0.49 vs 0.24 absolute, effective rank 110 vs 45, kurtosis 6.5 vs
-  3.2; z_tex residual: high-freq 0.70, eff rank 132. Subtracting z0
-  removes the shared low-frequency content and whitens the target —
-  exactly the anti-SSVAE profile. Combined with (a) the old Wan run's
-  under-dispersion symptom and (b) MIRA / DINO-world / VGGT-World all
-  predicting ABSOLUTE latents (MIRA conditions on clean past frames
-  instead of subtracting them), the leading candidate fix when diffusion
-  resumes is: **predict absolute normalized z_1..z_7 with z_0 as a
-  clean-past condition (MIRA-style), not residuals.** Decide after R1
-  completes + final-checkpoint rerun of diagnose_latent_diffusability.py.
-  The latent cache contract (cond=z0, target=residuals) must NOT be
-  rebuilt before this decision.
+- ORIGINAL content: frame 0 is condition only; generator predicts seven
+  residual latents `zt - z0`. Reason: reduces target entropy.
+- **OVERTURNED by measurement.** Evidence chain:
+  1. Diffusability spectra (R1+R5 checkpoints): residual streams are
+     spectrally whitened (high-freq 0.49-0.70, eff-rank 110-153, kurtosis
+     4.5-6.5) vs healthy absolute streams — the anti-SSVAE profile.
+  2. E7 smoke diffusion (48x910B, 101.5M DiT, 10k oft subset, online
+     encoding, 6000 steps): ABSOLUTE arm converged cleanly
+     (velocity_mse 2.00->0.78 still falling, gen_std_ratio ~0.95,
+     recognizable z0-anchored scenes); RESIDUAL arm plateaued at ~1.0-1.1
+     with oscillating std_ratio (0.90<->1.18) and clip-dependent target
+     stats (eval target_std 0.91 despite normalization).
+  3. Motion analysis (analyze_e7_motion.py, step 6000): no z0-copying —
+     gen motion magnitude ratio -> 1.0 by frame 4-7, direction cosine
+     rising 0.25->0.39; frame-1 over-motion (ratio 1.66) is a constant
+     sampling-noise floor, not a shortcut.
+- **NEW CONTRACT: the generator predicts ABSOLUTE normalized z_1..z_7
+  (dual-stream, geo||tex 512ch) with normalized z_0 as a clean-past
+  condition (MIRA-style).** Frame 0 remains condition-only. Per-frame
+  per-channel stats; stats travel inside the generator checkpoint.
+- Impact: the 1.46M residual-contract cache design is obsolete BEFORE
+  rebuild (nothing wasted); train_dual_diffusion.py is the reference
+  implementation; old residual checkpoints/caches are incompatible.
+- Watch item: eval/motion_ratio (now logged every eval) is the standing
+  z0-copy guard; frame-1 ratio should fall toward 1 as models scale.
 
 ### Decision: Cache Compact Latents Before Scale Diffusion
 
