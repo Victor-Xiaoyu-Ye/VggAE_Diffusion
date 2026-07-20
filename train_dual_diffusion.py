@@ -73,6 +73,24 @@ def parse_args():
     p.add_argument('--train_qkv_last_n', type=int, default=0,
                    help='wan: unfreeze QKV of the last N blocks; 0 = all '
                         '(affordable on 1.3B, unlike the 14B last-4 limit)')
+    p.add_argument('--train_ffn_last_n', type=int, default=0,
+                   help='wan: unfreeze FFN of the last N blocks. E8 showed '
+                        'frozen FFNs bottleneck the latent translation '
+                        '(fast early drop then plateau above from-scratch)')
+    p.add_argument('--pseudo_text_tokens', type=int, default=8,
+                   help='wan: learned null-prompt tokens so cross-attention '
+                        'keeps running as in pretraining (0 = skip the '
+                        'layer, the E8-v1 mistake)')
+    p.add_argument('--adapter_lr', type=float, default=1e-4,
+                   help='wan: lr for the fresh adapter layers '
+                        '(input/output/time/i0/pseudo-context)')
+    p.add_argument('--wan_lr', type=float, default=1e-5,
+                   help='wan: lr for pretrained Wan parameters '
+                        '(modulation/time path/QKV/FFN)')
+    p.add_argument('--wan_freeze_steps', type=int, default=500,
+                   help='wan: mute gradients into pretrained Wan params for '
+                        'the first N optimizer steps so the random adapters '
+                        'settle before touching the prior')
     p.add_argument('--csv', type=str, required=True)
     p.add_argument('--video_root', type=str, required=True)
     p.add_argument('--eval_csv', type=str, required=True)
@@ -339,6 +357,33 @@ class TrainableEMA:
         return self
 
 
+def build_wan_optimizer(model, adapter_lr, wan_lr, wd):
+    """Two-speed AdamW: fresh adapter layers learn fast, pretrained Wan
+    parameters move slowly. The single-LR compromise (E8-v1, 5e-5 for both)
+    starved the translation layers while over-driving the prior — visible
+    as clipped grad_norm plus an early plateau."""
+    groups = {('adapter', True): [], ('adapter', False): [],
+              ('wan', True): [], ('wan', False): []}
+    for name, p in model.named_parameters():
+        if not p.requires_grad:
+            continue
+        family = 'wan' if name.startswith('wan.') else 'adapter'
+        decay = not (p.ndim < 2 or 'norm' in name or 'bias' in name
+                     or 'modulation' in name or 'pseudo_context' in name)
+        groups[(family, decay)].append(p)
+    param_groups = []
+    for (family, decay), params in groups.items():
+        if not params:
+            continue
+        param_groups.append({
+            'params': params,
+            'lr': adapter_lr if family == 'adapter' else wan_lr,
+            'weight_decay': wd if decay else 0.0,
+            'name': family,
+        })
+    return torch.optim.AdamW(param_groups, betas=(0.9, 0.95), eps=1e-8)
+
+
 def main():
     args = parse_args()
     use_ddp, rank, local_rank, world_size = setup_ddp()
@@ -370,7 +415,9 @@ def main():
         core = WanCompactAdapter(
             args.wan_ckpt_dir, latent_dim=latent_dim, latent_grid=grid,
             seq_len=future, i0_condition=True, train_text_adapter=False,
-            train_qkv=True, train_qkv_last_n=args.train_qkv_last_n)
+            train_qkv=True, train_qkv_last_n=args.train_qkv_last_n,
+            train_ffn_last_n=args.train_ffn_last_n,
+            num_pseudo_text=args.pseudo_text_tokens)
         # Frozen backbone -> bf16 (memory); trainable stay fp32.
         cast_frozen_parameters(core, dtype)
         core = core.to(device)
@@ -408,7 +455,11 @@ def main():
     else:
         model = core
     cfm = OTCFM(model)
-    optimizer = build_optimizer(core, lr=args.lr, wd=args.wd)
+    if args.generator == 'wan':
+        optimizer = build_wan_optimizer(
+            core, args.adapter_lr, args.wan_lr, args.wd)
+    else:
+        optimizer = build_optimizer(core, lr=args.lr, wd=args.wd)
     scheduler = build_scheduler(
         optimizer, warmup_steps=args.warmup_steps, total_steps=args.max_steps)
 
@@ -629,6 +680,13 @@ def main():
             loss.backward()
             if (it_idx + 1) % args.accum_steps != 0:
                 continue
+            if args.generator == 'wan' and global_step < args.wan_freeze_steps:
+                # Adapter warm-up: drop gradients into the pretrained prior
+                # until the random translation layers have settled (DDP-safe:
+                # grads are reduced normally, then discarded before the step).
+                for name, p in core.named_parameters():
+                    if name.startswith('wan.') and p.grad is not None:
+                        p.grad = None
             grad_norm = torch.nn.utils.clip_grad_norm_(
                 [p for p in core.parameters() if p.requires_grad],
                 args.max_grad_norm)

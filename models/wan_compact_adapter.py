@@ -76,7 +76,8 @@ class WanCompactAdapter(nn.Module):
     def __init__(self, wan_checkpoint_dir, latent_dim=768, latent_grid=18,
                  seq_len=8, wan_dim=None, freq_dim=None, num_heads=None,
                  i0_condition=False, train_text_adapter=False,
-                 train_qkv=True, train_qkv_last_n=0):
+                 train_qkv=True, train_qkv_last_n=0, train_ffn_last_n=0,
+                 num_pseudo_text=0):
         super().__init__()
 
         # Load pretrained Wan backbone. Do not hard-code the 1.3B dimensions:
@@ -109,6 +110,20 @@ class WanCompactAdapter(nn.Module):
         self.train_text_adapter = train_text_adapter
         self.train_qkv = train_qkv
         self.train_qkv_last_n = int(train_qkv_last_n)
+        self.train_ffn_last_n = int(train_ffn_last_n)
+        self.num_pseudo_text = int(num_pseudo_text)
+
+        # Learned pseudo-text context (E8-v1 finding): Wan pretraining ALWAYS
+        # ran cross-attention — even the CFG unconditional branch encodes the
+        # empty prompt, it never skips the layer. Passing context=None (v1)
+        # removed a computation every block co-adapted with, shifting the
+        # residual-stream distribution from block 0 on (fast early gain from
+        # modulation rescaling, then a plateau above from-scratch). These
+        # trainable tokens act as a learned null prompt, fed directly at
+        # wan_dim (bypassing the UMT5 text_embedding projection).
+        if self.num_pseudo_text > 0:
+            self.pseudo_context = nn.Parameter(
+                torch.randn(self.num_pseudo_text, self.wan_dim) * 0.02)
 
         # ---- Input: latent_dim → wan_dim with concat time injection ----
         self.time_concat_dim = 256
@@ -168,6 +183,8 @@ class WanCompactAdapter(nn.Module):
             p.requires_grad_(True)
         for p in self.output_proj.parameters():
             p.requires_grad_(True)
+        if self.num_pseudo_text > 0:
+            self.pseudo_context.requires_grad_(True)
         if self.train_text_adapter:
             for p in self.text_proj.parameters():
                 p.requires_grad_(True)
@@ -190,6 +207,16 @@ class WanCompactAdapter(nn.Module):
         else:
             qkv_start = num_blocks
         self.qkv_trainable_blocks = max(0, num_blocks - qkv_start)
+        # FFN unfreeze (E8 finding): with FFN frozen, the Wan arm showed the
+        # adapter-bottleneck signature — fast early drop from modulation
+        # adaptation, then a plateau ABOVE the from-scratch baseline. The
+        # frozen FFNs (2/3 of params) hold Wan's feature language and cannot
+        # be re-aimed at the dual-stream latent through QKV alone.
+        if self.train_ffn_last_n > 0:
+            ffn_start = max(0, num_blocks - self.train_ffn_last_n)
+        else:
+            ffn_start = num_blocks
+        self.ffn_trainable_blocks = max(0, num_blocks - ffn_start)
         for index, blk in enumerate(self.wan.blocks):
             blk.modulation.requires_grad_(True)
             if index >= qkv_start:
@@ -197,13 +224,17 @@ class WanCompactAdapter(nn.Module):
                     attn_module = getattr(blk.self_attn, name)
                     for p in attn_module.parameters():
                         p.requires_grad_(True)
+            if index >= ffn_start:
+                for p in blk.ffn.parameters():
+                    p.requires_grad_(True)
 
         trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
         total = sum(p.numel() for p in self.parameters())
         print(
             f"WanCompactAdapter: {trainable/1e6:.1f}M trainable / "
             f"{total/1e9:.2f}B total "
-            f"(qkv_blocks={self.qkv_trainable_blocks}/{len(self.wan.blocks)})")
+            f"(qkv_blocks={self.qkv_trainable_blocks}/{len(self.wan.blocks)}, "
+            f"ffn_blocks={self.ffn_trainable_blocks}/{len(self.wan.blocks)})")
 
     def _ensure_time_emb_float32(self):
         if self._time_emb_converted:
@@ -288,6 +319,13 @@ class WanCompactAdapter(nn.Module):
                     f"Expected text dim 768 (legacy CLIP) or "
                     f"{self.wan.text_dim} (native UMT5), got {text_emb.shape[-1]}")
             context_lens = torch.full((B,), context.shape[1], device=x.device, dtype=torch.long)
+        elif self.num_pseudo_text > 0:
+            # Learned null prompt: keep cross-attention RUNNING (as in all of
+            # Wan's pretraining) instead of skipping the layer.
+            context = self.pseudo_context.to(x.dtype).unsqueeze(0).expand(
+                B, -1, -1)
+            context_lens = torch.full(
+                (B,), self.num_pseudo_text, device=x.device, dtype=torch.long)
 
         # ---- 5. Wan DiT blocks ----
         if self.wan.freqs.device != x.device:

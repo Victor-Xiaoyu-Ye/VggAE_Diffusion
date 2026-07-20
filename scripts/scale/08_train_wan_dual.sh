@@ -64,8 +64,11 @@ SPATIALVID_OVERFIT_CSV="${SPATIALVID_SPLIT_DIR}/overfit.csv"
 
 # ----------------------------- editable settings -----------------------------
 TARGET_MODE="${TARGET_MODE:-absolute}"   # the E7-validated contract
-OUTPUT_DIR="${SCALE_ROOT}/dual_diffusion_wan_${TARGET_MODE}"
-REMOTE_OUTPUT_DIR="${SCALE_REMOTE_ROOT}/dual_diffusion_wan_${TARGET_MODE}"
+# Run tag separates incompatible trainable-param sets (v1 = frozen-FFN,
+# no pseudo-context; v2 = pseudo-context + two-speed LR + adapter warmup).
+WAN_RUN_TAG="${WAN_RUN_TAG:-v2}"
+OUTPUT_DIR="${SCALE_ROOT}/dual_diffusion_wan_${TARGET_MODE}_${WAN_RUN_TAG}"
+REMOTE_OUTPUT_DIR="${SCALE_REMOTE_ROOT}/dual_diffusion_wan_${TARGET_MODE}_${WAN_RUN_TAG}"
 RESUME="${RESUME:-}"
 AUTO_RESUME="${AUTO_RESUME:-1}"
 
@@ -75,9 +78,15 @@ DUAL_AE_CKPT_URL="${DUAL_AE_CKPT_URL:-}"
 MAX_STEPS="${MAX_STEPS:-6000}"
 BATCH_SIZE="${BATCH_SIZE:-1}"
 ACCUM_STEPS="${ACCUM_STEPS:-2}"          # 48 x 1 x 2 = global 96, matches E7-a
-LEARNING_RATE="${LEARNING_RATE:-5e-5}"
+ADAPTER_LR="${ADAPTER_LR:-1e-4}"         # fresh translation layers
+WAN_LR="${WAN_LR:-1e-5}"                 # pretrained prior
+WAN_FREEZE_STEPS="${WAN_FREEZE_STEPS:-500}"
+PSEUDO_TEXT="${PSEUDO_TEXT:-8}"          # learned null prompt tokens
 WARMUP_STEPS="${WARMUP_STEPS:-300}"
 TRAIN_QKV_LAST_N="${TRAIN_QKV_LAST_N:-0}"  # 0 = all blocks
+# FFN unfreeze is the FOLLOW-UP arm, not the default: test the principled
+# fixes (pseudo-context / two-speed LR / warmup) in isolation first.
+TRAIN_FFN_LAST_N="${TRAIN_FFN_LAST_N:-0}"
 NUM_WORKERS="${NUM_WORKERS:-4}"
 EVAL_EVERY="${EVAL_EVERY:-500}"
 SAVE_EVERY="${SAVE_EVERY:-500}"
@@ -115,12 +124,24 @@ if [[ "${AUTO_RESUME}" -eq 1 || -n "${RESUME}" ]]; then
     "${RESUME}" \
     "${OUTPUT_DIR}/checkpoint_latest.pt" \
     "${REMOTE_OUTPUT_DIR}/checkpoint_latest.pt" \
-    "${LOCAL_CACHE_ROOT}/resume/dual_diffusion_wan_${TARGET_MODE}.pt" \
-    "${SCALE_MIRROR_ROOT}/dual_diffusion_wan_${TARGET_MODE}/checkpoint_latest.pt")
+    "${LOCAL_CACHE_ROOT}/resume/dual_diffusion_wan_${TARGET_MODE}_${WAN_RUN_TAG}.pt" \
+    "${SCALE_MIRROR_ROOT}/dual_diffusion_wan_${TARGET_MODE}_${WAN_RUN_TAG}/checkpoint_latest.pt")
 fi
 if [[ -n "${RESUME}" ]]; then
   echo "Resuming from ${RESUME}"
   EXTRA_ARGS+=(--resume "${RESUME}")
+  # Container restarts begin with an empty local metrics.jsonl which the
+  # directory sync would then push over the remote history (observed on the
+  # first E8 run). Restore the remote copy first so appends continue it.
+  if [[ ! -s "${OUTPUT_DIR}/metrics.jsonl" ]]; then
+    mkdir -p "${OUTPUT_DIR}"
+    "${PYTHON_BIN}" "${PROJECT}/scripts/moxing_transfer.py" \
+      "${REMOTE_OUTPUT_DIR}/metrics.jsonl" \
+      "${OUTPUT_DIR}/metrics.jsonl" 2>/dev/null \
+    || "${PYTHON_BIN}" "${PROJECT}/scripts/moxing_transfer.py" \
+      "${SCALE_MIRROR_ROOT}/dual_diffusion_wan_${TARGET_MODE}_${WAN_RUN_TAG}/metrics.jsonl" \
+      "${OUTPUT_DIR}/metrics.jsonl" 2>/dev/null || true
+  fi
 fi
 
 start_output_sync "${OUTPUT_DIR}" "${REMOTE_OUTPUT_DIR}"
@@ -130,6 +151,7 @@ run_torchrun "${PROJECT}/train_dual_diffusion.py" \
   --generator wan \
   --wan_ckpt_dir "${WAN_CKPT_DIR}" \
   --train_qkv_last_n "${TRAIN_QKV_LAST_N}" \
+  --train_ffn_last_n "${TRAIN_FFN_LAST_N}" \
   --target_mode "${TARGET_MODE}" \
   --csv "${SPATIALVID_TRAIN_10K_CSV}" \
   --video_root "${SPATIALVID_VIDEO_ROOT}" \
@@ -139,7 +161,10 @@ run_torchrun "${PROJECT}/train_dual_diffusion.py" \
   --max_steps "${MAX_STEPS}" \
   --batch_size "${BATCH_SIZE}" \
   --accum_steps "${ACCUM_STEPS}" \
-  --lr "${LEARNING_RATE}" \
+  --adapter_lr "${ADAPTER_LR}" \
+  --wan_lr "${WAN_LR}" \
+  --wan_freeze_steps "${WAN_FREEZE_STEPS}" \
+  --pseudo_text_tokens "${PSEUDO_TEXT}" \
   --warmup_steps "${WARMUP_STEPS}" \
   --num_workers "${NUM_WORKERS}" \
   --eval_clips "${EVAL_CLIPS}" \
