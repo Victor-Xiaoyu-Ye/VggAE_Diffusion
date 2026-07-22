@@ -38,11 +38,15 @@ DUAL_AE_CKPT="${DUAL_AE_CKPT:-${VGGAE_REF_ROOT}/checkpoints/e5_dual_stream_r5.pt
 DUAL_AE_CKPT_URL="${DUAL_AE_CKPT_URL:-}"
 
 MAX_STEPS="${MAX_STEPS:-3000}"
-BATCH_SIZE="${BATCH_SIZE:-2}"
-ACCUM_STEPS="${ACCUM_STEPS:-1}"
+# 910B ~61 GiB: StreamVGGT + DualStreamDecoder already leave <1 GiB free.
+# Prefer micro-batch 1 + accum; LPIPS is frame-chunked in the trainer.
+BATCH_SIZE="${BATCH_SIZE:-1}"
+ACCUM_STEPS="${ACCUM_STEPS:-2}"
 LEARNING_RATE="${LEARNING_RATE:-5e-5}"
 BOTTLENECK_LR="${BOTTLENECK_LR:-2e-4}"
 LPIPS_WEIGHT="${LPIPS_WEIGHT:-0.5}"
+LPIPS_CHUNK_SIZE="${LPIPS_CHUNK_SIZE:-1}"
+LPIPS_RESIZE="${LPIPS_RESIZE:-256}"
 NUM_WORKERS="${NUM_WORKERS:-4}"
 EVAL_EVERY="${EVAL_EVERY:-500}"
 SAVE_EVERY="${SAVE_EVERY:-500}"
@@ -101,6 +105,8 @@ run_torchrun "${PROJECT}/train_latent_bottleneck.py" \
   --lr "${LEARNING_RATE}" \
   --bottleneck_lr "${BOTTLENECK_LR}" \
   --lambda_lpips "${LPIPS_WEIGHT}" \
+  --lpips_chunk_size "${LPIPS_CHUNK_SIZE}" \
+  --lpips_resize "${LPIPS_RESIZE}" \
   --num_workers "${NUM_WORKERS}" \
   --eval_clips "${EVAL_CLIPS}" \
   --eval_every "${EVAL_EVERY}" \

@@ -64,6 +64,37 @@ def get_lpips(device):
     return _lpips_fn
 
 
+def empty_device_cache():
+    if hasattr(torch, 'npu') and hasattr(torch.npu, 'empty_cache'):
+        torch.npu.empty_cache()
+    elif torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+
+def lpips_chunked(lp, pred_bhwc, target_bhwc, chunk_size=1, resize=256):
+    """LPIPS over [B,S,H,W,3] RGB in [0,1], frame-chunked to bound NPU memory.
+
+    910B (~61 GiB) already hosts StreamVGGT + DualStreamDecoder; feeding
+    B*S=16 frames at 518^2 through VGG in one shot OOMs (~0.5 GiB more).
+    Chunking + optional downsample keeps the perceptual signal while fitting.
+    """
+    B, S = pred_bhwc.shape[:2]
+    pr = pred_bhwc.permute(0, 1, 4, 2, 3).reshape(B * S, 3, *pred_bhwc.shape[2:4])
+    tg = target_bhwc.permute(0, 1, 4, 2, 3).reshape(
+        B * S, 3, *target_bhwc.shape[2:4])
+    if resize and resize > 0 and (pr.shape[-1] != resize or pr.shape[-2] != resize):
+        pr = F.interpolate(pr, size=(resize, resize), mode='bilinear',
+                           align_corners=False)
+        tg = F.interpolate(tg, size=(resize, resize), mode='bilinear',
+                           align_corners=False)
+    chunk_size = max(1, int(chunk_size))
+    vals = []
+    for i in range(0, pr.shape[0], chunk_size):
+        sl = slice(i, i + chunk_size)
+        vals.append(lp(pr[sl] * 2 - 1, tg[sl] * 2 - 1).mean())
+    return torch.stack(vals).mean()
+
+
 def parse_args():
     p = argparse.ArgumentParser(description='R6 latent bottleneck finetune')
     p.add_argument('--comp_dim', type=int, default=128)
@@ -87,6 +118,10 @@ def parse_args():
     p.add_argument('--lambda_lpips', type=float, default=0.5)
     p.add_argument('--lambda_comp_reg', type=float, default=0.01,
                    help='N(0,1) channel-stat pull on compressed tokens')
+    p.add_argument('--lpips_chunk_size', type=int, default=1,
+                   help='Frames per LPIPS forward (1 = safest on 910B)')
+    p.add_argument('--lpips_resize', type=int, default=256,
+                   help='Downsample side for LPIPS; 0 = full resolution')
 
     p.add_argument('--seq_len', type=int, default=8)
     p.add_argument('--target_size', type=int, default=518)
@@ -304,12 +339,10 @@ def main():
             l1s.append(F.l1_loss(pred, target).item())
             try:
                 lp = get_lpips(device)
-                B, S = pred.shape[:2]
-                pr = pred.permute(0, 1, 4, 2, 3).reshape(
-                    B * S, 3, *pred.shape[2:4])
-                tg = target.permute(0, 1, 4, 2, 3).reshape(
-                    B * S, 3, *target.shape[2:4])
-                lpips_vals.append(lp(pr * 2 - 1, tg * 2 - 1).mean().item())
+                lpips_vals.append(lpips_chunked(
+                    lp, pred, target,
+                    chunk_size=args.lpips_chunk_size,
+                    resize=args.lpips_resize).item())
             except Exception:
                 pass
             if not grid_saved:
@@ -361,13 +394,13 @@ def main():
             l1 = F.l1_loss(pred, target)
             loss = args.lambda_l1 * l1
             if args.lambda_lpips > 0:
+                # Free encoder/decoder peak before VGG if the allocator is tight.
+                empty_device_cache()
                 lp = get_lpips(device)
-                B, S = pred.shape[:2]
-                pr = pred.permute(0, 1, 4, 2, 3).reshape(
-                    B * S, 3, *pred.shape[2:4])
-                tg = target.permute(0, 1, 4, 2, 3).reshape(
-                    B * S, 3, *target.shape[2:4])
-                lpv = lp(pr * 2 - 1, tg * 2 - 1).mean()
+                lpv = lpips_chunked(
+                    lp, pred, target,
+                    chunk_size=args.lpips_chunk_size,
+                    resize=args.lpips_resize)
                 loss = loss + args.lambda_lpips * lpv
             if args.lambda_comp_reg > 0:
                 flat = z_comp.float().reshape(-1, z_comp.shape[-1])
