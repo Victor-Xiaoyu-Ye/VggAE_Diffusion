@@ -38,14 +38,16 @@ SPATIALVID_OVERFIT_CSV="${SPATIALVID_SPLIT_DIR}/overfit.csv"
 
 # ----------------------------- editable settings -----------------------------
 TARGET_MODE="${TARGET_MODE:-absolute}"   # absolute | residual
-OUTPUT_DIR="${SCALE_ROOT}/dual_diffusion_${TARGET_MODE}"
-REMOTE_OUTPUT_DIR="${SCALE_REMOTE_ROOT}/dual_diffusion_${TARGET_MODE}"
+# PROBE_SUFFIX separates variant runs (e.g. c128 for the compressed-latent
+# E9 chain) so their checkpoints/metrics never mix with the E7 baselines.
+RUN_NAME="dual_diffusion_${TARGET_MODE}${PROBE_SUFFIX:+_${PROBE_SUFFIX}}"
+OUTPUT_DIR="${SCALE_ROOT}/${RUN_NAME}"
+REMOTE_OUTPUT_DIR="${SCALE_REMOTE_ROOT}/${RUN_NAME}"
 RESUME="${RESUME:-}"
 AUTO_RESUME="${AUTO_RESUME:-1}"
 
-# R5 dual-stream checkpoint (compressor + tex_encoder loaded frozen from it).
-# Expected in the ref bundle staged by the ModelArts launch command; override
-# DUAL_AE_CKPT (local path) or DUAL_AE_CKPT_URL (obs:// path, staged here).
+# Dual-AE checkpoint: R5 (512ch raw) or an R6 bottleneck checkpoint (the
+# trainer auto-detects has_bottleneck and diffuses in the compressed space).
 DUAL_AE_CKPT="${DUAL_AE_CKPT:-${VGGAE_REF_ROOT}/checkpoints/e5_dual_stream_r5.pt}"
 DUAL_AE_CKPT_URL="${DUAL_AE_CKPT_URL:-}"
 
@@ -58,6 +60,7 @@ MODEL_DIM="${MODEL_DIM:-768}"
 SPATIAL_DEPTH="${SPATIAL_DEPTH:-8}"
 TEMPORAL_DEPTH="${TEMPORAL_DEPTH:-4}"
 NUM_HEADS="${NUM_HEADS:-12}"
+TIME_SHIFT_ALPHA="${TIME_SHIFT_ALPHA:-1.0}"  # RAE dim-dependent shift; 1.0=off
 NUM_WORKERS="${NUM_WORKERS:-4}"
 EVAL_EVERY="${EVAL_EVERY:-500}"
 SAVE_EVERY="${SAVE_EVERY:-500}"
@@ -93,12 +96,20 @@ if [[ "${AUTO_RESUME}" -eq 1 || -n "${RESUME}" ]]; then
     "${RESUME}" \
     "${OUTPUT_DIR}/checkpoint_latest.pt" \
     "${REMOTE_OUTPUT_DIR}/checkpoint_latest.pt" \
-    "${LOCAL_CACHE_ROOT}/resume/dual_diffusion_${TARGET_MODE}.pt" \
-    "${SCALE_MIRROR_ROOT}/dual_diffusion_${TARGET_MODE}/checkpoint_latest.pt")
+    "${LOCAL_CACHE_ROOT}/resume/${RUN_NAME}.pt" \
+    "${SCALE_MIRROR_ROOT}/${RUN_NAME}/checkpoint_latest.pt")
 fi
 if [[ -n "${RESUME}" ]]; then
   echo "Resuming from ${RESUME}"
   EXTRA_ARGS+=(--resume "${RESUME}")
+  # Container restarts start with an empty local metrics.jsonl which the
+  # directory sync would then push over the remote history; restore first.
+  if [[ ! -s "${OUTPUT_DIR}/metrics.jsonl" ]]; then
+    mkdir -p "${OUTPUT_DIR}"
+    "${PYTHON_BIN}" "${PROJECT}/scripts/moxing_transfer.py" \
+      "${REMOTE_OUTPUT_DIR}/metrics.jsonl" \
+      "${OUTPUT_DIR}/metrics.jsonl" 2>/dev/null || true
+  fi
 fi
 
 start_output_sync "${OUTPUT_DIR}" "${REMOTE_OUTPUT_DIR}"
@@ -115,6 +126,7 @@ run_torchrun "${PROJECT}/train_dual_diffusion.py" \
   --spatial_depth "${SPATIAL_DEPTH}" \
   --temporal_depth "${TEMPORAL_DEPTH}" \
   --num_heads "${NUM_HEADS}" \
+  --time_shift_alpha "${TIME_SHIFT_ALPHA}" \
   --max_steps "${MAX_STEPS}" \
   --batch_size "${BATCH_SIZE}" \
   --accum_steps "${ACCUM_STEPS}" \

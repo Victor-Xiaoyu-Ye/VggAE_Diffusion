@@ -91,6 +91,10 @@ def parse_args():
                    help='wan: mute gradients into pretrained Wan params for '
                         'the first N optimizer steps so the random adapters '
                         'settle before touching the prior')
+    p.add_argument('--time_shift_alpha', type=float, default=1.0,
+                   help='RAE dimension-dependent time shift '
+                        "t' = a*t/(1+(a-1)*t); 1.0 = off. Shifts training "
+                        'time toward high noise, needed as token dim grows')
     p.add_argument('--csv', type=str, required=True)
     p.add_argument('--video_root', type=str, required=True)
     p.add_argument('--eval_csv', type=str, required=True)
@@ -138,13 +142,20 @@ def parse_args():
 
 
 def load_dual_ae(args, device, dtype):
-    """Frozen encoder + compressor + tex_encoder + decoder from E5 ckpt."""
+    """Frozen AE from an E5/R5 checkpoint, or an R6 bottleneck checkpoint.
+
+    R6 checkpoints (args.has_bottleneck) additionally carry a
+    LatentBottleneck; diffusion then runs in the COMPRESSED space
+    (comp_dim tokens) and the decode path expands first.
+    """
     from models.dual_stream_decoder import DualStreamDecoder
+    from models.latent_bottleneck import LatentBottleneck
     ckpt = torch.load(args.dual_ae_ckpt, map_location='cpu', weights_only=False)
     ck = ckpt.get('args', {})
     grid = int(ck.get('latent_grid', 18))
     geo_dim = int(ck.get('geo_dim', 256))
     tex_dim = int(ck.get('tex_dim', 256))
+    has_bottleneck = bool(ck.get('has_bottleneck', False))
 
     encoder = StreamVGGT(
         img_size=args.target_size, patch_size=14, embed_dim=1024)
@@ -164,43 +175,66 @@ def load_dual_ae(args, device, dtype):
         geo_dim=geo_dim, tex_dim=tex_dim,
         base_dim=int(ck.get('decoder_base_dim', 384)),
         img_size=args.target_size, latent_grid=grid, use_checkpoint=False)
+    bottleneck = LatentBottleneck(
+        geo_dim + tex_dim, int(ck.get('comp_dim', 128))) \
+        if has_bottleneck else None
     state = ckpt['model']
-    for module, prefix in ((compressor, 'compressor.'),
-                           (tex_encoder, 'tex_encoder.'),
-                           (decoder, 'decoder.')):
+    modules = [(compressor, 'compressor.'), (tex_encoder, 'tex_encoder.'),
+               (decoder, 'decoder.')]
+    if bottleneck is not None:
+        modules.append((bottleneck, 'bottleneck.'))
+    for module, prefix in modules:
         sub = {k[len(prefix):]: v for k, v in state.items()
                if k.startswith(prefix)}
         if not sub:
             raise RuntimeError(
-                f'{args.dual_ae_ckpt} has no {prefix}* keys — not an E5 '
-                f'dual-stream checkpoint')
+                f'{args.dual_ae_ckpt} has no {prefix}* keys — wrong '
+                f'checkpoint type for this stage')
         module.load_state_dict(sub)  # strict
 
     compressor = compressor.to(device).eval()
     tex_encoder = tex_encoder.to(device).eval()
     decoder = decoder.to(device).eval()
-    for m in (encoder, compressor, tex_encoder, decoder):
+    frozen = [encoder, compressor, tex_encoder, decoder]
+    if bottleneck is not None:
+        bottleneck = bottleneck.to(device).eval()
+        frozen.append(bottleneck)
+    for m in frozen:
         for prm in m.parameters():
             prm.requires_grad_(False)
-    return encoder, compressor, tex_encoder, decoder, grid, geo_dim + tex_dim
+    latent_dim = bottleneck.comp_dim if bottleneck is not None \
+        else geo_dim + tex_dim
+    if is_main_process():
+        print(f'  dual-AE: grid={grid} geo={geo_dim} tex={tex_dim} '
+              f'bottleneck={"none" if bottleneck is None else latent_dim} '
+              f'-> diffusion latent_dim={latent_dim}')
+    return (encoder, compressor, tex_encoder, decoder, bottleneck,
+            grid, latent_dim)
 
 
 @torch.no_grad()
-def encode_tokens(encoder, compressor, tex_encoder, frames, dtype):
-    """frames [B,S,3,H,W] -> tokens [B,S,N,geo+tex] fp32 (unnormalized)."""
+def encode_tokens(encoder, compressor, tex_encoder, frames, dtype,
+                  bottleneck=None):
+    """frames [B,S,3,H,W] -> tokens [B,S,N,D] fp32 (unnormalized).
+
+    D = geo+tex (512) without a bottleneck, comp_dim (128) with one —
+    diffusion always sees the space the decoder path starts from.
+    """
     tokens_list, psi = encoder(frames.to(dtype))
     stripped = strip_special_tokens(tokens_list, psi)
     z_geo = compressor([t.float() for t in stripped])       # [B,S,C,G,G]
     z_geo = z_geo.permute(0, 1, 3, 4, 2).contiguous().float()
     z_tex = tex_encoder(frames.float()).float()             # [B,S,G,G,C]
     z = torch.cat([z_geo, z_tex], dim=-1)                   # [B,S,G,G,2C]
+    if bottleneck is not None:
+        z = bottleneck.encode(z)
     B, S, G, _, C = z.shape
     return z.reshape(B, S, G * G, C)
 
 
 @torch.no_grad()
 def measure_stats(loader, encoder, compressor, tex_encoder, args, device,
-                  dtype, use_ddp):
+                  dtype, use_ddp, bottleneck=None):
     """Per-frame per-channel mean/std for absolute z and residual (z_t-z_0).
 
     Measured over stat_batches per rank and all-reduced, then frozen into the
@@ -217,7 +251,8 @@ def measure_stats(loader, encoder, compressor, tex_encoder, args, device,
         except StopIteration:
             break
         frames = batch['frames'].to(device)
-        z = encode_tokens(encoder, compressor, tex_encoder, frames, dtype)
+        z = encode_tokens(encoder, compressor, tex_encoder, frames, dtype,
+                          bottleneck)
         B, S, N, C = z.shape
         r = z[:, 1:] - z[:, :1]
         # float32 accumulation: NPU float64 support is poor and HCCL cannot
@@ -384,6 +419,40 @@ def build_wan_optimizer(model, adapter_lr, wan_lr, wd):
     return torch.optim.AdamW(param_groups, betas=(0.9, 0.95), eps=1e-8)
 
 
+def shift_time(t, alpha):
+    """RAE dimension-dependent shift t' = a*t/(1+(a-1)*t) (identity at a=1).
+
+    Pushes training/sampling time toward the high-noise end; RAE found the
+    correction increasingly important as token dimensionality grows."""
+    if alpha == 1.0:
+        return t
+    return alpha * t / (1.0 + (alpha - 1.0) * t)
+
+
+class ShiftedOTCFM(OTCFM):
+    """OT-CFM with the RAE time shift applied to the sampled training t."""
+
+    def __init__(self, model, time_shift_alpha=1.0):
+        super().__init__(model)
+        self.time_shift_alpha = time_shift_alpha
+
+    def compute_loss(self, x1, cond=None, text_emb=None,
+                     return_outputs=False):
+        x0 = torch.randn_like(x1)
+        t = torch.rand((x1.shape[0],), device=x1.device)
+        t = shift_time(t, self.time_shift_alpha).to(dtype=x1.dtype)
+        t_expand = t.view(-1, *([1] * (x1.dim() - 1)))
+        xt = (1 - t_expand) * x0 + t_expand * x1
+        v_target = x1 - x0
+        v_pred = self.model(xt, t, cond=cond, text_emb=text_emb)
+        loss = torch.nn.functional.mse_loss(v_pred, v_target)
+        if not return_outputs:
+            return loss
+        x1_pred = xt + (1 - t_expand) * v_pred
+        return {'loss': loss, 't': t, 'xt': xt, 'v_pred': v_pred,
+                'v_target': v_target, 'x1_pred': x1_pred}
+
+
 def main():
     args = parse_args()
     use_ddp, rank, local_rank, world_size = setup_ddp()
@@ -400,8 +469,8 @@ def main():
         print(f'E7 diffusion smoke: target_mode={args.target_mode} '
               f'device={device_type} world={world_size} dtype={args.dtype}')
 
-    encoder, compressor, tex_encoder, decoder, grid, latent_dim = load_dual_ae(
-        args, device, dtype)
+    encoder, compressor, tex_encoder, decoder, bottleneck, grid, latent_dim = \
+        load_dual_ae(args, device, dtype)
     num_tokens = grid * grid
     future = args.seq_len - 1
 
@@ -454,7 +523,7 @@ def main():
             find_unused_parameters=False)
     else:
         model = core
-    cfm = OTCFM(model)
+    cfm = ShiftedOTCFM(model, time_shift_alpha=args.time_shift_alpha)
     if args.generator == 'wan':
         optimizer = build_wan_optimizer(
             core, args.adapter_lr, args.wan_lr, args.wd)
@@ -518,7 +587,7 @@ def main():
             print(f'Measuring latent stats over {args.stat_batches} '
                   f'batches/rank ...')
         stats = measure_stats(loader, encoder, compressor, tex_encoder,
-                              args, device, dtype, use_ddp)
+                              args, device, dtype, use_ddp, bottleneck)
         if main_process:
             print(f'  stats over {stats["count"]} tokens; '
                   f'abs_std mean={stats["abs_std"].mean():.4f} '
@@ -558,7 +627,8 @@ def main():
         saved = 0
         for i, batch in enumerate(eval_loader):
             frames = batch['frames'].to(device)
-            z = encode_tokens(encoder, compressor, tex_encoder, frames, dtype)
+            z = encode_tokens(encoder, compressor, tex_encoder, frames, dtype,
+                              bottleneck)
             x1, cond = build_targets(z, stats, args.target_mode, device)
             x0 = torch.randn_like(x1)
             t = torch.rand((x1.shape[0],), device=device, dtype=x1.dtype)
@@ -629,7 +699,10 @@ def main():
                                    z[:, :1], device)
             def decode(zz):
                 zz = zz.reshape(1, S, grid, grid, C)
-                geo_dim = C // 2
+                if bottleneck is not None:
+                    zz = bottleneck.decode(zz.float())
+                full = zz.shape[-1]
+                geo_dim = full // 2
                 rgb = decoder(zz[..., :geo_dim].float(),
                               zz[..., geo_dim:].float(),
                               frames_chunk_size=4)
@@ -652,12 +725,19 @@ def main():
     def cfm_sample(cond, shape):
         z = torch.randn(shape, device=device, dtype=cond.dtype)
         n_steps = args.sample_steps
+        # Integrate on the SHIFTED time grid (must match the training-time
+        # distribution): uniform grid in u, warped t = shift(u), step dt
+        # taken from consecutive warped points.
+        import numpy as _np
+        us = _np.linspace(0.0, 1.0, n_steps + 1)
+        ts = [shift_time(float(u), args.time_shift_alpha) for u in us]
         for i in range(n_steps):
-            t = torch.full((shape[0],), i / n_steps, device=device,
+            t = torch.full((shape[0],), ts[i], device=device,
                            dtype=cond.dtype)
+            dt = ts[i + 1] - ts[i]
             with amp_ctx():
                 v = core(z, t, cond=cond)
-            z = z + v.float() / n_steps
+            z = z + v.float() * dt
         return z
 
     if main_process:
@@ -673,7 +753,8 @@ def main():
         pbar = tqdm(loader, disable=not main_process, desc=f'ep{epoch}')
         for it_idx, batch in enumerate(pbar):
             frames = batch['frames'].to(device)
-            z = encode_tokens(encoder, compressor, tex_encoder, frames, dtype)
+            z = encode_tokens(encoder, compressor, tex_encoder, frames, dtype,
+                              bottleneck)
             x1, cond = build_targets(z, stats, args.target_mode, device)
             with amp_ctx():
                 loss = cfm.compute_loss(x1, cond=cond) / args.accum_steps
