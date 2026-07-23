@@ -50,28 +50,10 @@ ensure_local_checkpoint \
   "${BOTTLENECK_MIRROR}/checkpoint_latest.pt"
 
 # ------------------------------------------------------------------- gate ---
-R6_PSNR=$("${PYTHON_BIN}" - "${BOTTLENECK_DIR}/metrics.jsonl" <<'PY'
-import json, sys
-psnr = None
-try:
-    with open(sys.argv[1]) as f:
-        for line in f:
-            row = json.loads(line)
-            if 'psnr' in row:
-                psnr = row['psnr']
-except FileNotFoundError:
-    pass
-print(f'{psnr:.3f}' if psnr is not None else 'NONE')
-PY
-)
-if [[ "${R6_PSNR}" == "NONE" ]]; then
-  # metrics may live only on OBS after a node restart
-  "${PYTHON_BIN}" "${PROJECT}/scripts/moxing_transfer.py" \
-    "${BOTTLENECK_REMOTE}/metrics.jsonl" \
-    "${BOTTLENECK_DIR}/metrics.jsonl" 2>/dev/null \
-  || "${PYTHON_BIN}" "${PROJECT}/scripts/moxing_transfer.py" \
-    "${BOTTLENECK_MIRROR}/metrics.jsonl" \
-    "${BOTTLENECK_DIR}/metrics.jsonl" 2>/dev/null || true
+# A diffusion-only restart reuses an already gated R6 checkpoint. Its fresh
+# node-local output directory intentionally has no R6 metrics or samples, so
+# do not gate on artifacts that belong to the previous bottleneck run.
+if want bottleneck; then
   R6_PSNR=$("${PYTHON_BIN}" - "${BOTTLENECK_DIR}/metrics.jsonl" <<'PY'
 import json, sys
 psnr = None
@@ -85,15 +67,40 @@ except FileNotFoundError:
     pass
 print(f'{psnr:.3f}' if psnr is not None else 'NONE')
 PY
-)
-fi
-echo "=== [chain] R6 final PSNR = ${R6_PSNR} dB (gate ${GATE_DB}) ==="
-if [[ "${R6_PSNR}" == "NONE" ]] || \
-   ! "${PYTHON_BIN}" -c "exit(0 if float('${R6_PSNR}') >= ${GATE_DB} else 1)"; then
-  echo "[chain] GATE FAILED: bottleneck loses too much reconstruction." \
-       "Inspect ${BOTTLENECK_REMOTE}/samples, then either raise COMP_DIM" \
-       "(192) or extend MAX_STEPS and rerun stage bottleneck." >&2
-  exit 1
+  )
+  if [[ "${R6_PSNR}" == "NONE" ]]; then
+    # metrics may live only on OBS after a node restart
+    "${PYTHON_BIN}" "${PROJECT}/scripts/moxing_transfer.py" \
+      "${BOTTLENECK_REMOTE}/metrics.jsonl" \
+      "${BOTTLENECK_DIR}/metrics.jsonl" 2>/dev/null \
+    || "${PYTHON_BIN}" "${PROJECT}/scripts/moxing_transfer.py" \
+      "${BOTTLENECK_MIRROR}/metrics.jsonl" \
+      "${BOTTLENECK_DIR}/metrics.jsonl" 2>/dev/null || true
+    R6_PSNR=$("${PYTHON_BIN}" - "${BOTTLENECK_DIR}/metrics.jsonl" <<'PY'
+import json, sys
+psnr = None
+try:
+    with open(sys.argv[1]) as f:
+        for line in f:
+            row = json.loads(line)
+            if 'psnr' in row:
+                psnr = row['psnr']
+except FileNotFoundError:
+    pass
+print(f'{psnr:.3f}' if psnr is not None else 'NONE')
+PY
+    )
+  fi
+  echo "=== [chain] R6 final PSNR = ${R6_PSNR} dB (gate ${GATE_DB}) ==="
+  if [[ "${R6_PSNR}" == "NONE" ]] || \
+     ! "${PYTHON_BIN}" -c "exit(0 if float('${R6_PSNR}') >= ${GATE_DB} else 1)"; then
+    echo "[chain] GATE FAILED: bottleneck loses too much reconstruction." \
+         "Inspect ${BOTTLENECK_REMOTE}/samples, then either raise COMP_DIM" \
+         "(192) or extend MAX_STEPS and rerun stage bottleneck." >&2
+    exit 1
+  fi
+else
+  echo "=== [chain] reusing pre-gated R6 checkpoint; skip bottleneck gate ==="
 fi
 
 # ---------------------------------------------------------------- stage 10 --
