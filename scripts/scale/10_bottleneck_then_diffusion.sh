@@ -22,7 +22,10 @@ GATE_DB="${GATE_DB:-23.9}"
 STAGES="${STAGES:-bottleneck,diffusion}"
 BOTTLENECK_DIR="${SCALE_ROOT}/latent_bottleneck_c${COMP_DIM}"
 BOTTLENECK_REMOTE="${SCALE_REMOTE_ROOT}/latent_bottleneck_c${COMP_DIM}"
+BOTTLENECK_MIRROR="${SCALE_MIRROR_ROOT}/latent_bottleneck_c${COMP_DIM}"
 R6_CKPT="${BOTTLENECK_DIR}/checkpoint_latest.pt"
+
+configure_modelarts_distributed
 
 want() { [[ ",${STAGES}," == *",$1,"* ]]; }
 
@@ -30,22 +33,21 @@ want() { [[ ",${STAGES}," == *",$1,"* ]]; }
 if want bottleneck; then
   echo "=== [chain] stage 09: R6 bottleneck (comp_dim=${COMP_DIM}) ==="
   COMP_DIM="${COMP_DIM}" bash "${SCRIPT_DIR}/09_train_latent_bottleneck.sh"
+  # Nonzero nodes leave stage 09 before node 0 finishes its final synchronous
+  # OBS writes. Wait until that publication is complete before any node reads.
+  MASTER_PORT=29661 run_distributed_barrier
 fi
 
-# If this node skipped stage 09 (or after a restart), stage the R6 artifact.
-if [[ ! -s "${R6_CKPT}" ]]; then
-  mkdir -p "${BOTTLENECK_DIR}"
-  "${PYTHON_BIN}" "${PROJECT}/scripts/moxing_transfer.py" \
-    "${BOTTLENECK_REMOTE}/checkpoint_latest.pt" "${R6_CKPT}" 2>/dev/null \
-  || "${PYTHON_BIN}" "${PROJECT}/scripts/moxing_transfer.py" \
-    "${SCALE_MIRROR_ROOT}/latent_bottleneck_c${COMP_DIM}/checkpoint_latest.pt" \
-    "${R6_CKPT}" 2>/dev/null || true
+# /cache is node-local: only node 0 owns the R6 file written by global rank 0.
+# Every other node stages the published artifact using the standard current-
+# output then persistent-mirror fallback before its local torchrun starts.
+if [[ "${NODE_RANK}" -ne 0 ]]; then
+  rm -f "${R6_CKPT}"
 fi
-if [[ ! -s "${R6_CKPT}" ]]; then
-  echo "[chain] no R6 checkpoint found locally or on OBS — run stage" \
-       "bottleneck first" >&2
-  exit 1
-fi
+ensure_local_checkpoint \
+  "${R6_CKPT}" "${BOTTLENECK_REMOTE}/checkpoint_latest.pt" \
+  "R6 bottleneck checkpoint" \
+  "${BOTTLENECK_MIRROR}/checkpoint_latest.pt"
 
 # ------------------------------------------------------------------- gate ---
 R6_PSNR=$("${PYTHON_BIN}" - "${BOTTLENECK_DIR}/metrics.jsonl" <<'PY'
@@ -66,6 +68,9 @@ if [[ "${R6_PSNR}" == "NONE" ]]; then
   # metrics may live only on OBS after a node restart
   "${PYTHON_BIN}" "${PROJECT}/scripts/moxing_transfer.py" \
     "${BOTTLENECK_REMOTE}/metrics.jsonl" \
+    "${BOTTLENECK_DIR}/metrics.jsonl" 2>/dev/null \
+  || "${PYTHON_BIN}" "${PROJECT}/scripts/moxing_transfer.py" \
+    "${BOTTLENECK_MIRROR}/metrics.jsonl" \
     "${BOTTLENECK_DIR}/metrics.jsonl" 2>/dev/null || true
   R6_PSNR=$("${PYTHON_BIN}" - "${BOTTLENECK_DIR}/metrics.jsonl" <<'PY'
 import json, sys
@@ -97,6 +102,8 @@ if want diffusion; then
   # E9 = stage-07 harness on the R6 checkpoint: latent_dim auto-detects 128
   # via has_bottleneck; MIRA-informed width + RAE time shift via env.
   DUAL_AE_CKPT="${R6_CKPT}" \
+  DUAL_AE_CKPT_URL="${BOTTLENECK_REMOTE}/checkpoint_latest.pt" \
+  DUAL_AE_CKPT_MIRROR_URL="${BOTTLENECK_MIRROR}/checkpoint_latest.pt" \
   PROBE_SUFFIX="c${COMP_DIM}" \
   MODEL_DIM="${MODEL_DIM:-1152}" \
   SPATIAL_DEPTH="${SPATIAL_DEPTH:-10}" \

@@ -50,6 +50,7 @@ AUTO_RESUME="${AUTO_RESUME:-1}"
 # trainer auto-detects has_bottleneck and diffuses in the compressed space).
 DUAL_AE_CKPT="${DUAL_AE_CKPT:-${VGGAE_REF_ROOT}/checkpoints/e5_dual_stream_r5.pt}"
 DUAL_AE_CKPT_URL="${DUAL_AE_CKPT_URL:-}"
+DUAL_AE_CKPT_MIRROR_URL="${DUAL_AE_CKPT_MIRROR_URL:-}"
 
 MAX_STEPS="${MAX_STEPS:-6000}"
 BATCH_SIZE="${BATCH_SIZE:-2}"
@@ -78,14 +79,14 @@ require_output_url
 # of sampling nonexistent files from the full 360k metadata.
 ensure_spatialvid_subset_splits
 
-# Stage the dual-AE checkpoint from OBS if a URL is given and the local ref
-# copy is absent.
-if [[ ! -s "${DUAL_AE_CKPT}" && -n "${DUAL_AE_CKPT_URL}" ]]; then
-  mkdir -p "$(dirname "${DUAL_AE_CKPT}")"
-  "${PYTHON_BIN}" "${PROJECT}/scripts/moxing_transfer.py" \
-    "${DUAL_AE_CKPT_URL}" "${DUAL_AE_CKPT}"
+# Stage the dual-AE contract into this node's local cache. E7 normally uses a
+# launch-provided R5 file; chained E9 supplies current-output + mirror URLs.
+if [[ -n "${DUAL_AE_CKPT_URL}" || -n "${DUAL_AE_CKPT_MIRROR_URL}" ]]; then
+  ensure_local_checkpoint \
+    "${DUAL_AE_CKPT}" "${DUAL_AE_CKPT_URL}" \
+    "dual-stream AE checkpoint" "${DUAL_AE_CKPT_MIRROR_URL}"
 fi
-require_file "${DUAL_AE_CKPT}" "R5 dual-stream AE checkpoint"
+require_file "${DUAL_AE_CKPT}" "R5/R6 dual-stream AE checkpoint"
 
 echo "E7 launch: arm=${TARGET_MODE} NNODES=${NNODES} NUM_NPUS=${NUM_NPUS}" \
      "WORLD_SIZE=${WORLD_SIZE}"

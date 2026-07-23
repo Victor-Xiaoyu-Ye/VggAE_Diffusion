@@ -237,6 +237,21 @@ stop_output_sync() {
   fi
 }
 
+run_distributed_barrier() {
+  local command=(
+    "${TORCHRUN_BIN}"
+    "--nnodes=${NNODES}"
+    "--node_rank=${NODE_RANK}"
+    "--nproc_per_node=1"
+    "--master_addr=${MASTER_ADDR}"
+    "--master_port=${MASTER_PORT}"
+    "${PROJECT}/scripts/distributed_barrier.py"
+  )
+  PYTORCH_NPU_ALLOC_CONF="${PYTORCH_NPU_ALLOC_CONF:-expandable_segments:True}" \
+    OMP_NUM_THREADS="${OMP_NUM_THREADS:-4}" \
+    "${command[@]}"
+}
+
 run_torchrun() {
   local command=(
     "${TORCHRUN_BIN}"

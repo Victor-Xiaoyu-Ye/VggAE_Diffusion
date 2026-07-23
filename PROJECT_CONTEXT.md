@@ -66,6 +66,16 @@ cluster) or `scripts/10k/` (local A100). See `scripts/h200/README.md`.
   reproduced the single-stream ceiling (20.77 vs historical 20.6),
   pinning z_tex's contribution at +4.15 dB. Remaining E5 matrix item: R4
   tex_only anti-bypass proof.**
+- **R6 RESULT (2026-07-23, latent_bottleneck_c128, 48x910B): final eval
+  PSNR 24.420 ± 2.478, LPIPS 0.1124 at step 3001. This passes the E9 chain's
+  23.9 dB reconstruction gate, so the 512->128 bottleneck is accepted for the
+  compressed-latent diffusion experiment. The first E9 launch exposed a
+  multi-node staging bug: rank 12 read a truncated node-local R6 checkpoint
+  (`PytorchStreamReader ... failed finding central directory`) while rank 0
+  reached DDP. Stage 10 now waits for node 0's final synchronous dual write,
+  keeps node 0's locally produced artifact, and forces nonzero nodes to restage
+  it from the current OUTPUT_URL, falling back to the persistent owner mirror,
+  before torchrun.**
 - Generation experiments (from-scratch DiT, Wan 14B) remain paused; the
   latest Wan run (`outputs/scale/wan_compact_i2v14b480p_v1`, step 36250)
   showed under-dispersion consistent with both the old 20-PSNR latent and
@@ -326,8 +336,12 @@ makes the generator's motion contribution unmeasurable.
 - Do not assume the current working directory is repo root.
 - `VGGAE_REF_ROOT` is read-only input dependency storage, usually
   `/cache/yexiaoyu/vggae_ref`.
-- `LOCAL_CACHE_ROOT` is disposable staging, usually
-  `/cache/yexiaoyu/vggae_runtime`.
+- `LOCAL_CACHE_ROOT` is disposable node-local staging, usually
+  `/cache/yexiaoyu/vggae_runtime`; a checkpoint written by global rank 0 is not
+  automatically available at the same path on other ModelArts nodes. Chained
+  stages wait for node 0's final dual write, keep node 0's local artifact, and
+  force nonzero nodes to stage it from the current output URL, then the
+  persistent owner mirror, before torchrun.
 
 ### Code Style
 
