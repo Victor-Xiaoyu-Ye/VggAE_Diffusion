@@ -21,6 +21,7 @@ import numpy as np
 import torch
 
 from models.dual_stream_decoder import DualStreamDecoder
+from models.latent_bottleneck import LatentBottleneck
 
 
 def parse_args():
@@ -57,6 +58,14 @@ def main():
     grid = int(ck.get('latent_grid', 18))
     geo_dim = int(ck.get('geo_dim', 256))
     tex_dim = int(ck.get('tex_dim', 256))
+    bottleneck = None
+    if bool(ck.get('has_bottleneck', False)):
+        bottleneck = LatentBottleneck(
+            geo_dim + tex_dim, int(ck.get('comp_dim', 128)))
+        bottleneck.load_state_dict(
+            {k[len('bottleneck.'):]: v for k, v in ckpt['model'].items()
+             if k.startswith('bottleneck.')})
+        bottleneck = bottleneck.to(device).eval()
     decoder = DualStreamDecoder(
         geo_dim=geo_dim, tex_dim=tex_dim,
         base_dim=int(ck.get('decoder_base_dim', 384)),
@@ -80,6 +89,8 @@ def main():
                             pack['z0_unnorm'])           # [B,S,N,C]
             B, S, N, C = z.shape
             z = z.reshape(B, S, grid, grid, C).to(device)
+            if bottleneck is not None:
+                z = bottleneck.decode(z.float())
             z_geo, z_tex = z[..., :geo_dim], z[..., geo_dim:]
             with torch.no_grad():
                 rgb = decoder(z_geo.float(), z_tex.float(),

@@ -111,7 +111,9 @@ if want diffusion; then
   DUAL_AE_CKPT="${R6_CKPT}" \
   DUAL_AE_CKPT_URL="${BOTTLENECK_REMOTE}/checkpoint_latest.pt" \
   DUAL_AE_CKPT_MIRROR_URL="${BOTTLENECK_MIRROR}/checkpoint_latest.pt" \
-  PROBE_SUFFIX="c${COMP_DIM}" \
+  PROBE_SUFFIX="c${COMP_DIM}_cf0" \
+  CLEAN_FRAME0=1 \
+  AUTO_RESUME="${AUTO_RESUME:-1}" \
   MODEL_DIM="${MODEL_DIM:-1152}" \
   SPATIAL_DEPTH="${SPATIAL_DEPTH:-10}" \
   TEMPORAL_DEPTH="${TEMPORAL_DEPTH:-6}" \

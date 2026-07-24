@@ -82,15 +82,21 @@ class CompactLatentDiT(nn.Module):
     def __init__(self, latent_dim=512, num_tokens=324, model_dim=768,
                  spatial_depth=8, temporal_depth=4, num_heads=12,
                  seq_len=8, time_emb_dim=256, text_cond=True,
-                 text_dim=768, i0_condition=False, time_scale=1.0):
+                 text_dim=768, i0_condition=False, clean_frame0=False,
+                 time_scale=1.0):
         super().__init__()
+        if i0_condition and clean_frame0:
+            raise ValueError(
+                "i0_condition and clean_frame0 are mutually exclusive")
         self.latent_dim = latent_dim
         self.num_tokens = num_tokens
         self.model_dim = model_dim
         self.seq_len = seq_len
+        self.total_frames = seq_len + int(clean_frame0)
         self.time_emb_dim = time_emb_dim
         self.text_cond = text_cond
         self.i0_condition = i0_condition
+        self.clean_frame0 = clean_frame0
         self.time_scale = time_scale
 
         # ---- Time embedding (sinusoidal + MLP) ----
@@ -114,7 +120,7 @@ class CompactLatentDiT(nn.Module):
         self.spatial_pos = nn.Parameter(
             torch.randn(1, 1, num_tokens, model_dim) * 0.02)
         self.temporal_pos = nn.Parameter(
-            torch.randn(1, seq_len, 1, model_dim) * 0.02)
+            torch.randn(1, self.total_frames, 1, model_dim) * 0.02)
 
         # ---- Transformer blocks ----
         self.spatial_blocks = nn.ModuleList([
@@ -173,14 +179,35 @@ class CompactLatentDiT(nn.Module):
             v: [B, S, N, D] predicted velocity
         """
         B, S, N, D = z.shape
+        if S != self.seq_len:
+            raise ValueError(
+                f"Expected {self.seq_len} future frames, got {S}")
 
-        # Time embedding
-        t_emb = self._time_embed(t)  # [B, model_dim]
-        t_emb = t_emb.unsqueeze(1).unsqueeze(1).expand(B, S, N, -1)
+        if self.clean_frame0:
+            if cond is None:
+                raise ValueError("clean_frame0 CompactLatentDiT requires cond")
+            if cond.shape != (B, 1, N, D):
+                raise ValueError(
+                    f"Expected cond [B,1,N,D] compatible with {z.shape}, "
+                    f"got {cond.shape}")
+            clean_t = torch.ones((B,), device=t.device, dtype=t.dtype)
+            clean_emb = self._time_embed(clean_t)
+            future_emb = self._time_embed(t)
+            time_emb = torch.cat([
+                clean_emb[:, None, None, :].expand(B, 1, N, -1),
+                future_emb[:, None, None, :].expand(B, S, N, -1),
+            ], dim=1)
+            tokens = torch.cat([cond.to(dtype=z.dtype), z], dim=1)
+            S_total = S + 1
+        else:
+            time_emb = self._time_embed(t)
+            time_emb = time_emb[:, None, None, :].expand(B, S, N, -1)
+            tokens = z
+            S_total = S
 
-        # Concat token + time → wide input projection
-        x = torch.cat([z, t_emb], dim=-1)  # [B, S, N, D + model_dim]
-        x = self.input_head(x)  # [B, S, N, model_dim]
+        # Concat token + time -> wide input projection.
+        x = torch.cat([tokens, time_emb], dim=-1)
+        x = self.input_head(x)
 
         if self.i0_condition:
             if cond is None:
@@ -190,16 +217,16 @@ class CompactLatentDiT(nn.Module):
                     f"Expected cond [B, T, N, D] compatible with {z.shape}, got {cond.shape}")
             # A temporal mean also supports multiple reference frames later.
             i0_context = self.i0_proj(cond.mean(dim=1)).unsqueeze(1)
-            x = x + i0_context.expand(B, S, N, self.model_dim)
+            x = x + i0_context.expand(B, S_total, N, self.model_dim)
 
         # Add positional embeddings
-        x = x + self.spatial_pos[:, :, :N, :] + self.temporal_pos[:, :S, :, :]
+        x = x + self.spatial_pos[:, :, :N, :] + self.temporal_pos[:, :S_total, :, :]
 
         # Spatial blocks (within-frame attention)
         for i, block in enumerate(self.spatial_blocks):
-            x_flat = x.reshape(B * S, N, self.model_dim)
+            x_flat = x.reshape(B * S_total, N, self.model_dim)
             x_flat = block(x_flat)
-            x = x_flat.reshape(B, S, N, self.model_dim)
+            x = x_flat.reshape(B, S_total, N, self.model_dim)
 
             # Text cross-attention every few spatial blocks
             if self.text_cond and text_emb is not None and i % 2 == 0:
@@ -207,20 +234,22 @@ class CompactLatentDiT(nn.Module):
                 if cross_idx < len(self.cross_attn_blocks):
                     # Project text and apply cross-attention per frame
                     context = self.text_proj(text_emb.to(x.dtype))  # [B, L, model_dim]
-                    x_flat = x.reshape(B * S, N, self.model_dim)
-                    context_expanded = context.repeat_interleave(S, dim=0)  # [B*S, L, model_dim]
+                    x_flat = x.reshape(B * S_total, N, self.model_dim)
+                    context_expanded = context.repeat_interleave(S_total, dim=0)  # [B*S, L, model_dim]
                     ca_out, _ = self.cross_attn_blocks[cross_idx](
                         x_flat, context_expanded, context_expanded)
-                    x = (x_flat + ca_out).reshape(B, S, N, self.model_dim)
+                    x = (x_flat + ca_out).reshape(B, S_total, N, self.model_dim)
 
         # Temporal blocks (cross-frame attention at each spatial position)
         for block in self.temporal_blocks:
-            x_flat = x.permute(0, 2, 1, 3).contiguous().reshape(B * N, S, self.model_dim)
+            x_flat = x.permute(0, 2, 1, 3).contiguous().reshape(
+                B * N, S_total, self.model_dim)
             x_flat = block(x_flat)
-            x = x_flat.reshape(B, N, S, self.model_dim).permute(0, 2, 1, 3).contiguous()
+            x = x_flat.reshape(B, N, S_total, self.model_dim).permute(
+                0, 2, 1, 3).contiguous()
 
-        # Wide output head (zero-init)
+        # Wide output head (zero-init). The clean frame participates in every
+        # temporal block but never receives noise or a velocity loss.
         x = self.output_norm(x)
-        v = self.output_head(x)  # [B, S, N, D]
-
-        return v
+        v = self.output_head(x)
+        return v[:, 1:] if self.clean_frame0 else v

@@ -62,6 +62,7 @@ SPATIAL_DEPTH="${SPATIAL_DEPTH:-8}"
 TEMPORAL_DEPTH="${TEMPORAL_DEPTH:-4}"
 NUM_HEADS="${NUM_HEADS:-12}"
 TIME_SHIFT_ALPHA="${TIME_SHIFT_ALPHA:-1.0}"  # RAE dim-dependent shift; 1.0=off
+CLEAN_FRAME0="${CLEAN_FRAME0:-0}"
 NUM_WORKERS="${NUM_WORKERS:-4}"
 EVAL_EVERY="${EVAL_EVERY:-500}"
 SAVE_EVERY="${SAVE_EVERY:-500}"
@@ -92,6 +93,9 @@ echo "E7 launch: arm=${TARGET_MODE} NNODES=${NNODES} NUM_NPUS=${NUM_NPUS}" \
      "WORLD_SIZE=${WORLD_SIZE}"
 
 EXTRA_ARGS=()
+if [[ "${CLEAN_FRAME0}" -eq 1 ]]; then
+  EXTRA_ARGS+=(--clean_frame0)
+fi
 if [[ "${AUTO_RESUME}" -eq 1 || -n "${RESUME}" ]]; then
   RESUME=$(resolve_resume_checkpoint \
     "${RESUME}" \

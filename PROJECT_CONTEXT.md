@@ -76,6 +76,16 @@ cluster) or `scripts/10k/` (local A100). See `scripts/h200/README.md`.
   keeps node 0's locally produced artifact, and forces nonzero nodes to restage
   it from the current OUTPUT_URL, falling back to the persistent owner mirror,
   before torchrun.**
+- **E9-v1 RESULT (2026-07-23, dual_diffusion_absolute_c128, 48x910B,
+  6001 steps): compressed-latent diffusion is learnable but the additive-I0
+  condition is insufficient for useful long-horizon RGB. Velocity MSE reached
+  0.289, gen_std_ratio 0.966, and motion_ratio 1.008, yet fixed-clip RGB
+  improved only through about step 2000 (~14.5 dB) and frames 4-7 lost subject
+  structure. This isolates the bottleneck at long-horizon condition use rather
+  than R6 reconstruction or latent marginal learnability. E9-v2 keeps R6,
+  absolute targets, model size, and budget fixed, but prepends clean normalized
+  z0 as temporal frame 0 in every DiT temporal block; outputs are isolated under
+  `dual_diffusion_absolute_c128_cf0`.**
 - Generation experiments (from-scratch DiT, Wan 14B) remain paused; the
   latest Wan run (`outputs/scale/wan_compact_i2v14b480p_v1`, step 36250)
   showed under-dispersion consistent with both the old 20-PSNR latent and

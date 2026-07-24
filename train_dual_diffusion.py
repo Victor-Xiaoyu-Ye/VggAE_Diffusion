@@ -107,6 +107,9 @@ def parse_args():
     p.add_argument('--spatial_depth', type=int, default=8)
     p.add_argument('--temporal_depth', type=int, default=4)
     p.add_argument('--num_heads', type=int, default=12)
+    p.add_argument('--clean_frame0', action='store_true',
+                   help='prepend clean normalized z0 to every DiT temporal '
+                        'block and predict velocity only for future frames')
 
     p.add_argument('--max_steps', type=int, default=6000)
     p.add_argument('--batch_size', type=int, default=2)
@@ -455,6 +458,10 @@ class ShiftedOTCFM(OTCFM):
 
 def main():
     args = parse_args()
+    if args.clean_frame0 and args.generator != 'dit':
+        raise ValueError('--clean_frame0 currently supports --generator dit only')
+    if args.clean_frame0 and args.target_mode != 'absolute':
+        raise ValueError('--clean_frame0 requires --target_mode absolute')
     use_ddp, rank, local_rank, world_size = setup_ddp()
     main_process = is_main_process()
     device = get_device(local_rank)
@@ -500,7 +507,9 @@ def main():
             latent_dim=latent_dim, num_tokens=num_tokens,
             model_dim=args.model_dim, spatial_depth=args.spatial_depth,
             temporal_depth=args.temporal_depth, num_heads=args.num_heads,
-            seq_len=future, text_cond=False, i0_condition=True).to(device)
+            seq_len=future, text_cond=False,
+            i0_condition=not args.clean_frame0,
+            clean_frame0=args.clean_frame0).to(device)
         ema = EMA(core, decay=args.ema_decay, dtype=torch.float32).to(device)
         import contextlib
         amp_ctx = contextlib.nullcontext
@@ -513,9 +522,11 @@ def main():
             f'known 14B full-QKV OOM. Use the Wan2.1-T2V-1.3B checkpoint, '
             f'or --train_qkv_last_n 4 for larger backbones.')
     if main_process:
+        condition_mode = 'clean-frame0' if args.clean_frame0 else 'additive-i0'
         print(f'  generator={args.generator}: {n_train / 1e6:.1f}M trainable '
               f'/ {n_params / 1e6:.1f}M total  '
-              f'tokens/frame={num_tokens} latent_dim={latent_dim}')
+              f'tokens/frame={num_tokens} latent_dim={latent_dim} '
+              f'condition={condition_mode}')
 
     if use_ddp:
         model = nn.parallel.DistributedDataParallel(
@@ -562,9 +573,10 @@ def main():
     stats = None
     if args.resume and os.path.isfile(args.resume):
         ckpt = torch.load(args.resume, map_location='cpu', weights_only=False)
-        for key in ('target_mode', 'generator'):
-            if ckpt['args'].get(key, 'dit' if key == 'generator' else None) \
-                    != getattr(args, key):
+        for key in ('target_mode', 'generator', 'clean_frame0'):
+            default = 'dit' if key == 'generator' else False \
+                if key == 'clean_frame0' else None
+            if ckpt['args'].get(key, default) != getattr(args, key):
                 raise RuntimeError(
                     f'resume {key} {ckpt["args"].get(key)} != '
                     f'requested {getattr(args, key)}')
@@ -623,38 +635,60 @@ def main():
         core.eval()
         vmse, n = 0.0, 0
         gen_stds, tgt_stds = [], []
-        motion_ratios = []
+        motion_ratios, motion_cosines = [], []
+        motion_ratio_frames, motion_cosine_frames = [], []
         saved = 0
         for i, batch in enumerate(eval_loader):
             frames = batch['frames'].to(device)
             z = encode_tokens(encoder, compressor, tex_encoder, frames, dtype,
                               bottleneck)
             x1, cond = build_targets(z, stats, args.target_mode, device)
-            x0 = torch.randn_like(x1)
-            t = torch.rand((x1.shape[0],), device=device, dtype=x1.dtype)
+            eval_generator = torch.Generator(device='cpu')
+            eval_generator.manual_seed(args.seed + 1009 * i)
+            x0 = torch.randn(
+                x1.shape, generator=eval_generator, dtype=torch.float32,
+                device='cpu').to(device=device, dtype=x1.dtype)
+            t = torch.rand(
+                (x1.shape[0],), generator=eval_generator,
+                dtype=torch.float32, device='cpu').to(
+                    device=device, dtype=x1.dtype)
             te = t.view(-1, 1, 1, 1)
             with amp_ctx():
                 v = core((1 - te) * x0 + te * x1, t, cond=cond)
             vmse += torch.nn.functional.mse_loss(v.float(), x1 - x0).item()
             n += 1
             if saved < args.sample_clips:
-                gen = cfm_sample(cond, x1.shape)
+                sample_generator = torch.Generator(device='cpu')
+                sample_generator.manual_seed(args.seed + 1009 * i + 17)
+                sample_noise = torch.randn(
+                    x1.shape, generator=sample_generator,
+                    dtype=torch.float32, device='cpu').to(
+                        device=device, dtype=cond.dtype)
+                gen = cfm_sample(cond, x1.shape, sample_noise)
                 gen_stds.append(gen.float().std().item())
                 tgt_stds.append(x1.float().std().item())
-                # z0-copy guard: motion magnitude ||z_t - z_0|| in the
-                # UNNORMALIZED space, generated vs target. ~1 = real
-                # dynamics; <<1 = the generator is copying the condition.
+                # z0-copy guard in the unnormalized latent space. Magnitude
+                # alone can be correct while motion direction is wrong, so log
+                # both aggregate and per-horizon values.
                 z_gen = denorm_to_full(gen, stats, args.target_mode,
                                        z[:, :1], device)
-                m_gen = (z_gen[:, 1:] - z[:, :1]).flatten(2).norm(dim=2)
-                m_tgt = (z[:, 1:] - z[:, :1]).flatten(2).norm(dim=2)
-                motion_ratios.append(
-                    (m_gen / m_tgt.clamp(min=1e-8)).mean().item())
+                d_gen = (z_gen[:, 1:] - z[:, :1]).flatten(2)
+                d_tgt = (z[:, 1:] - z[:, :1]).flatten(2)
+                ratio_by_frame = (
+                    d_gen.norm(dim=2) / d_tgt.norm(dim=2).clamp(min=1e-8)
+                ).mean(0)
+                cosine_by_frame = torch.nn.functional.cosine_similarity(
+                    d_gen, d_tgt, dim=2).mean(0)
+                motion_ratio_frames.append(ratio_by_frame.cpu())
+                motion_cosine_frames.append(cosine_by_frame.cpu())
+                motion_ratios.append(ratio_by_frame.mean().item())
+                motion_cosines.append(cosine_by_frame.mean().item())
                 torch.save(
                     {'sampled_x1': gen.float().cpu(),
                      'target_x1': x1.float().cpu(),
                      'z0_unnorm': z[:, :1].float().cpu(),
                      'stats': stats, 'target_mode': args.target_mode,
+                     'clean_frame0': args.clean_frame0,
                      'grid': grid, 'step': step},
                     os.path.join(args.output_dir, 'samples',
                                  f'step{step:07d}_clip{i}.pt'))
@@ -671,6 +705,15 @@ def main():
             row['eval/gen_std'] / max(row['eval/target_std'], 1e-8))
         row['eval/motion_ratio'] = float(
             sum(motion_ratios) / max(len(motion_ratios), 1))
+        row['eval/motion_cosine'] = float(
+            sum(motion_cosines) / max(len(motion_cosines), 1))
+        if motion_ratio_frames:
+            ratio_frames = torch.stack(motion_ratio_frames).mean(0)
+            cosine_frames = torch.stack(motion_cosine_frames).mean(0)
+            for frame_idx, (ratio, cosine) in enumerate(
+                    zip(ratio_frames, cosine_frames), start=1):
+                row[f'eval/motion_ratio_f{frame_idx}'] = float(ratio)
+                row[f'eval/motion_cosine_f{frame_idx}'] = float(cosine)
         append_metrics(metrics_path, row)
         if writer:
             for k, v_ in row.items():
@@ -678,7 +721,8 @@ def main():
                     writer.add_scalar(k, v_, step)
         print(f'  [eval] step {step}: vmse={row["eval/velocity_mse"]:.4f} '
               f'gen_std_ratio={row["eval/gen_std_ratio"]:.3f} '
-              f'motion_ratio={row["eval/motion_ratio"]:.3f}')
+              f'motion_ratio={row["eval/motion_ratio"]:.3f} '
+              f'motion_cosine={row["eval/motion_cosine"]:.3f}')
         core.train()
 
     preview_ok = [True]
@@ -722,8 +766,9 @@ def main():
                   f'disabled, decode the saved .pt on the H200 box instead')
 
     @torch.no_grad()
-    def cfm_sample(cond, shape):
-        z = torch.randn(shape, device=device, dtype=cond.dtype)
+    def cfm_sample(cond, shape, initial_noise=None):
+        z = initial_noise.clone() if initial_noise is not None else torch.randn(
+            shape, device=device, dtype=cond.dtype)
         n_steps = args.sample_steps
         # Integrate on the SHIFTED time grid (must match the training-time
         # distribution): uniform grid in u, warped t = shift(u), step dt
