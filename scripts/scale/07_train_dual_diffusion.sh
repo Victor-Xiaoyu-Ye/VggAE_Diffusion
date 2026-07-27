@@ -63,12 +63,22 @@ TEMPORAL_DEPTH="${TEMPORAL_DEPTH:-4}"
 NUM_HEADS="${NUM_HEADS:-12}"
 TIME_SHIFT_ALPHA="${TIME_SHIFT_ALPHA:-1.0}"  # RAE dim-dependent shift; 1.0=off
 CLEAN_FRAME0="${CLEAN_FRAME0:-0}"
+BLOCK_SCHEDULE="${BLOCK_SCHEDULE:-phased}"
+TIME_SCALE="${TIME_SCALE:-1.0}"
+LAMBDA_MOTION="${LAMBDA_MOTION:-0.0}"
+LAMBDA_ACCEL="${LAMBDA_ACCEL:-0.0}"
+LAMBDA_GEO_MOTION="${LAMBDA_GEO_MOTION:-0.0}"
+AUX_WARMUP_STEPS="${AUX_WARMUP_STEPS:-1000}"
+AUX_RAMP_STEPS="${AUX_RAMP_STEPS:-1000}"
+AUX_T_MIN="${AUX_T_MIN:-0.6}"
 NUM_WORKERS="${NUM_WORKERS:-4}"
+STAT_BATCHES="${STAT_BATCHES:-16}"
 EVAL_EVERY="${EVAL_EVERY:-500}"
 SAVE_EVERY="${SAVE_EVERY:-500}"
 LOG_EVERY="${LOG_EVERY:-50}"
 SAMPLE_STEPS="${SAMPLE_STEPS:-30}"
 EVAL_CLIPS="${EVAL_CLIPS:-16}"
+SAMPLE_CLIPS="${SAMPLE_CLIPS:-4}"
 MASTER_PORT=29640
 # -----------------------------------------------------------------------------
 
@@ -131,14 +141,24 @@ run_torchrun "${PROJECT}/train_dual_diffusion.py" \
   --spatial_depth "${SPATIAL_DEPTH}" \
   --temporal_depth "${TEMPORAL_DEPTH}" \
   --num_heads "${NUM_HEADS}" \
+  --block_schedule "${BLOCK_SCHEDULE}" \
+  --time_scale "${TIME_SCALE}" \
   --time_shift_alpha "${TIME_SHIFT_ALPHA}" \
+  --lambda_motion "${LAMBDA_MOTION}" \
+  --lambda_accel "${LAMBDA_ACCEL}" \
+  --lambda_geo_motion "${LAMBDA_GEO_MOTION}" \
+  --aux_warmup_steps "${AUX_WARMUP_STEPS}" \
+  --aux_ramp_steps "${AUX_RAMP_STEPS}" \
+  --aux_t_min "${AUX_T_MIN}" \
   --max_steps "${MAX_STEPS}" \
   --batch_size "${BATCH_SIZE}" \
   --accum_steps "${ACCUM_STEPS}" \
   --lr "${LEARNING_RATE}" \
   --warmup_steps "${WARMUP_STEPS}" \
   --num_workers "${NUM_WORKERS}" \
+  --stat_batches "${STAT_BATCHES}" \
   --eval_clips "${EVAL_CLIPS}" \
+  --sample_clips "${SAMPLE_CLIPS}" \
   --sample_steps "${SAMPLE_STEPS}" \
   --eval_every "${EVAL_EVERY}" \
   --save_every "${SAVE_EVERY}" \

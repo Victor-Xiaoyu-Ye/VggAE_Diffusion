@@ -105,20 +105,36 @@ fi
 
 # ---------------------------------------------------------------- stage 10 --
 if want diffusion; then
-  echo "=== [chain] stage 10: compressed diffusion (E9) ==="
-  # E9 = stage-07 harness on the R6 checkpoint: latent_dim auto-detects 128
-  # via has_bottleneck; MIRA-informed width + RAE time shift via env.
+  echo "=== [chain] stage 10: compressed diffusion (E9-v3 spatiotemporal motion) ==="
+  # E9-v3 combines clean z0, interleaved axial attention, and trajectory losses
+  # while keeping the accepted R6 latent and DiT capacity fixed.
   DUAL_AE_CKPT="${R6_CKPT}" \
   DUAL_AE_CKPT_URL="${BOTTLENECK_REMOTE}/checkpoint_latest.pt" \
   DUAL_AE_CKPT_MIRROR_URL="${BOTTLENECK_MIRROR}/checkpoint_latest.pt" \
-  PROBE_SUFFIX="c${COMP_DIM}_cf0" \
+  PROBE_SUFFIX="${PROBE_SUFFIX_OVERRIDE:-c${COMP_DIM}_cf0_stmotion}" \
   CLEAN_FRAME0=1 \
+  BLOCK_SCHEDULE=interleaved \
+  LAMBDA_MOTION="${LAMBDA_MOTION:-0.10}" \
+  LAMBDA_ACCEL="${LAMBDA_ACCEL:-0.05}" \
+  LAMBDA_GEO_MOTION="${LAMBDA_GEO_MOTION:-0.05}" \
+  AUX_WARMUP_STEPS="${AUX_WARMUP_STEPS:-1000}" \
+  AUX_RAMP_STEPS="${AUX_RAMP_STEPS:-1000}" \
+  AUX_T_MIN="${AUX_T_MIN:-0.60}" \
   AUTO_RESUME="${AUTO_RESUME:-1}" \
   MODEL_DIM="${MODEL_DIM:-1152}" \
   SPATIAL_DEPTH="${SPATIAL_DEPTH:-10}" \
   TEMPORAL_DEPTH="${TEMPORAL_DEPTH:-6}" \
   NUM_HEADS="${NUM_HEADS:-16}" \
   TIME_SHIFT_ALPHA="${TIME_SHIFT_ALPHA:-1.5}" \
+  WARMUP_STEPS="${WARMUP_STEPS:-300}" \
+  NUM_WORKERS="${NUM_WORKERS:-4}" \
+  STAT_BATCHES="${STAT_BATCHES:-16}" \
+  EVAL_CLIPS="${EVAL_CLIPS:-16}" \
+  SAMPLE_CLIPS="${SAMPLE_CLIPS:-4}" \
+  SAMPLE_STEPS="${SAMPLE_STEPS:-30}" \
+  EVAL_EVERY="${EVAL_EVERY:-500}" \
+  SAVE_EVERY="${SAVE_EVERY:-500}" \
+  LOG_EVERY="${LOG_EVERY:-50}" \
   BATCH_SIZE="${BATCH_SIZE:-2}" \
   MAX_STEPS="${MAX_STEPS_DIFF:-6000}" \
   bash "${SCRIPT_DIR}/07_train_dual_diffusion.sh"

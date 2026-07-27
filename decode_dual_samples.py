@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import glob
+import json
 import os
 
 import numpy as np
@@ -84,6 +85,7 @@ def main():
     for path in paths:
         pack = torch.load(path, map_location='cpu', weights_only=False)
         name = os.path.splitext(os.path.basename(path))[0]
+        decoded = {}
         for key in ('sampled_x1', 'target_x1'):
             z = denormalize(pack[key], pack['stats'], pack['target_mode'],
                             pack['z0_unnorm'])           # [B,S,N,C]
@@ -96,11 +98,39 @@ def main():
                 rgb = decoder(z_geo.float(), z_tex.float(),
                               frames_chunk_size=4)       # [B,S,H,W,3]
             rgb = rgb[..., :3].clamp(0, 1)
+            decoded[key] = rgb.float().cpu()
+            frames_dir = os.path.join(args.out_dir, name, key)
+            os.makedirs(frames_dir, exist_ok=True)
+            for frame_idx in range(S):
+                frame = (decoded[key][0, frame_idx].numpy() * 255).round().astype(
+                    np.uint8)
+                Image.fromarray(frame).save(os.path.join(
+                    frames_dir, f'frame{frame_idx:02d}.png'))
             rows = torch.cat([rgb[0, s] for s in range(S)], dim=0)
             img = (rows.cpu().numpy() * 255).astype(np.uint8)
             out = os.path.join(args.out_dir, f'{name}_{key}.png')
             Image.fromarray(img).save(out)
             print(f'  {out}')
+        sampled = decoded['sampled_x1']
+        target = decoded['target_x1']
+        mse = (sampled - target).square().mean(dim=(0, 2, 3, 4))
+        psnr = -10.0 * torch.log10(mse.clamp(min=1e-12))
+        sampled_delta = sampled[:, 1:] - sampled[:, :-1]
+        target_delta = target[:, 1:] - target[:, :-1]
+        temporal_mse = (sampled_delta - target_delta).square().mean(
+            dim=(0, 2, 3, 4))
+        metrics = {
+            'sample': name,
+            'step': int(pack.get('step', 0)),
+            'rgb_psnr_by_frame': [float(value) for value in psnr],
+            'rgb_psnr_future_mean': float(psnr[1:].mean()),
+            'temporal_mse_by_transition': [
+                float(value) for value in temporal_mse],
+        }
+        metrics_path = os.path.join(args.out_dir, f'{name}_metrics.json')
+        with open(metrics_path, 'w') as handle:
+            json.dump(metrics, handle, indent=2)
+        print(f'  {metrics_path}')
 
 
 if __name__ == '__main__':

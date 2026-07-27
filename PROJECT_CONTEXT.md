@@ -85,7 +85,19 @@ cluster) or `scripts/10k/` (local A100). See `scripts/h200/README.md`.
   than R6 reconstruction or latent marginal learnability. E9-v2 keeps R6,
   absolute targets, model size, and budget fixed, but prepends clean normalized
   z0 as temporal frame 0 in every DiT temporal block; outputs are isolated under
-  `dual_diffusion_absolute_c128_cf0`.**
+  `dual_diffusion_absolute_c128_cf0`. Clean z0 uses the flow data-endpoint
+  `t=1` embedding; only future frames receive the sampled shifted flow time.**
+- **E9-v3 DESIGN (2026-07-27): the next combined optimization arm is
+  `dual_diffusion_absolute_c128_cf0_stmotion`. It preserves R6 c128, absolute
+  targets, clean z0 with t=1, 1152-wide 10S/6T DiT, and the 6000-step budget,
+  but executes `S0,T0,...,S5,T5,S6..S9` so temporal information is repeatedly
+  redistributed spatially. Training adds high-t, warmup-ramped trajectory
+  losses in unnormalized c128 (`lambda_motion=0.10`, `lambda_accel=0.05`) and
+  expanded frozen geo256 (`lambda_geo_motion=0.05`), with warmup/ramp 1000/1000
+  and shifted-t gate 0.60. Evaluation uses EMA weights, deterministic noise,
+  per-horizon motion metrics, and synchronized rank-0 eval/save. This is a
+  deliberate joint arm aimed at reasonable geometry-consistent video, not a
+  single-variable ablation.**
 - Generation experiments (from-scratch DiT, Wan 14B) remain paused; the
   latest Wan run (`outputs/scale/wan_compact_i2v14b480p_v1`, step 36250)
   showed under-dispersion consistent with both the old 20-PSNR latent and

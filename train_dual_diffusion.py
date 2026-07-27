@@ -28,6 +28,7 @@ Success metrics (logged every eval):
 from __future__ import annotations
 
 import argparse
+import contextlib
 import os
 import time
 from datetime import datetime
@@ -110,6 +111,15 @@ def parse_args():
     p.add_argument('--clean_frame0', action='store_true',
                    help='prepend clean normalized z0 to every DiT temporal '
                         'block and predict velocity only for future frames')
+    p.add_argument('--block_schedule', type=str, default='phased',
+                   choices=['phased', 'interleaved'])
+    p.add_argument('--time_scale', type=float, default=1.0)
+    p.add_argument('--lambda_motion', type=float, default=0.0)
+    p.add_argument('--lambda_accel', type=float, default=0.0)
+    p.add_argument('--lambda_geo_motion', type=float, default=0.0)
+    p.add_argument('--aux_warmup_steps', type=int, default=1000)
+    p.add_argument('--aux_ramp_steps', type=int, default=1000)
+    p.add_argument('--aux_t_min', type=float, default=0.6)
 
     p.add_argument('--max_steps', type=int, default=6000)
     p.add_argument('--batch_size', type=int, default=2)
@@ -319,6 +329,73 @@ def denorm_to_full(x1, stats, target_mode, z0, device):
     return torch.cat([z0, z_future], dim=1)
 
 
+def masked_auxiliary_loss(error, t, threshold):
+    """Mean a per-element error over high-t samples without slicing ranks."""
+    per_sample = error.float().reshape(error.shape[0], -1).mean(dim=1)
+    weights = (t.float() >= threshold).to(per_sample.dtype)
+    return (per_sample * weights).sum() / weights.sum().clamp(min=1.0)
+
+
+def auxiliary_scale(step, warmup_steps, ramp_steps):
+    if step < warmup_steps:
+        return 0.0
+    if ramp_steps <= 0:
+        return 1.0
+    return min(1.0, (step - warmup_steps + 1) / ramp_steps)
+
+
+def motion_auxiliary_losses(x1_pred, z, stats, t, bottleneck,
+                            geo_dim, t_min):
+    """Trajectory losses in unnormalized compressed and expanded geo space."""
+    mean = stats['abs_mean'][1:].to(x1_pred.device)
+    std = stats['abs_std'][1:].to(x1_pred.device)
+    future_pred = (
+        x1_pred.float() * std.unsqueeze(0).unsqueeze(2)
+        + mean.unsqueeze(0).unsqueeze(2))
+    pred = torch.cat([z[:, :1].float(), future_pred], dim=1)
+    target = z.float()
+
+    pred_motion = pred[:, 1:] - pred[:, :-1]
+    target_motion = target[:, 1:] - target[:, :-1]
+    motion = masked_auxiliary_loss(
+        (pred_motion - target_motion).square(), t, t_min)
+
+    pred_accel = pred_motion[:, 1:] - pred_motion[:, :-1]
+    target_accel = target_motion[:, 1:] - target_motion[:, :-1]
+    accel = masked_auxiliary_loss(
+        (pred_accel - target_accel).square(), t, t_min)
+
+    if bottleneck is not None:
+        pred_geo = bottleneck.decode(pred)[..., :geo_dim]
+        target_geo = bottleneck.decode(target)[..., :geo_dim]
+    else:
+        pred_geo, target_geo = pred[..., :geo_dim], target[..., :geo_dim]
+    pred_geo_motion = pred_geo[:, 1:] - pred_geo[:, :-1]
+    target_geo_motion = target_geo[:, 1:] - target_geo[:, :-1]
+    geo_motion = masked_auxiliary_loss(
+        (pred_geo_motion - target_geo_motion).square(), t, t_min)
+    return motion, accel, geo_motion
+
+
+@contextlib.contextmanager
+def ema_weights(model, ema):
+    """Temporarily evaluate with EMA parameters, then restore train weights."""
+    parameters = dict(model.named_parameters())
+    backup = {}
+    try:
+        for name, shadow in ema.shadow.items():
+            if name not in parameters:
+                continue
+            parameter = parameters[name]
+            backup[name] = parameter.detach().clone()
+            parameter.data.copy_(shadow.to(
+                device=parameter.device, dtype=parameter.dtype))
+        yield
+    finally:
+        for name, value in backup.items():
+            parameters[name].data.copy_(value)
+
+
 # --------------------------------------------------------------------------
 # Wan adapter support (patterns proven on the cluster by
 # train_cached_wan_compact_diffusion.py): the full Wan backbone is loaded
@@ -462,6 +539,16 @@ def main():
         raise ValueError('--clean_frame0 currently supports --generator dit only')
     if args.clean_frame0 and args.target_mode != 'absolute':
         raise ValueError('--clean_frame0 requires --target_mode absolute')
+    aux_enabled = any(value > 0 for value in (
+        args.lambda_motion, args.lambda_accel, args.lambda_geo_motion))
+    if aux_enabled and not args.clean_frame0:
+        raise ValueError('motion auxiliaries require --clean_frame0')
+    if any(value < 0 for value in (
+            args.lambda_motion, args.lambda_accel,
+            args.lambda_geo_motion, args.aux_t_min)):
+        raise ValueError('motion auxiliary weights and aux_t_min must be nonnegative')
+    if args.aux_warmup_steps < 0 or args.aux_ramp_steps < 0:
+        raise ValueError('auxiliary warmup/ramp steps must be nonnegative')
     use_ddp, rank, local_rank, world_size = setup_ddp()
     main_process = is_main_process()
     device = get_device(local_rank)
@@ -479,6 +566,8 @@ def main():
     encoder, compressor, tex_encoder, decoder, bottleneck, grid, latent_dim = \
         load_dual_ae(args, device, dtype)
     num_tokens = grid * grid
+    geo_latent_dim = (
+        bottleneck.full_dim // 2 if bottleneck is not None else latent_dim // 2)
     future = args.seq_len - 1
 
     if args.generator == 'wan':
@@ -500,7 +589,6 @@ def main():
         ema = TrainableEMA(core, decay=args.ema_decay)
         # Wan matmuls need autocast (frozen bf16 x fp32 adapters); the DiT
         # baseline stays pure fp32 so E7-a numbers remain comparable.
-        import contextlib
         amp_ctx = lambda: torch.autocast(device_type=device_type, dtype=dtype)
     else:
         core = CompactLatentDiT(
@@ -509,10 +597,12 @@ def main():
             temporal_depth=args.temporal_depth, num_heads=args.num_heads,
             seq_len=future, text_cond=False,
             i0_condition=not args.clean_frame0,
-            clean_frame0=args.clean_frame0).to(device)
+            clean_frame0=args.clean_frame0,
+            block_schedule=args.block_schedule,
+            time_scale=args.time_scale).to(device)
         ema = EMA(core, decay=args.ema_decay, dtype=torch.float32).to(device)
-        import contextlib
         amp_ctx = contextlib.nullcontext
+
     n_params = sum(p.numel() for p in core.parameters())
     n_train = sum(p.numel() for p in core.parameters() if p.requires_grad)
     if args.generator == 'wan' and n_train > 1.5e9:
@@ -526,7 +616,8 @@ def main():
         print(f'  generator={args.generator}: {n_train / 1e6:.1f}M trainable '
               f'/ {n_params / 1e6:.1f}M total  '
               f'tokens/frame={num_tokens} latent_dim={latent_dim} '
-              f'condition={condition_mode}')
+              f'condition={condition_mode} schedule={args.block_schedule} '
+              f'time_scale={args.time_scale:g}')
 
     if use_ddp:
         model = nn.parallel.DistributedDataParallel(
@@ -573,10 +664,18 @@ def main():
     stats = None
     if args.resume and os.path.isfile(args.resume):
         ckpt = torch.load(args.resume, map_location='cpu', weights_only=False)
-        for key in ('target_mode', 'generator', 'clean_frame0'):
-            default = 'dit' if key == 'generator' else False \
-                if key == 'clean_frame0' else None
-            if ckpt['args'].get(key, default) != getattr(args, key):
+        defaults = {
+            'generator': 'dit', 'clean_frame0': False,
+            'block_schedule': 'phased', 'time_scale': 1.0,
+            'lambda_motion': 0.0, 'lambda_accel': 0.0,
+            'lambda_geo_motion': 0.0, 'aux_warmup_steps': 1000,
+            'aux_ramp_steps': 1000, 'aux_t_min': 0.6,
+        }
+        for key in ('target_mode', 'generator', 'clean_frame0',
+                    'block_schedule', 'time_scale', 'lambda_motion',
+                    'lambda_accel', 'lambda_geo_motion',
+                    'aux_warmup_steps', 'aux_ramp_steps', 'aux_t_min'):
+            if ckpt['args'].get(key, defaults.get(key)) != getattr(args, key):
                 raise RuntimeError(
                     f'resume {key} {ckpt["args"].get(key)} != '
                     f'requested {getattr(args, key)}')
@@ -634,9 +733,11 @@ def main():
     def run_eval(step):
         core.eval()
         vmse, n = 0.0, 0
+        vmse_buckets = {value: 0.0 for value in (0.1, 0.3, 0.5, 0.7, 0.9)}
         gen_stds, tgt_stds = [], []
         motion_ratios, motion_cosines = [], []
         motion_ratio_frames, motion_cosine_frames = [], []
+        latent_mse_frames = []
         saved = 0
         for i, batch in enumerate(eval_loader):
             frames = batch['frames'].to(device)
@@ -656,6 +757,15 @@ def main():
             with amp_ctx():
                 v = core((1 - te) * x0 + te * x1, t, cond=cond)
             vmse += torch.nn.functional.mse_loss(v.float(), x1 - x0).item()
+            for bucket in vmse_buckets:
+                bucket_t = torch.full_like(t, bucket)
+                bucket_te = bucket_t.view(-1, 1, 1, 1)
+                with amp_ctx():
+                    bucket_v = core(
+                        (1 - bucket_te) * x0 + bucket_te * x1,
+                        bucket_t, cond=cond)
+                vmse_buckets[bucket] += torch.nn.functional.mse_loss(
+                    bucket_v.float(), x1 - x0).item()
             n += 1
             if saved < args.sample_clips:
                 sample_generator = torch.Generator(device='cpu')
@@ -681,6 +791,9 @@ def main():
                     d_gen, d_tgt, dim=2).mean(0)
                 motion_ratio_frames.append(ratio_by_frame.cpu())
                 motion_cosine_frames.append(cosine_by_frame.cpu())
+                latent_mse_frames.append(
+                    (z_gen[:, 1:] - z[:, 1:]).square().flatten(2).mean(2)
+                    .mean(0).cpu())
                 motion_ratios.append(ratio_by_frame.mean().item())
                 motion_cosines.append(cosine_by_frame.mean().item())
                 torch.save(
@@ -697,10 +810,13 @@ def main():
                 saved += 1
         row = {
             'step': step, 'target_mode': args.target_mode,
+            'eval/weights': 'ema',
             'eval/velocity_mse': vmse / max(n, 1),
             'eval/gen_std': float(sum(gen_stds) / max(len(gen_stds), 1)),
             'eval/target_std': float(sum(tgt_stds) / max(len(tgt_stds), 1)),
         }
+        for bucket, value in vmse_buckets.items():
+            row[f'eval/velocity_mse_t{bucket:.1f}'] = value / max(n, 1)
         row['eval/gen_std_ratio'] = (
             row['eval/gen_std'] / max(row['eval/target_std'], 1e-8))
         row['eval/motion_ratio'] = float(
@@ -710,10 +826,12 @@ def main():
         if motion_ratio_frames:
             ratio_frames = torch.stack(motion_ratio_frames).mean(0)
             cosine_frames = torch.stack(motion_cosine_frames).mean(0)
-            for frame_idx, (ratio, cosine) in enumerate(
-                    zip(ratio_frames, cosine_frames), start=1):
+            for frame_idx, (ratio, cosine, latent_mse) in enumerate(
+                    zip(ratio_frames, cosine_frames,
+                        torch.stack(latent_mse_frames).mean(0)), start=1):
                 row[f'eval/motion_ratio_f{frame_idx}'] = float(ratio)
                 row[f'eval/motion_cosine_f{frame_idx}'] = float(cosine)
+                row[f'eval/latent_mse_f{frame_idx}'] = float(latent_mse)
         append_metrics(metrics_path, row)
         if writer:
             for k, v_ in row.items():
@@ -802,7 +920,25 @@ def main():
                               bottleneck)
             x1, cond = build_targets(z, stats, args.target_mode, device)
             with amp_ctx():
-                loss = cfm.compute_loss(x1, cond=cond) / args.accum_steps
+                flow_out = cfm.compute_loss(
+                    x1, cond=cond, return_outputs=True)
+                flow_loss = flow_out['loss']
+                zero = flow_loss.new_zeros(())
+                motion_loss = accel_loss = geo_motion_loss = zero
+                aux_scale = auxiliary_scale(
+                    global_step, args.aux_warmup_steps,
+                    args.aux_ramp_steps)
+                if aux_enabled and aux_scale > 0:
+                    motion_loss, accel_loss, geo_motion_loss = \
+                        motion_auxiliary_losses(
+                            flow_out['x1_pred'], z, stats, flow_out['t'],
+                            bottleneck, geo_latent_dim, args.aux_t_min)
+                total_loss = (
+                    flow_loss
+                    + aux_scale * args.lambda_motion * motion_loss
+                    + aux_scale * args.lambda_accel * accel_loss
+                    + aux_scale * args.lambda_geo_motion * geo_motion_loss)
+                loss = total_loss / args.accum_steps
             loss.backward()
             if (it_idx + 1) % args.accum_steps != 0:
                 continue
@@ -835,7 +971,12 @@ def main():
                 window_start = now
                 row = {
                     'step': global_step, 'target_mode': args.target_mode,
-                    'train/loss': float(loss.item() * args.accum_steps),
+                    'train/loss': float(total_loss.item()),
+                    'train/flow_loss': float(flow_loss.item()),
+                    'train/motion_loss': float(motion_loss.item()),
+                    'train/accel_loss': float(accel_loss.item()),
+                    'train/geo_motion_loss': float(geo_motion_loss.item()),
+                    'train/aux_scale': float(aux_scale),
                     'train/grad_norm': float(grad_norm),
                     'train/lr': scheduler.get_last_lr()[0],
                     'DI_throughput': di_throughput,
@@ -856,17 +997,29 @@ def main():
                     'DI_throughput': f'{di_throughput:.2f}',
                 })
 
-            if main_process and global_step % args.eval_every == 0:
-                run_eval(global_step)
-            if main_process and global_step % args.save_every == 0:
-                save_ckpt(global_step)
+            should_eval = global_step % args.eval_every == 0
+            should_save = global_step % args.save_every == 0
+            if should_eval or should_save:
+                if use_ddp:
+                    dist.barrier()
+                if main_process:
+                    if should_eval:
+                        with ema_weights(core, ema):
+                            run_eval(global_step)
+                    if should_save:
+                        save_ckpt(global_step)
+                if use_ddp:
+                    dist.barrier()
             if global_step >= args.max_steps:
                 done = True
                 break
         epoch += 1
 
+    if use_ddp:
+        dist.barrier()
     if main_process:
-        run_eval(global_step)
+        with ema_weights(core, ema):
+            run_eval(global_step)
         save_ckpt(global_step)
         if writer:
             writer.close()

@@ -83,11 +83,18 @@ class CompactLatentDiT(nn.Module):
                  spatial_depth=8, temporal_depth=4, num_heads=12,
                  seq_len=8, time_emb_dim=256, text_cond=True,
                  text_dim=768, i0_condition=False, clean_frame0=False,
-                 time_scale=1.0):
+                 block_schedule='phased', time_scale=1.0):
         super().__init__()
         if i0_condition and clean_frame0:
             raise ValueError(
                 "i0_condition and clean_frame0 are mutually exclusive")
+        if block_schedule == 'interleaved' and temporal_depth > spatial_depth:
+            raise ValueError(
+                'interleaved schedule requires temporal_depth <= spatial_depth')
+        if block_schedule not in ('phased', 'interleaved'):
+            raise ValueError(
+                f"Unknown block_schedule={block_schedule!r}; expected "
+                "'phased' or 'interleaved'")
         self.latent_dim = latent_dim
         self.num_tokens = num_tokens
         self.model_dim = model_dim
@@ -97,6 +104,7 @@ class CompactLatentDiT(nn.Module):
         self.text_cond = text_cond
         self.i0_condition = i0_condition
         self.clean_frame0 = clean_frame0
+        self.block_schedule = block_schedule
         self.time_scale = time_scale
 
         # ---- Time embedding (sinusoidal + MLP) ----
@@ -222,31 +230,40 @@ class CompactLatentDiT(nn.Module):
         # Add positional embeddings
         x = x + self.spatial_pos[:, :, :N, :] + self.temporal_pos[:, :S_total, :, :]
 
-        # Spatial blocks (within-frame attention)
-        for i, block in enumerate(self.spatial_blocks):
+        def run_spatial(x, block, block_idx):
             x_flat = x.reshape(B * S_total, N, self.model_dim)
             x_flat = block(x_flat)
             x = x_flat.reshape(B, S_total, N, self.model_dim)
-
-            # Text cross-attention every few spatial blocks
-            if self.text_cond and text_emb is not None and i % 2 == 0:
-                cross_idx = i // 2
+            if self.text_cond and text_emb is not None and block_idx % 2 == 0:
+                cross_idx = block_idx // 2
                 if cross_idx < len(self.cross_attn_blocks):
-                    # Project text and apply cross-attention per frame
-                    context = self.text_proj(text_emb.to(x.dtype))  # [B, L, model_dim]
+                    context = self.text_proj(text_emb.to(x.dtype))
                     x_flat = x.reshape(B * S_total, N, self.model_dim)
-                    context_expanded = context.repeat_interleave(S_total, dim=0)  # [B*S, L, model_dim]
+                    context_expanded = context.repeat_interleave(
+                        S_total, dim=0)
                     ca_out, _ = self.cross_attn_blocks[cross_idx](
                         x_flat, context_expanded, context_expanded)
-                    x = (x_flat + ca_out).reshape(B, S_total, N, self.model_dim)
+                    x = (x_flat + ca_out).reshape(
+                        B, S_total, N, self.model_dim)
+            return x
 
-        # Temporal blocks (cross-frame attention at each spatial position)
-        for block in self.temporal_blocks:
+        def run_temporal(x, block):
             x_flat = x.permute(0, 2, 1, 3).contiguous().reshape(
                 B * N, S_total, self.model_dim)
             x_flat = block(x_flat)
-            x = x_flat.reshape(B, N, S_total, self.model_dim).permute(
+            return x_flat.reshape(B, N, S_total, self.model_dim).permute(
                 0, 2, 1, 3).contiguous()
+
+        if self.block_schedule == 'interleaved':
+            for block_idx, block in enumerate(self.spatial_blocks):
+                x = run_spatial(x, block, block_idx)
+                if block_idx < len(self.temporal_blocks):
+                    x = run_temporal(x, self.temporal_blocks[block_idx])
+        else:
+            for block_idx, block in enumerate(self.spatial_blocks):
+                x = run_spatial(x, block, block_idx)
+            for block in self.temporal_blocks:
+                x = run_temporal(x, block)
 
         # Wide output head (zero-init). The clean frame participates in every
         # temporal block but never receives noise or a velocity loss.

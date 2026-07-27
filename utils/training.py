@@ -31,6 +31,13 @@ class EMA:
         return self.shadow
     def load_state_dict(self, state_dict):
         self.shadow = state_dict
+    def copy_to(self, model):
+        parameters = dict(model.named_parameters())
+        for name, value in self.shadow.items():
+            if name in parameters:
+                parameters[name].data.copy_(value.to(
+                    device=parameters[name].device,
+                    dtype=parameters[name].dtype))
     def to(self, device):
         self.shadow = {k: v.to(device) for k, v in self.shadow.items()}
         return self
