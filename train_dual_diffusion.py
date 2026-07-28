@@ -120,6 +120,10 @@ def parse_args():
     p.add_argument('--aux_warmup_steps', type=int, default=1000)
     p.add_argument('--aux_ramp_steps', type=int, default=1000)
     p.add_argument('--aux_t_min', type=float, default=0.6)
+    p.add_argument('--extension_lr', type=float, default=0.0,
+                   help='LR peak for extending a completed checkpoint to a '
+                        'larger max_steps; 0 restores the saved scheduler')
+    p.add_argument('--extension_warmup_steps', type=int, default=200)
 
     p.add_argument('--max_steps', type=int, default=6000)
     p.add_argument('--batch_size', type=int, default=2)
@@ -396,6 +400,37 @@ def ema_weights(model, ema):
             parameters[name].data.copy_(value)
 
 
+def build_extension_scheduler(optimizer, old_lrs, peak_lr, warmup_steps,
+                              remaining_steps, min_lr=1e-6):
+    """Warm from the completed-run LR, then cosine-decay over the extension."""
+    if remaining_steps <= 0:
+        raise ValueError('extension requires remaining optimizer steps')
+    if peak_lr <= 0:
+        raise ValueError('extension peak LR must be positive')
+    max_old_lr = max(old_lrs)
+    ratios = [lr / max_old_lr if max_old_lr > 0 else 1.0 for lr in old_lrs]
+    peak_lrs = [peak_lr * ratio for ratio in ratios]
+    for group, lr in zip(optimizer.param_groups, peak_lrs):
+        group['lr'] = lr
+        group['initial_lr'] = lr
+    warmup_steps = min(warmup_steps, max(remaining_steps - 1, 0))
+    schedulers = []
+    milestones = []
+    if warmup_steps > 0:
+        start_factor = max(min(max_old_lr / peak_lr, 1.0), 1e-4)
+        schedulers.append(torch.optim.lr_scheduler.LinearLR(
+            optimizer, start_factor=start_factor, end_factor=1.0,
+            total_iters=warmup_steps))
+        milestones.append(warmup_steps)
+    cosine_steps = max(remaining_steps - warmup_steps, 1)
+    schedulers.append(torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=cosine_steps, eta_min=min_lr))
+    if len(schedulers) == 1:
+        return schedulers[0]
+    return torch.optim.lr_scheduler.SequentialLR(
+        optimizer, schedulers, milestones=milestones)
+
+
 # --------------------------------------------------------------------------
 # Wan adapter support (patterns proven on the cluster by
 # train_cached_wan_compact_diffusion.py): the full Wan backbone is loaded
@@ -549,6 +584,8 @@ def main():
         raise ValueError('motion auxiliary weights and aux_t_min must be nonnegative')
     if args.aux_warmup_steps < 0 or args.aux_ramp_steps < 0:
         raise ValueError('auxiliary warmup/ramp steps must be nonnegative')
+    if args.extension_lr < 0 or args.extension_warmup_steps < 0:
+        raise ValueError('extension LR/warmup must be nonnegative')
     use_ddp, rank, local_rank, world_size = setup_ddp()
     main_process = is_main_process()
     device = get_device(local_rank)
@@ -687,8 +724,27 @@ def main():
             core.load_state_dict(ckpt['model'])
         ema.load_state_dict(ckpt['ema']); ema = ema.to(device)
         optimizer.load_state_dict(ckpt['optimizer'])
-        scheduler.load_state_dict(ckpt['scheduler'])
         global_step = ckpt.get('global_step', 0)
+        saved_max_steps = int(ckpt['args'].get('max_steps', args.max_steps))
+        extending = (
+            args.max_steps > saved_max_steps
+            and args.extension_lr > 0
+            and global_step >= saved_max_steps)
+        if extending:
+            old_lrs = [float(group['lr']) for group in optimizer.param_groups]
+            scheduler = build_extension_scheduler(
+                optimizer, old_lrs, args.extension_lr,
+                args.extension_warmup_steps,
+                args.max_steps - global_step)
+            if main_process:
+                print(
+                    f'Extending completed run: saved_max_steps={saved_max_steps} '
+                    f'requested_max_steps={args.max_steps} step={global_step} '
+                    f'old_lr={max(old_lrs):.3e} '
+                    f'extension_lr={args.extension_lr:.3e} '
+                    f'warmup={args.extension_warmup_steps}')
+        else:
+            scheduler.load_state_dict(ckpt['scheduler'])
         stats = ckpt['latent_stats']
         restore_rng_state(ckpt.get('rng'))
         if main_process:

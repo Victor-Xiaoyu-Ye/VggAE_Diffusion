@@ -98,6 +98,14 @@ cluster) or `scripts/10k/` (local A100). See `scripts/h200/README.md`.
   per-horizon motion metrics, and synchronized rank-0 eval/save. This is a
   deliberate joint arm aimed at reasonable geometry-consistent video, not a
   single-variable ablation.**
+- **E9-v3 CONTINUATION (2026-07-27): extend
+  `dual_diffusion_absolute_c128_cf0_stmotion` from step 6001 to 12000 in the
+  same namespace. Model, EMA, Adam moments, R6, latent stats, trajectory loss
+  contract, and RNG are restored. The completed 6k cosine scheduler is not
+  reused: the first extension launch warms from its ~1e-6 terminal LR to 1e-5
+  over 200 steps, then cosine-decays to 1e-6 at 12k. Subsequent preemption
+  resumes restore this continuation scheduler exactly. Launch with
+  `scripts/scale/extend_dual_diffusion_12k.sh`.**
 - Generation experiments (from-scratch DiT, Wan 14B) remain paused; the
   latest Wan run (`outputs/scale/wan_compact_i2v14b480p_v1`, step 36250)
   showed under-dispersion consistent with both the old 20-PSNR latent and

@@ -71,6 +71,8 @@ LAMBDA_GEO_MOTION="${LAMBDA_GEO_MOTION:-0.0}"
 AUX_WARMUP_STEPS="${AUX_WARMUP_STEPS:-1000}"
 AUX_RAMP_STEPS="${AUX_RAMP_STEPS:-1000}"
 AUX_T_MIN="${AUX_T_MIN:-0.6}"
+EXTENSION_LR="${EXTENSION_LR:-0.0}"
+EXTENSION_WARMUP_STEPS="${EXTENSION_WARMUP_STEPS:-200}"
 NUM_WORKERS="${NUM_WORKERS:-4}"
 STAT_BATCHES="${STAT_BATCHES:-16}"
 EVAL_EVERY="${EVAL_EVERY:-500}"
@@ -123,6 +125,9 @@ if [[ -n "${RESUME}" ]]; then
     mkdir -p "${OUTPUT_DIR}"
     "${PYTHON_BIN}" "${PROJECT}/scripts/moxing_transfer.py" \
       "${REMOTE_OUTPUT_DIR}/metrics.jsonl" \
+      "${OUTPUT_DIR}/metrics.jsonl" 2>/dev/null \
+    || "${PYTHON_BIN}" "${PROJECT}/scripts/moxing_transfer.py" \
+      "${SCALE_MIRROR_ROOT}/${RUN_NAME}/metrics.jsonl" \
       "${OUTPUT_DIR}/metrics.jsonl" 2>/dev/null || true
   fi
 fi
@@ -150,6 +155,8 @@ run_torchrun "${PROJECT}/train_dual_diffusion.py" \
   --aux_warmup_steps "${AUX_WARMUP_STEPS}" \
   --aux_ramp_steps "${AUX_RAMP_STEPS}" \
   --aux_t_min "${AUX_T_MIN}" \
+  --extension_lr "${EXTENSION_LR}" \
+  --extension_warmup_steps "${EXTENSION_WARMUP_STEPS}" \
   --max_steps "${MAX_STEPS}" \
   --batch_size "${BATCH_SIZE}" \
   --accum_steps "${ACCUM_STEPS}" \
