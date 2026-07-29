@@ -76,26 +76,16 @@ def parse_args():
 
 
 class R7TrainingCore(nn.Module):
-    def __init__(self, tokenizer, decoder, compressor, tex_encoder):
+    def __init__(self, tokenizer, decoder):
         super().__init__()
         self.tokenizer = tokenizer
         self.decoder = decoder
-        self.compressor = compressor
-        self.tex_encoder = tex_encoder
 
-    def encode_streams(self, stripped_tokens, frames):
-        geo = self.compressor(
-            [token.float() for token in stripped_tokens])
-        geo = geo.permute(0, 1, 3, 4, 2).contiguous().float()
-        tex = self.tex_encoder(frames.float()).float()
-        return geo, tex
-
-    def forward(self, stripped_tokens, frames, frames_chunk_size=None):
-        z_geo, z_tex = self.encode_streams(stripped_tokens, frames)
+    def forward(self, z_geo, z_tex, frames_chunk_size=None):
         geo_rec, tex_rec, z = self.tokenizer(z_geo, z_tex)
         rgb = self.decoder(
             geo_rec, tex_rec, frames_chunk_size=frames_chunk_size)
-        return rgb, geo_rec, tex_rec, z, z_geo, z_tex
+        return rgb, geo_rec, tex_rec, z
 
 
 def temporal_loss(pred, target):
@@ -116,6 +106,10 @@ def latent_regularization(z):
 
 def main():
     args = parse_args()
+    if args.phase == 'joint':
+        raise NotImplementedError(
+            'joint phase requires compressor/texture encoder inside the DDP '
+            'forward; run phase=codec until the joint wrapper is implemented')
     if (args.seq_len - 1) % args.temporal_factor:
         raise ValueError('seq_len must equal 1 + temporal_factor*k')
     use_ddp, rank, local_rank, world_size = setup_ddp()
@@ -143,7 +137,7 @@ def main():
         module.load_state_dict(sub, strict=False)
     compressor=compressor.to(device); tex_encoder=tex_encoder.to(device); decoder=decoder.to(device)
     tokenizer=CausalDualTokenizerCore(geo_dim,tex_dim,args.geo_latent_dim,args.tex_latent_dim,args.temporal_factor,args.temporal_depth).to(device)
-    core=R7TrainingCore(tokenizer,decoder,compressor,tex_encoder).to(device)
+    core=R7TrainingCore(tokenizer,decoder).to(device)
     for p in encoder.parameters(): p.requires_grad_(False)
     for module in (compressor,tex_encoder):
         trainable=args.phase=='joint'; module.train(trainable)
@@ -155,33 +149,46 @@ def main():
         for p in decoder.parameters(): p.requires_grad_(True)
         decoder.train()
     groups=[{'params':[p for p in tokenizer.parameters() if p.requires_grad],'lr':args.lr,'weight_decay':args.wd}]
-    pretrained=[p for m in (compressor,tex_encoder,decoder) for p in m.parameters() if p.requires_grad]
+    pretrained=[p for p in decoder.parameters() if p.requires_grad]
+    if args.phase == 'joint':
+        pretrained += [
+            p for module in (compressor, tex_encoder)
+            for p in module.parameters() if p.requires_grad]
     if pretrained: groups.append({'params':pretrained,'lr':args.pretrained_lr,'weight_decay':args.wd})
     optimizer=torch.optim.AdamW(groups,betas=(0.9,0.95),eps=1e-8)
     scheduler=build_scheduler(optimizer,args.warmup_steps,args.max_steps)
     if use_ddp: model=nn.parallel.DistributedDataParallel(core,device_ids=[local_rank],output_device=local_rank,find_unused_parameters=args.phase=='codec')
     else: model=core
 
-    dataset=SpatialVidDataset(args.csv,args.video_root,seq_len=args.seq_len,target_size=args.target_size,clip_duration_seconds=args.clip_duration_seconds,decode_retries=args.decode_retries)
+    dataset=SpatialVidDataset(args.csv,args.video_root,seq_len=args.seq_len,target_size=args.target_size,num_frames_per_video=args.seq_len,clip_duration_seconds=args.clip_duration_seconds,decode_retries=args.decode_retries)
     sampler=torch.utils.data.distributed.DistributedSampler(dataset) if use_ddp else None
     loader=DataLoader(dataset,batch_size=args.batch_size,shuffle=sampler is None,sampler=sampler,num_workers=args.num_workers,collate_fn=collate_fn,drop_last=True,pin_memory=device_type=='cuda',**multiprocessing_loader_kwargs(args.num_workers))
     eval_loader=None
     if main_process:
-        ed=SpatialVidDataset(args.eval_csv,args.video_root,seq_len=args.seq_len,target_size=args.target_size,max_videos=args.eval_clips,temporal_jitter=False,clip_duration_seconds=args.clip_duration_seconds,decode_retries=args.decode_retries)
+        ed=SpatialVidDataset(args.eval_csv,args.video_root,seq_len=args.seq_len,target_size=args.target_size,max_videos=args.eval_clips,num_frames_per_video=args.seq_len,temporal_jitter=False,clip_duration_seconds=args.clip_duration_seconds,decode_retries=args.decode_retries)
         eval_loader=DataLoader(ed,batch_size=1,num_workers=0,collate_fn=collate_fn)
 
     global_step=0
     if args.resume:
-        r=torch.load(args.resume,map_location='cpu',weights_only=False); core.load_state_dict(r['core']); optimizer.load_state_dict(r['optimizer']); scheduler.load_state_dict(r['scheduler']); global_step=r['global_step']; restore_rng_state(r.get('rng'))
+        r=torch.load(args.resume,map_location='cpu',weights_only=False); core.load_state_dict(r['core'], strict=False); optimizer.load_state_dict(r['optimizer']); scheduler.load_state_dict(r['scheduler']); global_step=r['global_step']; restore_rng_state(r.get('rng'))
     writer=SummaryWriter(os.path.join(args.output_dir,'tb')) if main_process else None
     metrics_path=os.path.join(args.output_dir,'metrics.jsonl')
 
     def encode(frames):
-        tokens,psi=encoder(frames.to(dtype)); return strip_special_tokens(tokens,psi)
+        with torch.no_grad():
+            tokens,psi=encoder(frames.to(dtype))
+        stripped=strip_special_tokens(tokens,psi)
+        grad_enabled = args.phase == 'joint' and torch.is_grad_enabled()
+        context = torch.enable_grad() if grad_enabled else torch.no_grad()
+        with context:
+            geo=compressor([token.float() for token in stripped])
+            geo=geo.permute(0,1,3,4,2).contiguous().float()
+            tex=tex_encoder(frames.float()).float()
+        return geo,tex
 
     def save(step):
         merged={}
-        modules=((core.compressor,'compressor.'),(core.tex_encoder,'tex_encoder.'),(core.tokenizer,'tokenizer.'),(core.decoder,'decoder.'))
+        modules=((compressor,'compressor.'),(tex_encoder,'tex_encoder.'),(core.tokenizer,'tokenizer.'),(core.decoder,'decoder.'))
         for module,prefix in modules:
             for k,v in module.state_dict().items(): merged[prefix+k]=v.detach().cpu()
         payload={'model':merged,'core':core.state_dict(),'optimizer':optimizer.state_dict(),'scheduler':scheduler.state_dict(),'global_step':step,'args':{**ck,**vars(args),'has_temporal_codec':True,'latent_dim':core.tokenizer.latent_dim},'rng':capture_rng_state()}
@@ -191,7 +198,12 @@ def main():
     def evaluate(step):
         core.eval(); psnr=[]; boundary=[]
         for batch in eval_loader:
-            frames=batch['frames'].to(device); stripped=encode(frames); pred,_,_,_,_,_=core(stripped,frames,args.frames_chunk_size); target=frames.float().permute(0,1,3,4,2)
+            frames=batch['frames'].to(device)
+            if frames.shape[1] != args.seq_len:
+                raise RuntimeError(
+                    f'dataset returned {frames.shape[1]} frames, expected '
+                    f'{args.seq_len}; set num_frames_per_video=seq_len')
+            geo,tex=encode(frames); pred,_,_,_=core(geo,tex,args.frames_chunk_size); target=frames.float().permute(0,1,3,4,2)
             mse=F.mse_loss(pred,target).item(); psnr.append(-10*np.log10(max(mse,1e-10)))
             pd=(pred[:,1:]-pred[:,:-1]).abs().mean((2,3,4)); td=(target[:,1:]-target[:,:-1]).abs().mean((2,3,4)); boundary.append(F.l1_loss(pd,td).item())
         row={'step':step,'psnr':float(np.mean(psnr)),'temporal_error':float(np.mean(boundary))}; append_metrics(metrics_path,row); print('[eval]',row); core.train()
@@ -200,8 +212,13 @@ def main():
     while global_step<args.max_steps:
         if sampler: sampler.set_epoch(epoch)
         for it,batch in enumerate(tqdm(loader,disable=not main_process)):
-            frames=batch['frames'].to(device); stripped=encode(frames)
-            pred,geo_rec,tex_rec,z,geo,tex=model(stripped,frames,args.frames_chunk_size); target=frames.float().permute(0,1,3,4,2)
+            frames=batch['frames'].to(device)
+            if frames.shape[1] != args.seq_len:
+                raise RuntimeError(
+                    f'dataset returned {frames.shape[1]} frames, expected '
+                    f'{args.seq_len}; set num_frames_per_video=seq_len')
+            geo,tex=encode(frames)
+            pred,geo_rec,tex_rec,z=model(geo,tex,args.frames_chunk_size); target=frames.float().permute(0,1,3,4,2)
             l1=F.l1_loss(pred,target); latent=F.l1_loss(geo_rec,geo)+F.l1_loss(tex_rec,tex); temp=temporal_loss(pred,target); accel=acceleration_loss(pred,target); geo_motion=temporal_loss(geo_rec,geo); reg=latent_regularization(z)
             total=args.lambda_l1*l1+args.lambda_latent*latent+args.lambda_temporal*temp+args.lambda_accel*accel+args.lambda_geo_motion*geo_motion+args.lambda_comp_reg*reg
             (total/args.accum_steps).backward()

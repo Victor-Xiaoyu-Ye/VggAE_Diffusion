@@ -65,7 +65,7 @@ def main():
 
     dataset = SpatialVidDataset(
         args.csv, args.video_root, seq_len=args.seq_len,
-        target_size=args.target_size)
+        target_size=args.target_size, num_frames_per_video=args.seq_len)
     loader = DataLoader(
         dataset, batch_size=1, num_workers=args.num_workers,
         collate_fn=collate_fn)
