@@ -106,7 +106,19 @@ cluster) or `scripts/10k/` (local A100). See `scripts/h200/README.md`.
   over 200 steps, then cosine-decays to 1e-6 at 12k. Subsequent preemption
   resumes restore this continuation scheduler exactly. Launch with
   `scripts/scale/extend_dual_diffusion_12k.sh`.**
-- Generation experiments (from-scratch DiT, Wan 14B) remain paused; the
+- **R7 DESIGN (2026-07-29): replace R6's per-token channel-only bottleneck
+  with a causal local-3D tokenizer over the existing StreamVGGT geometry +
+  TextureEncoder dual latent. Candidate contracts use 9 RGB frames with an
+  independent frame-0 anchor: factor 2 gives 5 latent frames at geo96|tex96
+  (192ch), factor 4 gives 3 latent frames at geo128|tex128 (256ch). Causal
+  left-padded 3D blocks preserve moving content across neighboring grid cells;
+  per-stream projections keep geometry identifiable. Promotion is probe-gated:
+  causality invariants, factor-2 PSNR >=23.9/LPIPS <=0.13, factor-4 PSNR >=23.4/
+  LPIPS <=0.15, no boundary spike, and geometry-motion cosine >=0.95. Matching
+  diffusion uses multiple clean past latent chunks, joint future diffusion,
+  temporal global offsets, overlapping rollout, and generated-context noise.
+  Old R5/R6/E9 artifacts remain baselines and caches are not rebuilt until R7
+  reconstruction and diffusability pass.**
   latest Wan run (`outputs/scale/wan_compact_i2v14b480p_v1`, step 36250)
   showed under-dispersion consistent with both the old 20-PSNR latent and
   the whitened residual target.

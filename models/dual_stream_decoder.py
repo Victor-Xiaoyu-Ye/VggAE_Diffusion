@@ -142,7 +142,8 @@ class DualStreamDecoder(nn.Module):
         self.up3 = UpsampleStage(C2, C3, num_resblocks)
         self.up4 = UpsampleStage(C3, C4, num_resblocks)
 
-        self.temporal_low = TemporalAttnBlock(C0, num_heads=4)
+        if num_temporal_blocks >= 1:
+            self.temporal_low = TemporalAttnBlock(C0, num_heads=4)
         if num_temporal_blocks >= 2:
             self.temporal_mid = TemporalAttnBlock(C1, num_heads=4)
 
@@ -192,7 +193,8 @@ class DualStreamDecoder(nn.Module):
 
         x = self.stem(x)
         x = self._stage(self.up0, x)
-        x = self.temporal_low(x, B, S)
+        if hasattr(self, 'temporal_low'):
+            x = self.temporal_low(x, B, S)
         x = self._stage(self.up1, x)
         if hasattr(self, 'temporal_mid'):
             x = self.temporal_mid(x, B, S)

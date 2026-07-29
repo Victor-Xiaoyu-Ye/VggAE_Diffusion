@@ -60,7 +60,26 @@ size plus a SHA256 over sampled blocks from the beginning, middle, and end of
 the encoder and tokenizer checkpoints. This avoids false mismatches when
 moxing copies the same checkpoint to different local paths.
 
-## Why A Scalar Scale Is Insufficient
+## R7 Causal Temporal Contract
+
+R7 changes the representation from one latent frame per RGB frame to an
+anchor-plus-causal-chunks contract:
+
+```text
+RGB frames:   1 + temporal_factor * k
+latent frames: 1 + k
+latent shape: [1 + k, 18, 18, geo_latent_dim + tex_latent_dim]
+```
+
+Frame 0 is an independent causal anchor. Tail latent position `j` summarizes
+only the preceding factor-sized RGB group and may not depend on later groups.
+Factor 2 defaults to `geo96 | tex96`; factor 4 defaults to `geo128 | tex128`.
+Statistics and caches are incompatible across temporal factors, channel splits,
+R7 checkpoints, or frame-sampling contracts. Compute per-latent-frame,
+per-channel moments only after the exact R7 checkpoint is frozen, and save the
+factor/channel/frame signature with every partition and diffusion checkpoint.
+Do not reuse R5/R6/E9 normalization statistics.
+
 
 On 16 held-out SpatialVID clips with the current 512x18x18 tokenizer, before
 the fixed-duration sampling correction:

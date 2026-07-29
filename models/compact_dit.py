@@ -17,7 +17,6 @@ Architecture:
 import math
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 
 class WideHead(nn.Module):
@@ -129,6 +128,7 @@ class CompactLatentDiT(nn.Module):
             torch.randn(1, 1, num_tokens, model_dim) * 0.02)
         self.temporal_pos = nn.Parameter(
             torch.randn(1, self.total_frames, 1, model_dim) * 0.02)
+        self.use_temporal_rope = False
 
         # ---- Transformer blocks ----
         self.spatial_blocks = nn.ModuleList([
@@ -174,7 +174,7 @@ class CompactLatentDiT(nn.Module):
         model_dtype = next(self.time_mlp.parameters()).dtype
         return self.time_mlp(emb.to(dtype=model_dtype))
 
-    def forward(self, z, t, cond=None, text_emb=None):
+    def forward(self, z, t, cond=None, text_emb=None, temporal_offset=None):
         """Flow matching forward.
 
         Args:
@@ -227,8 +227,14 @@ class CompactLatentDiT(nn.Module):
             i0_context = self.i0_proj(cond.mean(dim=1)).unsqueeze(1)
             x = x + i0_context.expand(B, S_total, N, self.model_dim)
 
-        # Add positional embeddings
-        x = x + self.spatial_pos[:, :, :N, :] + self.temporal_pos[:, :S_total, :, :]
+        # Add spatial positions. A scalar rollout offset shifts all learned
+        # temporal positions equally; relative within-window positions stay
+        # learned while chunk identity remains visible.
+        x = x + self.spatial_pos[:, :, :N, :]
+        temporal = self.temporal_pos[:, :S_total, :, :]
+        if temporal_offset is not None:
+            temporal = temporal + float(temporal_offset) * 0.01
+        x = x + temporal
 
         def run_spatial(x, block, block_idx):
             x_flat = x.reshape(B * S_total, N, self.model_dim)
