@@ -37,7 +37,7 @@ class CausalDualTokenizerCore(nn.Module):
         self.latent_dim = geo_latent_dim + tex_latent_dim
         self.temporal_factor = temporal_factor
         self.temporal = CausalSpatiotemporalCodec(
-            geo_dim + tex_dim, temporal_factor, temporal_depth)
+            self.latent_dim, temporal_factor, temporal_depth)
         self.geo_projection = StreamProjection(geo_dim, geo_latent_dim)
         self.tex_projection = StreamProjection(tex_dim, tex_latent_dim)
 
@@ -50,25 +50,19 @@ class CausalDualTokenizerCore(nn.Module):
         return x.permute(0, 2, 3, 4, 1).contiguous()
 
     def encode(self, z_geo, z_tex):
-        full = torch.cat([z_geo, z_tex], dim=-1)
-        temporal = self.temporal.encode(self._to_bcthw(full))
-        temporal = self._to_bthwc(temporal)
-        geo, tex = temporal.split([self.geo_dim, self.tex_dim], dim=-1)
-        return torch.cat([
-            self.geo_projection.encode(geo),
-            self.tex_projection.encode(tex),
+        compressed = torch.cat([
+            self.geo_projection.encode(z_geo),
+            self.tex_projection.encode(z_tex),
         ], dim=-1)
+        temporal = self.temporal.encode(self._to_bcthw(compressed))
+        return self._to_bthwc(temporal)
 
     def decode(self, z):
-        geo, tex = z.split(
-            [self.geo_latent_dim, self.tex_latent_dim], dim=-1)
-        full = torch.cat([
-            self.geo_projection.decode(geo),
-            self.tex_projection.decode(tex),
-        ], dim=-1)
-        full = self.temporal.decode(self._to_bcthw(full))
+        full = self.temporal.decode(self._to_bcthw(z))
         full = self._to_bthwc(full)
-        return full[..., :self.geo_dim], full[..., self.geo_dim:]
+        geo, tex = full.split(
+            [self.geo_latent_dim, self.tex_latent_dim], dim=-1)
+        return self.geo_projection.decode(geo), self.tex_projection.decode(tex)
 
     def forward(self, z_geo, z_tex):
         z = self.encode(z_geo, z_tex)

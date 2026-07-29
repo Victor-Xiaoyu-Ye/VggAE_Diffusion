@@ -5,6 +5,7 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint as torch_checkpoint
 
 
 def _gn(channels):
@@ -38,8 +39,10 @@ class CausalConv3d(nn.Conv3d):
 
 
 class CausalResBlock3d(nn.Module):
-    def __init__(self, channels, dilation=1, zero_init=False):
+    def __init__(self, channels, dilation=1, zero_init=False,
+                 use_checkpoint=True):
         super().__init__()
+        self.use_checkpoint = use_checkpoint
         self.norm1 = _gn(channels)
         self.conv1 = CausalConv3d(
             channels, channels, 3, dilation=(dilation, 1, 1), bias=False)
@@ -48,11 +51,16 @@ class CausalResBlock3d(nn.Module):
         if zero_init:
             nn.init.zeros_(self.conv2.weight)
 
-    def forward(self, x):
+    def _forward(self, x):
         residual = x
         x = self.conv1(F.silu(self.norm1(x)))
         x = self.conv2(F.silu(self.norm2(x)))
         return residual + x
+
+    def forward(self, x):
+        if self.use_checkpoint and self.training and x.requires_grad:
+            return torch_checkpoint(self._forward, x, use_reentrant=False)
+        return self._forward(x)
 
 
 class CausalTemporalDownsample(nn.Module):

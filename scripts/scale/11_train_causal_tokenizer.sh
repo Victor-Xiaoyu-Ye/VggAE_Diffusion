@@ -40,7 +40,7 @@ run_torchrun "${PROJECT}/train_causal_dual_tokenizer.py" \
   --clip_duration_seconds "${CLIP_DURATION_SECONDS:-1.0}" \
   --batch_size "${BATCH_SIZE:-1}" --accum_steps "${ACCUM_STEPS:-2}" \
   --max_steps "${MAX_STEPS}" --num_workers "${NUM_WORKERS:-4}" \
-  --eval_clips "${EVAL_CLIPS:-16}" --frames_chunk_size "${FRAMES_CHUNK_SIZE:-3}" \
+  --eval_clips "${EVAL_CLIPS:-16}" --frames_chunk_size "${FRAMES_CHUNK_SIZE:-1}" \
   --log_every "${LOG_EVERY:-50}" --eval_every "${EVAL_EVERY:-500}" \
   --save_every "${SAVE_EVERY:-500}" --dtype bf16 --output_dir "${OUTPUT_DIR}" \
   "${EXTRA_ARGS[@]}"

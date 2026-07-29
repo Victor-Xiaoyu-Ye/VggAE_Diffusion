@@ -144,7 +144,9 @@ def main():
         for p in module.parameters(): p.requires_grad_(trainable)
     if args.phase=='codec':
         for p in decoder.parameters(): p.requires_grad_(False)
-        decoder.eval()
+        # Keep training mode so the frozen spatial decoder checkpoints its
+        # activations while gradients still flow back into the tokenizer.
+        decoder.train()
     else:
         for p in decoder.parameters(): p.requires_grad_(True)
         decoder.train()
