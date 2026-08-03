@@ -222,9 +222,62 @@ as `data/decode_replacements` in `metrics.jsonl` and TensorBoard. Treat a
 replacement rate above 1% as a dataset-copy/layout failure rather than normal
 training noise.
 
-The representation checkpoint is a data contract. Do not continue changing the
-tokenizer after latent caching starts. If the tokenizer changes, rebuild the
-cache and its statistics.
+
+## R7 fixed-window temporal pipeline (10K acceptance path)
+
+R7 is a separate reconstruction-first path and does not reuse the legacy
+`vggae_streamvggt_256x18_v1` cache. The accepted production candidate is fixed
+to factor 2, `geo96|tex96`, nine RGB frames, one clean anchor, and four absolute
+future chunks. Run from any directory:
+
+```bash
+# Full 10K sequence: fresh v2 codec from legacy 3K weights, joint decoder
+# finetune, strict quality/causality gate, durable cache, 6K diffusion, sample.
+CACHE_NUM_PARTITIONS=1 \
+STAGES=codec,joint,gate,cache,diffusion,sample \
+bash scripts/scale/14_r7_recon_then_diffusion.sh
+
+# Continue the same diffusion namespace only after its completed 6K run.
+bash scripts/scale/extend_r7_diffusion_12k.sh
+
+# Deterministically sample the best EMA checkpoint from held-out cache item 0.
+MODE=sample SAMPLE_INDEX=0 \
+bash scripts/scale/13_train_causal_video_diffusion.sh
+```
+
+If the legacy probe is not under its default output namespace, set
+`LEGACY_INIT_CKPT` to its local or OBS checkpoint. It is loaded as weights only;
+the formal v2 codec starts a fresh optimizer/scheduler/step history. Same-stage
+preemption uses `checkpoint_latest.pt` and restores the full contract. Joint
+training starts from codec best with a new optimizer and trains only R7 plus the
+DualStreamDecoder; StreamVGGT, CompactCompressor, and TextureEncoder stay frozen.
+
+The gate requires PSNR >= 23.9, LPIPS <= 0.13, boundary ratio <= 1.10,
+geometry-motion cosine >= 0.95, and checkpoint-level causality invariants. A
+missing metric fails the gate. Its durable marker is bound to checkpoint content
+and the exact thresholds. Cache generation cannot begin from only the causality
+probe.
+
+The versioned R7 cache stores absolute tensors:
+
+```text
+cond   [1, 324, 192]
+target [4, 324, 192]
+```
+
+It accumulates exact CPU-FP64 `[position,channel]` moments. Diffusion applies the
+training-cache z-score in FP32 at its boundary and inverts it before R7 decoding;
+evaluation never substitutes held-out statistics. Normalization is reversible
+and intended to improve flow optimization, not codec reconstruction.
+
+The first diffusion stage jointly denoises all four future chunks with a clean
+anchor token and bidirectional temporal attention. It deliberately excludes
+rollout, context mean pooling, generated-context noise, and temporal offsets.
+Every 500 steps it writes durable metrics, EMA latent sample packs, and
+periodic/latest/best checkpoints; `checkpoint_final.pt` is always written.
+Standalone sampling loads EMA by default and decodes the complete nine-frame RGB
+clip. Cluster NPU/HCCL/MoXing behavior still requires the initial smoke run; local
+static checks do not prove those paths.
 
 Cache generation uses shard-level transactional resume. Re-running the same
 `03_cache_latents.sh` with the same 6x8 topology loads each rank's progress

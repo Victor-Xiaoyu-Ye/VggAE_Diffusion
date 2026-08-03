@@ -95,7 +95,28 @@ statistics alone still hide the strong increase in uncertainty with horizon.
 These measurements establish the normalization shape, but the exact values
 must be recomputed with the active 1.0 second sampling contract before training.
 
-## Whitening Decision
+## R7 Production Normalization Decision (2026-07-31)
+
+The fixed-window t2/c192 diffusion path uses reversible temporal-position/channel
+z-score normalization at the diffusion boundary:
+
+```text
+condition stats: [1, 192]
+future stats:    [4, 192]
+```
+
+This is an optimization decision, not a claim that flow matching mathematically
+requires Gaussian data. R7's input LayerNorm and flattened latent regularizer do
+not guarantee equal scales across learned output channels or anchor/future
+positions. Standardization balances those scales against the unit-Gaussian noise
+endpoint and prevents high-variance positions/channels from dominating velocity
+MSE. It is applied in FP32 and inverted before R7 temporal decoding, so it does
+not change codec reconstruction. Statistics come from exact CPU-FP64 raw moments
+over the frozen 10K training cache; evaluation and sampling always reuse the
+training statistics. Spatial-position normalization and whitening remain disabled.
+The normalization mode, tensors, and R7 representation signatures are frozen into
+every diffusion checkpoint and must match exactly on resume.
+
 
 Full PCA/ZCA whitening is not the default yet. It may improve optimization
 because the correlation effective rank is low, but it also rotates the channel

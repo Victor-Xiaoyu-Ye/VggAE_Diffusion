@@ -97,6 +97,35 @@ def merge_raw_moments(entries):
     return stats, raw
 
 
+def partition_identity(config):
+    """Extract durable partition identity when produced by the R7 cache."""
+    if not isinstance(config, dict):
+        return None
+    required = ("partition_id", "num_partitions")
+    if any(key not in config for key in required):
+        return None
+    return tuple(int(config[key]) for key in required)
+
+
+def comparable_config(config):
+    """Compare R7 partition configs without their intentionally varying ID."""
+    if not isinstance(config, dict):
+        return config
+    if partition_identity(config) is None:
+        # Old cache config was never a partition contract. Preserve legacy
+        # behavior rather than imposing new equality checks on it.
+        return None
+    # R7 caches record these fields in every partition. Equality prevents a
+    # train/eval or sampling-contract mix while allowing per-partition CSVs.
+    durable_keys = (
+        "split", "csv", "max_videos", "check_files", "num_partitions",
+        "index_num_shards", "video_root", "annotation_index",
+        "clips_per_video", "seq_len", "target_size", "latent_grid",
+        "max_frame_span", "clip_duration_seconds", "store_i0_rgb", "dtype",
+    )
+    return {key: config.get(key) for key in durable_keys}
+
+
 def main():
     args = parse_args()
     remote_cache = is_remote_path(args.cache_dir)
@@ -155,8 +184,12 @@ def main():
     num_failed = 0
     shard_paths = []
     config = None
+    comparable_partition_config = None
     representation = None
-    for partition_dir in partition_dirs:
+    partition_stats_ids = []
+    saw_partition_metadata = False
+    saw_legacy_metadata = False
+    for partition_index, partition_dir in enumerate(partition_dirs):
         success_path = (
             join_remote(partition_dir, "_SUCCESS")
             if remote_cache else os.path.join(partition_dir, "_SUCCESS"))
@@ -192,7 +225,30 @@ def main():
             cond_raw_entries.append(raw_moments["cond"])
         num_samples += stats["num_samples"]
         num_failed += stats.get("num_failed", 0)
-        config = config or stats.get("config")
+        current_config = stats.get("config")
+        current_identity = partition_identity(current_config)
+        if current_identity is not None:
+            saw_partition_metadata = True
+            expected_identity = parsed_partitions[partition_index]
+            if current_identity != expected_identity:
+                raise RuntimeError(
+                    f"Partition metadata mismatch in {stats_path}: "
+                    f"config declares {current_identity}, directory declares "
+                    f"{expected_identity}")
+            partition_stats_ids.append(current_identity)
+            current_comparable = comparable_config(current_config)
+            if comparable_partition_config is None:
+                comparable_partition_config = current_comparable
+            elif current_comparable != comparable_partition_config:
+                raise RuntimeError(
+                    f"Partition config mismatch in {stats_path}. "
+                    "Do not merge different splits, data selections, or cache runs.")
+        else:
+            saw_legacy_metadata = True
+        if saw_partition_metadata and saw_legacy_metadata:
+            raise RuntimeError(
+                "Only some partitions contain durable partition metadata")
+        config = config or current_config
         current_representation = stats.get("representation")
         if representation is None:
             representation = current_representation

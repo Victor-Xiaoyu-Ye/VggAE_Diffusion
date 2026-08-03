@@ -117,8 +117,27 @@ cluster) or `scripts/10k/` (local A100). See `scripts/h200/README.md`.
   LPIPS <=0.15, no boundary spike, and geometry-motion cosine >=0.95. Matching
   diffusion uses multiple clean past latent chunks, joint future diffusion,
   temporal global offsets, overlapping rollout, and generated-context noise.
-  Old R5/R6/E9 artifacts remain baselines and caches are not rebuilt until R7
-  reconstruction and diffusability pass.**
+- **R7 IMPLEMENTATION UPDATE (2026-07-31): the 3k probes do not promote either
+  candidate. t2/c192 reached PSNR 22.7184 and temporal error 0.01801; t4/c256
+  reached 22.4794 and 0.02039. Both remain below the documented R7 reconstruction
+  gates, but t2 is the sole continuation candidate because it is better on both
+  measured metrics. The production t2 path is now a fresh v2 codec stage
+  initialized from the legacy 3k weights, followed by joint tokenizer +
+  DualStreamDecoder finetuning; StreamVGGT, CompactCompressor, and TextureEncoder
+  stay frozen. Promotion requires PSNR >=23.9, LPIPS <=0.13, boundary ratio
+  <=1.10, geometry-motion cosine >=0.95, and checkpoint causality invariants.
+  Accepted t2 latents use one clean anchor plus four absolute future chunks.
+  The durable cache computes exact train-split [position,channel] moments, and
+  diffusion applies reversible z-score normalization only at its boundary.
+  The fixed-window generator uses clean-frame0 interleaved DiT attention to
+  jointly denoise all four future chunks; rollout remains deferred. Stage 11-14
+  wrappers implement strict contracts, periodic/latest/best/final checkpoints,
+  EMA evaluation, 6k-to-12k extension, OBS/mirror staging, and deterministic
+  latent/RGB samples. Promotion against E9-v3 12k requires fixed-seed future
+  RGB LPIPS to improve by at least 10%, better late-half structure, motion ratio
+  closer to 1, higher latent/expanded-geometry motion cosine, and no material
+  reconstruction/variance regression. Cluster NPU/HCCL/MoXing runtime remains
+  to be smoke-tested.**
   latest Wan run (`outputs/scale/wan_compact_i2v14b480p_v1`, step 36250)
   showed under-dispersion consistent with both the old 20-PSNR latent and
   the whitened residual target.
