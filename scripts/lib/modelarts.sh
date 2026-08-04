@@ -247,7 +247,8 @@ run_distributed_barrier() {
     "--master_port=${MASTER_PORT}"
     "${PROJECT}/scripts/distributed_barrier.py"
   )
-  PYTORCH_NPU_ALLOC_CONF="${PYTORCH_NPU_ALLOC_CONF:-expandable_segments:True}" \
+  PYTHONPATH="${PROJECT}${PYTHONPATH:+:${PYTHONPATH}}" \
+    PYTORCH_NPU_ALLOC_CONF="${PYTORCH_NPU_ALLOC_CONF:-expandable_segments:True}" \
     OMP_NUM_THREADS="${OMP_NUM_THREADS:-4}" \
     "${command[@]}"
 }
@@ -264,12 +265,14 @@ run_torchrun() {
   )
   if [[ -n "${STAGE_LOG_FILE:-}" ]]; then
     mkdir -p "$(dirname "${STAGE_LOG_FILE}")" "${ASCEND_PROCESS_LOG_PATH}"
-    PYTORCH_NPU_ALLOC_CONF="${PYTORCH_NPU_ALLOC_CONF:-expandable_segments:True}" \
+    PYTHONPATH="${PROJECT}${PYTHONPATH:+:${PYTHONPATH}}" \
+      PYTORCH_NPU_ALLOC_CONF="${PYTORCH_NPU_ALLOC_CONF:-expandable_segments:True}" \
       OMP_NUM_THREADS="${OMP_NUM_THREADS:-4}" \
       "${command[@]}" 2>&1 | tee -a "${STAGE_LOG_FILE}"
     return "${PIPESTATUS[0]}"
   fi
-  PYTORCH_NPU_ALLOC_CONF="${PYTORCH_NPU_ALLOC_CONF:-expandable_segments:True}" \
+  PYTHONPATH="${PROJECT}${PYTHONPATH:+:${PYTHONPATH}}" \
+    PYTORCH_NPU_ALLOC_CONF="${PYTORCH_NPU_ALLOC_CONF:-expandable_segments:True}" \
     OMP_NUM_THREADS="${OMP_NUM_THREADS:-4}" \
     "${command[@]}"
 }
