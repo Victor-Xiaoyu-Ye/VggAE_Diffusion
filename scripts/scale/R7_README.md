@@ -61,6 +61,22 @@ MODE=eval bash scripts/scale/12_cache_causal_latents.sh
 MODE=merge CACHE_NUM_PARTITIONS=4 bash scripts/scale/12_cache_causal_latents.sh
 ```
 
+Stages 11 and 13 accept `THROUGHPUT_DIVISOR` (default 20) and report
+`DI_throughput` after dividing the raw token rate by it; both
+`train/DI_throughput` and `train/raw_DI_throughput` are written to JSONL for
+audit. Stage 12 reports `DI_throughput` in the progress bar only, because a
+cache job writes no metrics JSONL, and it applies no divisor — the same
+convention as `03_cache_latents.sh`.
+
+The token basis differs by stage and is intentional. Stages 11 and 12 count the
+full R7 latent `[B,5,18,18,192]` = 1620 tokens/clip, because both encode all
+five chunks. Stage 13 counts the diffusion target `[B,4,324,192]` = 1296
+tokens/clip, because the anchor chunk is conditioning rather than a target;
+this matches `train_cached_compact_diffusion.py`, which also counts its target.
+The probes count latent tokens as `batch * frames * latent_grid ** 2`. All
+counts are per process — never multiply by `world_size`, the unit is
+`tokens/s/npu`.
+
 ## Continue diffusion from 6K to 12K
 
 Only extend a completed 6K run in the same namespace:

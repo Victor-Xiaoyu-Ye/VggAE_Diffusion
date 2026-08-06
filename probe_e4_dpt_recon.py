@@ -371,18 +371,22 @@ def main():
     if main_process:
         print(f'\nTraining: {args.epochs} epochs, {steps_per_epoch} steps/epoch')
 
+    throughput = ThroughputMeter()
     for epoch in range(start_epoch, args.epochs):
         model.train()
         if use_ddp:
             sampler.set_epoch(epoch)
         optimizer.zero_grad(set_to_none=True)
-        throughput = ThroughputMeter()
         pbar = tqdm(dataloader, desc=f'ep{epoch}/{args.epochs}',
                     dynamic_ncols=True, disable=not main_process)
         holder = [0]
 
         for batch_idx, batch in enumerate(pbar):
             frames = batch['frames'].to(device=device, dtype=dtype)
+            # Latent tokens, not frames, and on every micro-batch: counting only
+            # optimizer steps under-reports by accum_steps.
+            throughput.update(
+                int(frames.shape[0] * frames.shape[1] * args.latent_grid ** 2))
             pred_rgb, z_flat = model(
                 encoder, frames, use_amp, device_type, dtype, chunk, holder)
             target_rgb = frames.float().clamp(0, 1)
@@ -419,7 +423,6 @@ def main():
                 ema.update(core)
                 scheduler.step()
                 global_step += 1
-                throughput.update(int(frames.shape[0] * frames.shape[1]))
 
                 if main_process and writer and global_step % args.log_every == 0:
                     m = {
@@ -429,6 +432,7 @@ def main():
                         'train/lpips': lpips_loss.item(),
                         'train/grad_norm': float(grad_norm),
                         'train/lr': optimizer.param_groups[0]['lr'],
+                        'train/DI_throughput': throughput.rate(),
                     }
                     if z_flat is not None:
                         m['train/latent_std'] = z_flat.float().std().item()
@@ -439,7 +443,8 @@ def main():
                     append_metrics(metrics_path, m)
                 if main_process:
                     pbar.set_postfix(loss=f'{loss.item():.4f}', l1=f'{l1.item():.4f}',
-                                     lpips=f'{lpips_loss.item():.4f}')
+                                     lpips=f'{lpips_loss.item():.4f}',
+                                     DI=throughput.format())
 
         if main_process and (epoch + 1) % args.eval_every == 0:
             metrics = eval_recon(

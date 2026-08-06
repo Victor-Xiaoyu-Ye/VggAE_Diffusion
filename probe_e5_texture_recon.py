@@ -439,6 +439,10 @@ def main():
         pbar = tqdm(dataloader, disable=not main_process, desc=f'ep{epoch}')
         for it, batch in enumerate(pbar):
             frames = batch['frames'].to(device=device, dtype=dtype, non_blocking=True)
+            # Latent tokens per process: no world_size factor, and every
+            # micro-batch, otherwise the rate is not tokens/s/npu.
+            meter.update(
+                frames.shape[0] * frames.shape[1] * args.latent_grid ** 2)
             target = frames.float()
 
             pred, z_geo, z_tex = model(
@@ -530,7 +534,6 @@ def main():
                 scheduler.step()
                 ema.update(core)
                 global_step += 1
-                meter.update(frames.shape[0] * frames.shape[1] * world_size)
 
                 if main_process and global_step % args.log_every == 0:
                     row = {

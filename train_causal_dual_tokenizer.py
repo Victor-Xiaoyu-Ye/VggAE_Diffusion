@@ -34,8 +34,9 @@ from utils.r7_representation import (
     load_checkpoint, load_r7_modules, load_source_modules,
     merged_representation_state, validate_resume_contract,
     validate_source_artifact)
-from utils.training import (append_metrics, atomic_torch_save, build_scheduler,
-                            capture_rng_state, restore_rng_state)
+from utils.training import (ThroughputMeter, append_metrics, atomic_torch_save,
+                            build_scheduler, capture_rng_state,
+                            count_latent_tokens, restore_rng_state)
 
 _LPIPS = None
 
@@ -80,6 +81,8 @@ def parse_args():
                    help="weights-only initialization for a fresh stage")
     p.add_argument("--allow_legacy_checkpoint", action="store_true")
     p.add_argument("--log_every", type=int, default=50)
+    p.add_argument("--throughput_divisor", type=float, default=1.0,
+                   help="Divide reported DI_throughput by this value")
     p.add_argument("--eval_every", type=int, default=500)
     p.add_argument("--save_every", type=int, default=500)
     p.add_argument("--min_steps", type=int, default=2000)
@@ -228,6 +231,8 @@ def main():
         raise ValueError("--resume and --init_ckpt are mutually exclusive")
     if min(args.accum_steps, args.max_steps, args.eval_every, args.save_every) <= 0:
         raise ValueError("step/count arguments must be positive")
+    if args.throughput_divisor <= 0:
+        raise ValueError("--throughput_divisor must be positive")
     if args.eval_clips <= 0:
         raise ValueError("eval_clips must be positive")
     if args.early_stop_patience < 0 or args.early_stop_min_delta < 0:
@@ -528,6 +533,7 @@ def main():
               f"split={config.geo_latent_dim}+{config.tex_latent_dim} world={world_size}")
     optimizer.zero_grad(set_to_none=True)
     epoch = micro = 0; stopped = step >= args.max_steps; last_eval = -1
+    throughput_meter = ThroughputMeter()
     while not stopped:
         if sampler: sampler.set_epoch(epoch)
         progress = tqdm(loader, disable=not main_process, desc=f"ep{epoch}")
@@ -554,16 +560,21 @@ def main():
                 for name, value in losses.items():
                     loss = loss + getattr(args, "lambda_" + name) * value
                 (loss / args.accum_steps).backward()
-            micro += 1
+            throughput_meter.update(count_latent_tokens(latent)); micro += 1
             if not sync: continue
             grad = torch.nn.utils.clip_grad_norm_(
                 [p for p in core.parameters() if p.requires_grad], args.max_grad_norm)
             optimizer.step(); optimizer.zero_grad(set_to_none=True); scheduler.step(); step += 1
             if main_process and step % args.log_every == 0:
+                raw_throughput = throughput_meter.rate()
+                throughput = raw_throughput / args.throughput_divisor
                 row = {"step": step, "train/loss": loss.item(),
                        **{f"train/{k}": v.item() for k, v in losses.items()},
-                       "train/grad_norm": float(grad), "train/lr": scheduler.get_last_lr()[0]}
+                       "train/grad_norm": float(grad), "train/lr": scheduler.get_last_lr()[0],
+                       "train/DI_throughput": throughput,
+                       "train/raw_DI_throughput": raw_throughput}
                 append_metrics(metrics_path, row); log_scalars(writer, row, step)
+                progress.set_postfix(DI_throughput=f"{throughput:.2f} tokens/s/npu")
                 progress.write(f"{datetime.now()}: {row}")
             should_eval = step % args.eval_every == 0
             should_save = step % args.save_every == 0

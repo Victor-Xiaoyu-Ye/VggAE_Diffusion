@@ -786,12 +786,12 @@ def main():
     if main_process:
         print(f'\nTraining: {args.epochs} epochs, {steps_per_epoch} steps/epoch')
 
+    throughput_meter = ThroughputMeter()
     for epoch in range(start_epoch, args.epochs):
         model.train()
         if use_ddp:
             sampler.set_epoch(epoch)
         optimizer.zero_grad()
-        throughput_meter = ThroughputMeter()
         epoch_loss = 0.0
         num_batches = 0
         pbar = tqdm(dataloader, desc=f'Epoch {epoch}/{args.epochs}',
@@ -812,6 +812,9 @@ def main():
                 preds, z_flat = model(
                     tokens_list, noise_std=args.latent_noise_std,
                     frames_chunk_size=chunk)
+            # Every micro-batch: counting only optimizer steps under-reports
+            # the rate by accum_steps.
+            throughput_meter.update(count_latent_tokens(z_flat))
 
             pred_rgb = preds[..., :3].permute(0, 1, 4, 2, 3).contiguous().float()
             target_rgb = frames.float().clamp(0, 1)
@@ -861,7 +864,6 @@ def main():
                 ema.update(core)
                 scheduler.step()
                 global_step += 1
-                throughput_meter.update(count_latent_tokens(z_flat))
 
                 if main_process and writer and global_step % args.log_every == 0:
                     m = {

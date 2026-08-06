@@ -46,6 +46,7 @@ AUTO_RESUME="${AUTO_RESUME:-1}"
 RESUME="${RESUME:-}"
 LEGACY_INIT_CKPT="${LEGACY_INIT_CKPT:-}"
 EXTEND="${EXTEND:-0}"
+THROUGHPUT_DIVISOR="${THROUGHPUT_DIVISOR:-20}"
 MASTER_PORT="${MASTER_PORT:-29670}"
 
 if [[ "${PHASE}" == "codec" ]]; then
@@ -162,6 +163,8 @@ EXTRA_ARGS=()
 [[ -n "${INIT_CKPT}" ]] && EXTRA_ARGS+=(--init_ckpt "${INIT_CKPT}")
 [[ "${ALLOW_LEGACY}" == 1 ]] && EXTRA_ARGS+=(--allow_legacy_checkpoint)
 
+echo "DI_throughput divisor=${THROUGHPUT_DIVISOR}"
+
 start_output_sync "${OUTPUT_DIR}" "${REMOTE_OUTPUT_DIR}"
 trap 'stop_output_sync "${OUTPUT_DIR}" "${REMOTE_OUTPUT_DIR}"' EXIT
 run_torchrun "${PROJECT}/train_causal_dual_tokenizer.py" \
@@ -186,4 +189,5 @@ run_torchrun "${PROJECT}/train_causal_dual_tokenizer.py" \
   --gate_geo_motion_cosine "${GATE_GEO_MOTION_COSINE:-0.95}" \
   --log_every "${LOG_EVERY}" --eval_every "${EVAL_EVERY}" \
   --save_every "${SAVE_EVERY}" --dtype bf16 --output_dir "${OUTPUT_DIR}" \
+  --throughput_divisor "${THROUGHPUT_DIVISOR}" \
   "${EXTRA_ARGS[@]}"

@@ -32,9 +32,10 @@ from utils.device import (configure_backend_compatibility, create_grad_scaler,
                           get_device, get_device_name, manual_seed_all,
                           resolve_dtype)
 from utils.distributed import is_main_process, setup_ddp
-from utils.training import (EMA, append_metrics, atomic_torch_save,
-                            build_optimizer, build_scheduler,
-                            capture_rng_state, restore_rng_state)
+from utils.training import (EMA, ThroughputMeter, append_metrics,
+                            atomic_torch_save, build_optimizer,
+                            build_scheduler, capture_rng_state,
+                            count_latent_tokens, restore_rng_state)
 
 CONTEXT_CHUNKS = 1
 FUTURE_CHUNKS = 4
@@ -112,6 +113,8 @@ def parse_args(argv=None):
     p.add_argument("--log_every", type=int, default=50)
     p.add_argument("--eval_every", type=int, default=500)
     p.add_argument("--save_every", type=int, default=500)
+    p.add_argument("--throughput_divisor", type=float, default=1.0,
+                   help="Divide reported DI_throughput by this value")
     p.add_argument("--early_stop_min_steps", type=int, default=6000)
     p.add_argument("--patience", type=int, default=8,
                    help="number of non-improving evaluations after min steps")
@@ -678,6 +681,8 @@ def main(argv=None):
     for value in (args.accum_steps, args.eval_every, args.save_every,
                   args.sample_steps, args.eval_clips):
         if value < 1: raise ValueError("step/count arguments must be positive")
+    if args.throughput_divisor <= 0:
+        raise ValueError("--throughput_divisor must be positive")
     if args.warmup_steps >= args.max_steps: raise ValueError("warmup must be < max_steps")
     if args.early_stop_min_steps < 6000:
         raise ValueError("production early stopping cannot begin before step 6000")
@@ -896,13 +901,14 @@ def main(argv=None):
             raise ValueError(f"unknown checkpoint kind {kind!r}")
 
     iterator = iter(loader); optimizer.zero_grad(set_to_none=True)
-    stop = False
+    stop = False; throughput_meter = ThroughputMeter()
     while step < args.max_steps and not stop:
         totals = torch.zeros(4, device=device)
         for micro in range(args.accum_steps):
             batch = next(iterator); cond_raw, target_raw = validate_batch(batch, args)
             cond_raw = cond_raw.to(device, non_blocking=True).float()
             target_raw = target_raw.to(device, non_blocking=True).float()
+            throughput_meter.update(count_latent_tokens(target_raw))
             cond = normalize_fp32(cond_raw, st["cond"], args.normalization_mode).to(model_dtype)
             target = normalize_fp32(target_raw, st["target"], args.normalization_mode).to(model_dtype)
             sync = model.no_sync() if use_ddp and micro < args.accum_steps-1 \
@@ -936,15 +942,21 @@ def main(argv=None):
         step += 1; totals /= args.accum_steps
         if use_ddp: dist.all_reduce(totals); totals /= world_size
         if main_process and step % args.log_every == 0:
+            raw_throughput = throughput_meter.rate()
+            throughput = raw_throughput / args.throughput_divisor
             row = {"step": step, "train/loss": totals[0].item(),
                    "train/motion_loss": totals[1].item(),
                    "train/accel_loss": totals[2].item(),
                    "train/geo_motion_loss": totals[3].item(),
                    "train/grad_norm": float(grad),
-                   "train/lr": optimizer.param_groups[0]["lr"]}
+                   "train/lr": optimizer.param_groups[0]["lr"],
+                   "train/DI_throughput": throughput,
+                   "train/raw_DI_throughput": raw_throughput}
             append_metrics(metrics_path, row)
             for key, val in row.items():
                 if key != "step": writer.add_scalar(key, val, step)
+            print(f"step={step} loss={row['train/loss']:.6f} "
+                  f"DI_throughput: {throughput:.2f} tokens/s/npu")
 
         eval_due = step % args.eval_every == 0 or step >= args.max_steps
         save_due = step % args.save_every == 0 or step >= args.max_steps

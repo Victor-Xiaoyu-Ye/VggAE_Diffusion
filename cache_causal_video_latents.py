@@ -42,6 +42,7 @@ from utils.r7_representation import (
     load_r7_modules,
     validate_contract,
 )
+from utils.training import ThroughputMeter, count_latent_tokens
 
 
 def parse_args():
@@ -434,6 +435,7 @@ def main():
             f"status-r{rank:05d}.json",
             json.dumps(status(phase), indent=2, sort_keys=True))
 
+    throughput_meter = ThroughputMeter()
     progress = tqdm(
         dataloader, disable=not is_main_process(),
         desc=f"Caching R7 {args.split} latents")
@@ -465,6 +467,7 @@ def main():
                 if tuple(latent.shape) != expected:
                     raise RuntimeError(
                         f"R7 encode shape {tuple(latent.shape)} != {expected}")
+                throughput_meter.update(count_latent_tokens(latent))
                 flat = latent.reshape(
                     1, 5, config.latent_grid ** 2, config.latent_dim)
                 cond = flat[:, :1]
@@ -506,6 +509,7 @@ def main():
                     samples=sample_index,
                     failed=len(failed_samples),
                     shards=len(writer.paths),
+                    DI_throughput=throughput_meter.format(),
                 )
     except BaseException as error:
         writer.abort_current()

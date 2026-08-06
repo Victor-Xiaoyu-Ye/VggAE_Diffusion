@@ -46,6 +46,7 @@ MODEL_DIM="${MODEL_DIM:-1152}"
 SPATIAL_DEPTH="${SPATIAL_DEPTH:-10}"
 TEMPORAL_DEPTH="${TEMPORAL_DEPTH:-6}"
 NUM_HEADS="${NUM_HEADS:-16}"
+THROUGHPUT_DIVISOR="${THROUGHPUT_DIVISOR:-20}"
 MASTER_PORT="${MASTER_PORT:-29680}"
 
 [[ "${MODE}" == "train" || "${MODE}" == "sample" ]] || { echo "MODE must be train or sample." >&2; exit 2; }
@@ -161,6 +162,7 @@ if [[ -n "${RESUME}" && ! -s "${OUTPUT_DIR}/metrics.jsonl" ]]; then
   done
 fi
 EXTRA_ARGS=(); [[ -n "${RESUME}" ]] && EXTRA_ARGS+=(--resume "${RESUME}")
+echo "DI_throughput divisor=${THROUGHPUT_DIVISOR}"
 start_output_sync "${OUTPUT_DIR}" "${REMOTE_OUTPUT_DIR}"
 trap 'stop_output_sync "${OUTPUT_DIR}" "${REMOTE_OUTPUT_DIR}"' EXIT
 run_torchrun "${PROJECT}/train_causal_video_diffusion.py" \
@@ -187,4 +189,5 @@ run_torchrun "${PROJECT}/train_causal_video_diffusion.py" \
   --early_stop_min_steps "${EARLY_STOP_MIN_STEPS:-6000}" \
   --patience "${EARLY_STOP_PATIENCE:-8}" \
   --log_every "${LOG_EVERY:-50}" --eval_every "${EVAL_EVERY:-500}" \
-  --save_every "${SAVE_EVERY:-500}" --dtype bf16 "${EXTRA_ARGS[@]}"
+  --save_every "${SAVE_EVERY:-500}" --dtype bf16 \
+  --throughput_divisor "${THROUGHPUT_DIVISOR}" "${EXTRA_ARGS[@]}"

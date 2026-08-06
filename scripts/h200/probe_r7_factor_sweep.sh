@@ -17,5 +17,6 @@ for FACTOR in 2 4; do
     --tex_latent_dim "${TEX}" --seq_len "${SEQ_LEN:-9}" --phase codec \
     --max_steps "${MAX_STEPS:-3000}" --batch_size "${BATCH_SIZE:-1}" \
     --accum_steps "${ACCUM_STEPS:-2}" --num_workers "${NUM_WORKERS:-4}" \
+    --throughput_divisor "${THROUGHPUT_DIVISOR:-20}" \
     --output_dir "${OUTPUT_ROOT:-outputs/h200}/r7_t${FACTOR}_c$((GEO+TEX))_codec"
 done
