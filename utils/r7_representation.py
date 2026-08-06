@@ -365,9 +365,15 @@ def validate_source_artifact(
     r7_state = model_state(checkpoint)
     source = load_checkpoint(source_path)
     source_state = model_state(source)
+    # Only the permanently frozen modules are compared. The decoder is a
+    # training target in PHASE=joint, so a joint checkpoint legitimately no
+    # longer matches the source decoder and requiring it to match would make
+    # joint runs impossible to resume. Whole-artifact identity is still
+    # guarded by contract["signatures"]["source_dual_ae"].
+    frozen_prefixes = ("compressor.", "tex_encoder.")
     expected = {
         key: value for key, value in r7_state.items()
-        if any(key.startswith(prefix) for prefix in SOURCE_PREFIXES)}
+        if any(key.startswith(prefix) for prefix in frozen_prefixes)}
     missing = sorted(set(expected) - set(source_state))
     mismatched = sorted(
         key for key, value in expected.items()
@@ -377,7 +383,7 @@ def validate_source_artifact(
             or not torch.equal(value.cpu(), source_state[key].cpu())))
     if missing or mismatched:
         raise ValueError(
-            "--dual_ae_ckpt does not match the compressor/texture/decoder "
+            "--dual_ae_ckpt does not match the frozen compressor/texture "
             "weights embedded in the R7 checkpoint: "
             f"missing={missing[:8]}, mismatched={mismatched[:8]}")
     # Additional source-only keys are allowed: the legacy R7 probe deliberately
