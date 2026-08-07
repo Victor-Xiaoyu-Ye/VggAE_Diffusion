@@ -876,10 +876,10 @@ def main():
                         'train/temporal': temp.item(),
                         'train/grad_norm': float(grad_norm),
                         'train/lr': optimizer.param_groups[0]['lr'],
-                        'train/DI_throughput': throughput_meter.rate(),
+                        'DI_throughput': throughput_meter.rate(),
                     }
                     for k, v in m.items():
-                        if k.startswith('train/'):
+                        if k.startswith('train/') or k == 'DI_throughput':
                             writer.add_scalar(k, v, global_step)
                     append_metrics(metrics_path, m)
                 if main_process:

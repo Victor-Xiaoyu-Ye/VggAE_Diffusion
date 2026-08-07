@@ -105,7 +105,6 @@ def parse_args():
     parser.add_argument("--save_every", type=int, default=2000)
     parser.add_argument("--eval_every", type=int, default=2000)
     parser.add_argument("--sample_steps", type=int, default=20)
-    parser.add_argument("--throughput_divisor", type=float, default=20.0)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--local_rank", type=int, default=0)
     return parser.parse_args()
@@ -266,8 +265,6 @@ def main():
             f"[WARN] --warmup_steps={args.warmup_steps} must be smaller "
             f"than --max_steps={args.max_steps}; using {adjusted}")
         args.warmup_steps = adjusted
-    if args.throughput_divisor <= 0:
-        raise ValueError("--throughput_divisor must be positive")
     if args.sample_steps < 1:
         raise ValueError("--sample_steps must be positive")
 
@@ -445,7 +442,6 @@ def main():
             "effective_batch": world_size * args.batch_size * args.accum_steps,
             "lr": args.lr,
             "resume_mode": args.resume_mode,
-            "throughput_divisor": args.throughput_divisor,
             "freeze_wan_qkv": args.freeze_wan_qkv,
             "train_qkv_last_n": args.train_qkv_last_n,
             "ddp_bucket_cap_mb": args.ddp_bucket_cap_mb,
@@ -524,7 +520,7 @@ def main():
             loss_value = mean_loss.item()
             lr = optimizer.param_groups[0]["lr"]
             raw_throughput = throughput_meter.rate()
-            throughput = raw_throughput / args.throughput_divisor
+            throughput = raw_throughput
             print(
                 f"step={global_step} loss={loss_value:.6f} "
                 f"lr={lr:.3e} grad_norm={float(grad_norm):.3f} "
@@ -537,14 +533,13 @@ def main():
             writer.add_scalar(
                 "train/grad_norm", float(grad_norm), global_step)
             writer.add_scalar(
-                "train/DI_throughput", throughput, global_step)
+                "DI_throughput", throughput, global_step)
             append_metrics(metrics_path, {
                 "step": global_step,
                 "train/loss": loss_value,
                 "train/lr": lr,
                 "train/grad_norm": float(grad_norm),
-                "train/DI_throughput": throughput,
-                "train/raw_DI_throughput": raw_throughput,
+                "DI_throughput": throughput,
             })
 
         save_due = global_step % args.save_every == 0

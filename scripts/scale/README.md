@@ -138,8 +138,8 @@ $OUTPUT_URL/scale/compact_dit_768d10s6t_h12_v1
 obs://yw-ads-training-gy1/data/external/personal/g00833899/y50046448/output/scale/compact_dit_768d10s6t_h12_v1
 ```
 
-   - `DI_throughput` is reported after dividing the raw token rate by 20, and
-     `train/raw_DI_throughput` is also written to JSONL for audit.
+   - `DI_throughput` is the raw token rate in `tokens/s/npu`; no divisor or
+     normalized throughput is applied.
 9. `06_sample_compact_dit.sh`
    - Generate seven future frames from one observed RGB frame.
    - Run `preflight_next_stage.sh before_sample` to validate the generator and
@@ -231,7 +231,7 @@ to factor 2, `geo96|tex96`, nine RGB frames, one clean anchor, and four absolute
 future chunks. Run from any directory:
 
 ```bash
-# Full 10K sequence: fresh v2 codec from legacy 3K weights, joint decoder
+# Full 10K sequence: fresh v3 codec from legacy weights, joint decoder
 # finetune, strict quality/causality gate, durable cache, 6K diffusion, sample.
 CACHE_NUM_PARTITIONS=1 \
 STAGES=codec,joint,gate,cache,diffusion,sample \
@@ -247,7 +247,7 @@ bash scripts/scale/13_train_causal_video_diffusion.sh
 
 If the legacy probe is not under its default output namespace, set
 `LEGACY_INIT_CKPT` to its local or OBS checkpoint. It is loaded as weights only;
-the formal v2 codec starts a fresh optimizer/scheduler/step history. Same-stage
+the formal v3 codec starts a fresh optimizer/scheduler/step history. Same-stage
 preemption uses `checkpoint_latest.pt` and restores the full contract. Joint
 training starts from codec best with a new optimizer and trains only R7 plus the
 DualStreamDecoder; StreamVGGT, CompactCompressor, and TextureEncoder stay frozen.

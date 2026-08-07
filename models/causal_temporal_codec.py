@@ -8,11 +8,29 @@ import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint as torch_checkpoint
 
 
-def _gn(channels):
+def _gn_groups(channels):
     for groups in (32, 16, 8, 4, 1):
         if channels % groups == 0:
-            return nn.GroupNorm(groups, channels)
-    return nn.GroupNorm(1, channels)
+            return groups
+    return 1
+
+
+class FramewiseGroupNorm(nn.GroupNorm):
+    """Apply GroupNorm per frame without changing legacy state-dict keys."""
+
+    def __init__(self, channels):
+        super().__init__(_gn_groups(channels), channels)
+
+    def forward(self, x):
+        if x.dim() != 5:
+            raise ValueError(f"expected [B,C,T,H,W], got {tuple(x.shape)}")
+        batch, channels, frames, height, width = x.shape
+        x = x.permute(0, 2, 1, 3, 4).reshape(
+            batch * frames, channels, height, width)
+        x = F.group_norm(
+            x, self.num_groups, self.weight, self.bias, self.eps)
+        return x.reshape(batch, frames, channels, height, width).permute(
+            0, 2, 1, 3, 4).contiguous()
 
 
 class CausalConv3d(nn.Conv3d):
@@ -43,10 +61,10 @@ class CausalResBlock3d(nn.Module):
                  use_checkpoint=True):
         super().__init__()
         self.use_checkpoint = use_checkpoint
-        self.norm1 = _gn(channels)
+        self.norm1 = FramewiseGroupNorm(channels)
         self.conv1 = CausalConv3d(
             channels, channels, 3, dilation=(dilation, 1, 1), bias=False)
-        self.norm2 = _gn(channels)
+        self.norm2 = FramewiseGroupNorm(channels)
         self.conv2 = CausalConv3d(channels, channels, 3, bias=False)
         if zero_init:
             nn.init.zeros_(self.conv2.weight)

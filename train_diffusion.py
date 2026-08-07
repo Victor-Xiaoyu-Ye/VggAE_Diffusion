@@ -559,7 +559,7 @@ def main():
                         writer.add_scalar("train/recon_loss", recon_loss.item(), global_step)
                         writer.add_scalar("train/lr", lr_now, global_step)
                         writer.add_scalar(
-                            "train/DI_throughput",
+                            "DI_throughput",
                             throughput_meter.rate(), global_step)
 
         if num_batches > 0 and num_batches % args.accum_steps != 0:

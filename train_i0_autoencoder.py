@@ -508,11 +508,11 @@ def main():
                         'train/lr_pretrained': next(
                             group['lr'] for group in optimizer.param_groups
                             if group['group_name'].startswith('pretrained_')),
-                        'train/DI_throughput': throughput_meter.rate(),
+                        'DI_throughput': throughput_meter.rate(),
                     }
                     if writer:
                         for name, value in train_metrics.items():
-                            if name.startswith('train/'):
+                            if name.startswith('train/') or name == 'DI_throughput':
                                 writer.add_scalar(name, value, global_step)
                     append_metrics(metrics_path, train_metrics)
 

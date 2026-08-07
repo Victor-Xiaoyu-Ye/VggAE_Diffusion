@@ -432,13 +432,13 @@ def main():
                         'train/lpips': lpips_loss.item(),
                         'train/grad_norm': float(grad_norm),
                         'train/lr': optimizer.param_groups[0]['lr'],
-                        'train/DI_throughput': throughput.rate(),
+                        'DI_throughput': throughput.rate(),
                     }
                     if z_flat is not None:
                         m['train/latent_std'] = z_flat.float().std().item()
                         m['train/latent_mean'] = z_flat.float().mean().item()
                     for k, v in m.items():
-                        if k.startswith('train/'):
+                        if k.startswith('train/') or k == 'DI_throughput':
                             writer.add_scalar(k, v, global_step)
                     append_metrics(metrics_path, m)
                 if main_process:

@@ -68,6 +68,7 @@ def parse_args():
                           ("temporal", 0.1), ("accel", 0.05),
                           ("geo_motion", 0.1), ("comp_reg", 0.01)):
         p.add_argument("--lambda_" + name, type=float, default=default)
+    p.add_argument("--lambda_geo_motion_cosine", type=float, default=0.5)
     p.add_argument("--lpips_chunk_size", type=int, default=1)
     p.add_argument("--lpips_resize", type=int, default=256)
     p.add_argument("--max_grad_norm", type=float, default=1.0)
@@ -81,8 +82,6 @@ def parse_args():
                    help="weights-only initialization for a fresh stage")
     p.add_argument("--allow_legacy_checkpoint", action="store_true")
     p.add_argument("--log_every", type=int, default=50)
-    p.add_argument("--throughput_divisor", type=float, default=1.0,
-                   help="Divide reported DI_throughput by this value")
     p.add_argument("--eval_every", type=int, default=500)
     p.add_argument("--save_every", type=int, default=500)
     p.add_argument("--min_steps", type=int, default=2000)
@@ -160,6 +159,13 @@ def motion_cosine(pred, target):
     return F.cosine_similarity(pred, target, dim=-1).mean()
 
 
+def motion_cosine_loss(pred, target):
+    pred_delta = (pred[:, 1:] - pred[:, :-1]).float().flatten(2)
+    target_delta = (target[:, 1:] - target[:, :-1]).float().flatten(2)
+    cosine = F.cosine_similarity(pred_delta, target_delta, dim=-1)
+    return (1.0 - cosine).mean()
+
+
 def set_trainable(module, enabled):
     for parameter in module.parameters():
         parameter.requires_grad_(enabled)
@@ -220,7 +226,8 @@ def resume_objective(args):
              "tex_latent_dim", "seq_len", "clip_duration_seconds",
              "lambda_l1", "lambda_lpips", "lambda_latent",
              "lambda_temporal", "lambda_accel", "lambda_geo_motion",
-             "lambda_comp_reg", "lpips_resize", "lpips_chunk_size",
+             "lambda_geo_motion_cosine", "lambda_comp_reg",
+             "lpips_resize", "lpips_chunk_size",
              "batch_size", "accum_steps", "lr", "pretrained_lr", "wd")
     return {name: getattr(args, name) for name in names}
 
@@ -231,14 +238,14 @@ def main():
         raise ValueError("--resume and --init_ckpt are mutually exclusive")
     if min(args.accum_steps, args.max_steps, args.eval_every, args.save_every) <= 0:
         raise ValueError("step/count arguments must be positive")
-    if args.throughput_divisor <= 0:
-        raise ValueError("--throughput_divisor must be positive")
     if args.eval_clips <= 0:
         raise ValueError("eval_clips must be positive")
     if args.early_stop_patience < 0 or args.early_stop_min_delta < 0:
         raise ValueError("early-stop settings must be nonnegative")
     if args.extension_lr < 0 or args.extension_warmup_steps < 0:
         raise ValueError("extension settings must be nonnegative")
+    if args.lambda_geo_motion_cosine < 0:
+        raise ValueError("--lambda_geo_motion_cosine must be nonnegative")
 
     use_ddp, rank, local_rank, world_size = setup_ddp()
     main_process = is_main_process()
@@ -552,6 +559,7 @@ def main():
                           "temporal": temporal_loss(pred, target),
                           "accel": acceleration_loss(pred, target),
                           "geo_motion": temporal_loss(geo_rec, geo),
+                          "geo_motion_cosine": motion_cosine_loss(geo_rec, geo),
                           "comp_reg": latent_regularization(latent)}
                 losses["lpips"] = (lpips_chunked(get_lpips(device), pred, target,
                     args.lpips_chunk_size, args.lpips_resize)
@@ -567,12 +575,11 @@ def main():
             optimizer.step(); optimizer.zero_grad(set_to_none=True); scheduler.step(); step += 1
             if main_process and step % args.log_every == 0:
                 raw_throughput = throughput_meter.rate()
-                throughput = raw_throughput / args.throughput_divisor
+                throughput = raw_throughput
                 row = {"step": step, "train/loss": loss.item(),
                        **{f"train/{k}": v.item() for k, v in losses.items()},
                        "train/grad_norm": float(grad), "train/lr": scheduler.get_last_lr()[0],
-                       "train/DI_throughput": throughput,
-                       "train/raw_DI_throughput": raw_throughput}
+                       "DI_throughput": throughput}
                 append_metrics(metrics_path, row); log_scalars(writer, row, step)
                 progress.set_postfix(DI_throughput=f"{throughput:.2f} tokens/s/npu")
                 progress.write(f"{datetime.now()}: {row}")

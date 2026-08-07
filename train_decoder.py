@@ -251,7 +251,7 @@ def train_one_epoch(epoch, encoder, decoder, lpips_model, train_loader,
                 writer.add_scalar("step/loss", total_loss / max(num_batches, 1), global_step)
                 writer.add_scalar("step/lr", scheduler.get_last_lr()[0], global_step)
                 writer.add_scalar(
-                    "step/DI_throughput",
+                    "DI_throughput",
                     throughput_meter.rate(), global_step)
 
         if (batch_idx + 1) % 5 == 0:

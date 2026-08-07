@@ -138,6 +138,24 @@ cluster) or `scripts/10k/` (local A100). See `scripts/h200/README.md`.
   closer to 1, higher latent/expanded-geometry motion cosine, and no material
   reconstruction/variance regression. Cluster NPU/HCCL/MoXing runtime remains
   to be smoke-tested.**
+- **R7 CAUSALITY CORRECTION (2026-08-06): the first production t2/c192 v2 joint
+  checkpoint passed PSNR, LPIPS, and boundary gates but failed strict prefix
+  causality because applying GroupNorm directly to `[B,C,T,H,W]` coupled every
+  frame through shared temporal statistics. R7 temporal residual blocks now use
+  framewise GroupNorm by folding `T` into the batch dimension during
+  normalization. The module subclasses GroupNorm so legacy `norm*.weight` and
+  `norm*.bias` checkpoint keys remain strictly loadable. The old checkpoint is
+  still non-promotable: changing normalization semantics invalidates its measured
+  quality, and its geometry-motion cosine was 0.521 versus the required 0.95.
+  Retraining/evaluation and cluster NPU validation are required.**
+- **R7 V3 CORRECTION RUN (2026-08-07): preserve v2 outputs and use the default
+  `r7_t2_c192_v3` namespace. Temporal residual blocks use framewise GroupNorm,
+  and tokenizer training adds `lambda_geo_motion_cosine` to optimize the exact
+  geometry-motion gate rather than only its L1 proxy. V3 always starts from
+  weights-only initialization (legacy codec for codec, v3 codec-best for joint),
+  with fresh optimizer/scheduler state; it does not full-resume v2. Downstream
+  cache/diffusion defaults also point to v3 and must remain blocked until all
+  quality and causality gates pass.**
   latest Wan run (`outputs/scale/wan_compact_i2v14b480p_v1`, step 36250)
   showed under-dispersion consistent with both the old 20-PSNR latent and
   the whitened residual target.

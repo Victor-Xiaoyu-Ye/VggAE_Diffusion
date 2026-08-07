@@ -17,7 +17,7 @@ TEMPORAL_FACTOR="${TEMPORAL_FACTOR:-2}"
 GEO_LATENT_DIM="${GEO_LATENT_DIM:-96}"
 TEX_LATENT_DIM="${TEX_LATENT_DIM:-96}"
 LATENT_DIM=$((GEO_LATENT_DIM + TEX_LATENT_DIM))
-R7_NAMESPACE="${R7_NAMESPACE:-r7_t${TEMPORAL_FACTOR}_c${LATENT_DIM}_v2}"
+R7_NAMESPACE="${R7_NAMESPACE:-r7_t${TEMPORAL_FACTOR}_c${LATENT_DIM}_v3}"
 RUN_NAME="${R7_NAMESPACE}/${PHASE}"
 OUTPUT_DIR="${SCALE_ROOT}/${RUN_NAME}"
 REMOTE_OUTPUT_DIR="${SCALE_REMOTE_ROOT}/${RUN_NAME}"
@@ -46,7 +46,7 @@ AUTO_RESUME="${AUTO_RESUME:-1}"
 RESUME="${RESUME:-}"
 LEGACY_INIT_CKPT="${LEGACY_INIT_CKPT:-}"
 EXTEND="${EXTEND:-0}"
-THROUGHPUT_DIVISOR="${THROUGHPUT_DIVISOR:-20}"
+echo "DI_throughput reports raw tokens/s/npu"
 MASTER_PORT="${MASTER_PORT:-29670}"
 
 if [[ "${PHASE}" == "codec" ]]; then
@@ -65,6 +65,7 @@ fi
 WARMUP_STEPS="${WARMUP_STEPS:-200}"
 EXTENSION_LR="${EXTENSION_LR:-$([[ "${EXTEND}" == 1 ]] && printf 2e-5 || printf 0)}"
 EXTENSION_WARMUP_STEPS="${EXTENSION_WARMUP_STEPS:-200}"
+GEO_MOTION_COSINE_LAMBDA="${GEO_MOTION_COSINE_LAMBDA:-1.0}"
 # -----------------------------------------------------------------------------
 
 [[ "${PHASE}" == "codec" || "${PHASE}" == "joint" ]] || {
@@ -163,8 +164,6 @@ EXTRA_ARGS=()
 [[ -n "${INIT_CKPT}" ]] && EXTRA_ARGS+=(--init_ckpt "${INIT_CKPT}")
 [[ "${ALLOW_LEGACY}" == 1 ]] && EXTRA_ARGS+=(--allow_legacy_checkpoint)
 
-echo "DI_throughput divisor=${THROUGHPUT_DIVISOR}"
-
 start_output_sync "${OUTPUT_DIR}" "${REMOTE_OUTPUT_DIR}"
 trap 'stop_output_sync "${OUTPUT_DIR}" "${REMOTE_OUTPUT_DIR}"' EXIT
 run_torchrun "${PROJECT}/train_causal_dual_tokenizer.py" \
@@ -187,7 +186,7 @@ run_torchrun "${PROJECT}/train_causal_dual_tokenizer.py" \
   --gate_psnr "${GATE_PSNR:-23.9}" --gate_lpips "${GATE_LPIPS:-0.13}" \
   --gate_boundary_ratio "${GATE_BOUNDARY_RATIO:-1.10}" \
   --gate_geo_motion_cosine "${GATE_GEO_MOTION_COSINE:-0.95}" \
+  --lambda_geo_motion_cosine "${GEO_MOTION_COSINE_LAMBDA}" \
   --log_every "${LOG_EVERY}" --eval_every "${EVAL_EVERY}" \
   --save_every "${SAVE_EVERY}" --dtype bf16 --output_dir "${OUTPUT_DIR}" \
-  --throughput_divisor "${THROUGHPUT_DIVISOR}" \
   "${EXTRA_ARGS[@]}"

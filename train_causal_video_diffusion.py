@@ -113,8 +113,6 @@ def parse_args(argv=None):
     p.add_argument("--log_every", type=int, default=50)
     p.add_argument("--eval_every", type=int, default=500)
     p.add_argument("--save_every", type=int, default=500)
-    p.add_argument("--throughput_divisor", type=float, default=1.0,
-                   help="Divide reported DI_throughput by this value")
     p.add_argument("--early_stop_min_steps", type=int, default=6000)
     p.add_argument("--patience", type=int, default=8,
                    help="number of non-improving evaluations after min steps")
@@ -681,8 +679,6 @@ def main(argv=None):
     for value in (args.accum_steps, args.eval_every, args.save_every,
                   args.sample_steps, args.eval_clips):
         if value < 1: raise ValueError("step/count arguments must be positive")
-    if args.throughput_divisor <= 0:
-        raise ValueError("--throughput_divisor must be positive")
     if args.warmup_steps >= args.max_steps: raise ValueError("warmup must be < max_steps")
     if args.early_stop_min_steps < 6000:
         raise ValueError("production early stopping cannot begin before step 6000")
@@ -943,15 +939,14 @@ def main(argv=None):
         if use_ddp: dist.all_reduce(totals); totals /= world_size
         if main_process and step % args.log_every == 0:
             raw_throughput = throughput_meter.rate()
-            throughput = raw_throughput / args.throughput_divisor
+            throughput = raw_throughput
             row = {"step": step, "train/loss": totals[0].item(),
                    "train/motion_loss": totals[1].item(),
                    "train/accel_loss": totals[2].item(),
                    "train/geo_motion_loss": totals[3].item(),
                    "train/grad_norm": float(grad),
                    "train/lr": optimizer.param_groups[0]["lr"],
-                   "train/DI_throughput": throughput,
-                   "train/raw_DI_throughput": raw_throughput}
+                   "DI_throughput": throughput}
             append_metrics(metrics_path, row)
             for key, val in row.items():
                 if key != "step": writer.add_scalar(key, val, step)

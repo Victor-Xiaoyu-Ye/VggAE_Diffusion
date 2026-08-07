@@ -798,10 +798,10 @@ def main():
                         'train/latent_noise_std': noise_std,
                         'train/grad_norm': float(grad_norm),
                         'train/lr': optimizer.param_groups[0]['lr'],
-                        'train/DI_throughput': throughput_meter.rate(),
+                        'DI_throughput': throughput_meter.rate(),
                     }
                     for name, value in train_metrics.items():
-                        if name.startswith('train/'):
+                        if name.startswith('train/') or name == 'DI_throughput':
                             writer.add_scalar(name, value, global_step)
                     append_metrics(metrics_path, train_metrics)
 

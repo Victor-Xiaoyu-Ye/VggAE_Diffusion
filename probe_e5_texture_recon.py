@@ -541,7 +541,7 @@ def main():
                         'probe': args.probe_name, 'tex_mode': args.tex_mode,
                         'train/lr': scheduler.get_last_lr()[0],
                         'train/grad_norm': float(grad_norm),
-                        'train/DI_throughput': meter.rate(),
+                        'DI_throughput': meter.rate(),
                     }
                     for k, v in metrics.items():
                         row[k] = float(v.item() if torch.is_tensor(v) else v)

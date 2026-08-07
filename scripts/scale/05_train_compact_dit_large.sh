@@ -38,7 +38,7 @@ SAVE_EVERY="${SAVE_EVERY:-2000}"
 EVAL_EVERY="${EVAL_EVERY:-2000}"
 LOG_EVERY="${LOG_EVERY:-50}"
 SAMPLE_STEPS="${SAMPLE_STEPS:-20}"
-THROUGHPUT_DIVISOR="${THROUGHPUT_DIVISOR:-20}"
+echo "  DI_throughput reports raw tokens/s/npu"
 MASTER_PORT="${MASTER_PORT:-29614}"
 # -----------------------------------------------------------------------------
 
@@ -53,7 +53,6 @@ echo "  remote=${REMOTE_OUTPUT_DIR}"
 echo "  NNODES=${NNODES}, NUM_NPUS=${NUM_NPUS}, WORLD_SIZE=${WORLD_SIZE}"
 echo "  model_dim=${MODEL_DIM}, spatial_depth=${SPATIAL_DEPTH}, temporal_depth=${TEMPORAL_DEPTH}, heads=${NUM_HEADS}"
 echo "  max_steps=${MAX_STEPS}, batch=${BATCH_SIZE}, accum=${ACCUM_STEPS}, lr=${LEARNING_RATE}"
-echo "  DI_throughput divisor=${THROUGHPUT_DIVISOR}"
 
 EXTRA_ARGS=(
   --eval_manifest "${SCALE_EVAL_CACHE_DIR}/manifest.txt"
@@ -106,6 +105,5 @@ run_torchrun "${PROJECT}/train_cached_compact_diffusion.py" \
   --save_every "${SAVE_EVERY}" \
   --eval_every "${EVAL_EVERY}" \
   --sample_steps "${SAMPLE_STEPS}" \
-  --throughput_divisor "${THROUGHPUT_DIVISOR}" \
   --dtype fp16 \
   "${EXTRA_ARGS[@]}"

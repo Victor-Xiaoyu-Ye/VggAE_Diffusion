@@ -19,7 +19,7 @@ TEMPORAL_FACTOR="${TEMPORAL_FACTOR:-2}"
 LATENT_DIM="${LATENT_DIM:-192}"
 CONTEXT_CHUNKS="${CONTEXT_CHUNKS:-1}"
 FUTURE_CHUNKS="${FUTURE_CHUNKS:-4}"
-R7_NAMESPACE="${R7_NAMESPACE:-r7_t${TEMPORAL_FACTOR}_c${LATENT_DIM}_v2}"
+R7_NAMESPACE="${R7_NAMESPACE:-r7_t${TEMPORAL_FACTOR}_c${LATENT_DIM}_v3}"
 R7_CACHE_VERSION="${R7_CACHE_VERSION:-${R7_NAMESPACE}_seq9_frame_channel_v1}"
 R7_CACHE_OBS_ROOT="${R7_CACHE_OBS_ROOT:-${PERSISTENT_OBS_ROOT}/cache_latents/${R7_CACHE_VERSION}}"
 TRAIN_MANIFEST="${R7_MANIFEST:-${R7_CACHE_OBS_ROOT}/train/manifest.txt}"
@@ -30,7 +30,7 @@ R7_CKPT="${R7_CKPT:-${SCALE_ROOT}/${R7_NAMESPACE}/joint/checkpoint_best.pt}"
 R7_CKPT_URL="${R7_CKPT_URL:-${SCALE_REMOTE_ROOT}/${R7_NAMESPACE}/joint/checkpoint_best.pt}"
 R7_CKPT_MIRROR_URL="${R7_CKPT_MIRROR_URL:-${SCALE_MIRROR_ROOT}/${R7_NAMESPACE}/joint/checkpoint_best.pt}"
 
-DIFFUSION_NAMESPACE="${DIFFUSION_NAMESPACE:-r7_diffusion_t2_c192_ctx1_fut4_v1}"
+DIFFUSION_NAMESPACE="${DIFFUSION_NAMESPACE:-r7_diffusion_t2_c192_ctx1_fut4_v2}"
 OUTPUT_DIR="${SCALE_ROOT}/${DIFFUSION_NAMESPACE}"
 REMOTE_OUTPUT_DIR="${SCALE_REMOTE_ROOT}/${DIFFUSION_NAMESPACE}"
 MIRROR_OUTPUT_DIR="${SCALE_MIRROR_ROOT}/${DIFFUSION_NAMESPACE}"
@@ -46,7 +46,7 @@ MODEL_DIM="${MODEL_DIM:-1152}"
 SPATIAL_DEPTH="${SPATIAL_DEPTH:-10}"
 TEMPORAL_DEPTH="${TEMPORAL_DEPTH:-6}"
 NUM_HEADS="${NUM_HEADS:-16}"
-THROUGHPUT_DIVISOR="${THROUGHPUT_DIVISOR:-20}"
+echo "DI_throughput reports raw tokens/s/npu"
 MASTER_PORT="${MASTER_PORT:-29680}"
 
 [[ "${MODE}" == "train" || "${MODE}" == "sample" ]] || { echo "MODE must be train or sample." >&2; exit 2; }
@@ -162,7 +162,6 @@ if [[ -n "${RESUME}" && ! -s "${OUTPUT_DIR}/metrics.jsonl" ]]; then
   done
 fi
 EXTRA_ARGS=(); [[ -n "${RESUME}" ]] && EXTRA_ARGS+=(--resume "${RESUME}")
-echo "DI_throughput divisor=${THROUGHPUT_DIVISOR}"
 start_output_sync "${OUTPUT_DIR}" "${REMOTE_OUTPUT_DIR}"
 trap 'stop_output_sync "${OUTPUT_DIR}" "${REMOTE_OUTPUT_DIR}"' EXIT
 run_torchrun "${PROJECT}/train_causal_video_diffusion.py" \
@@ -189,5 +188,4 @@ run_torchrun "${PROJECT}/train_causal_video_diffusion.py" \
   --early_stop_min_steps "${EARLY_STOP_MIN_STEPS:-6000}" \
   --patience "${EARLY_STOP_PATIENCE:-8}" \
   --log_every "${LOG_EVERY:-50}" --eval_every "${EVAL_EVERY:-500}" \
-  --save_every "${SAVE_EVERY:-500}" --dtype bf16 \
-  --throughput_divisor "${THROUGHPUT_DIVISOR}" "${EXTRA_ARGS[@]}"
+  --save_every "${SAVE_EVERY:-500}" --dtype bf16 "${EXTRA_ARGS[@]}"
