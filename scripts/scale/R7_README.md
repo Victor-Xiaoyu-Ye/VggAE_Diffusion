@@ -32,7 +32,27 @@ Joint reconstruction starts from codec `checkpoint_best.pt` and trains the R7
 tokenizer plus `DualStreamDecoder`; StreamVGGT, CompactCompressor, and
 TextureEncoder remain frozen.
 
-## Stage commands
+## Diagnostic diffusion
+
+Because v3 currently passes strict causality and RGB/boundary gates but reaches
+geometry-motion cosine 0.832 rather than the production threshold 0.95, an
+explicitly isolated diagnostic diffusion may be launched without forging a
+`gate_passed.json` marker:
+
+```bash
+STAGES=cache,diffusion \
+ALLOW_DIAGNOSTIC_DIFFUSION=1 \
+DIAGNOSTIC_MIN_GEO_MOTION_COSINE=0.82 \
+DIAGNOSTIC_DIFFUSION_NAMESPACE=r7_diffusion_t2_c192_ctx1_fut4_v3_diag \
+R7_NAMESPACE=r7_t2_c192_v3 \
+CACHE_NUM_PARTITIONS=4 \
+bash scripts/scale/14_r7_recon_then_diffusion.sh
+```
+
+This mode still requires the strict causality probe, production PSNR/LPIPS and
+boundary thresholds, and the stated diagnostic geometry threshold. It is not
+an acceptance promotion and cannot use the production diffusion namespace.
+After training, run `STAGES=sample` with the same diagnostic variables.
 
 ```bash
 # Reconstruction

@@ -30,6 +30,9 @@ GATE_BOUNDARY_RATIO="${GATE_BOUNDARY_RATIO:-1.10}"
 GATE_GEO_MOTION_COSINE="${GATE_GEO_MOTION_COSINE:-0.95}"
 BARRIER_PORT="${BARRIER_PORT:-29690}"
 CACHE_NUM_PARTITIONS="${CACHE_NUM_PARTITIONS:-1}"
+ALLOW_DIAGNOSTIC_DIFFUSION="${ALLOW_DIAGNOSTIC_DIFFUSION:-0}"
+DIAGNOSTIC_MIN_GEO_MOTION_COSINE="${DIAGNOSTIC_MIN_GEO_MOTION_COSINE:-0.82}"
+DIAGNOSTIC_DIFFUSION_NAMESPACE="${DIAGNOSTIC_DIFFUSION_NAMESPACE:-r7_diffusion_t2_c192_ctx1_fut4_v3_diag}"
 
 configure_modelarts_distributed
 require_scale_cluster
@@ -73,6 +76,41 @@ with open(sys.argv[2], "rb") as stream:
 assert marker.get("checkpoint_sha256") == digest.hexdigest(), (
     "gate marker belongs to different checkpoint content",
     marker.get("checkpoint_sha256"), digest.hexdigest())
+PY
+}
+
+verify_diagnostic_checkpoint() {
+  [[ "${ALLOW_DIAGNOSTIC_DIFFUSION}" == 1 ]] || {
+    echo "Diagnostic diffusion requires ALLOW_DIAGNOSTIC_DIFFUSION=1." >&2
+    return 1
+  }
+  stage_r7_best
+  # This is deliberately not a passed-gate marker. It permits only an explicitly
+  # named diagnostic diffusion from a causal, RGB-qualified checkpoint.
+  "${PYTHON_BIN}" "${PROJECT}/probe_r7_causality.py" \
+    --factors "${TEMPORAL_FACTOR}" --checkpoint "${R7_BEST}"
+  "${PYTHON_BIN}" - "${R7_BEST}" "${GATE_PSNR}" "${GATE_LPIPS}" \
+      "${GATE_BOUNDARY_RATIO}" "${DIAGNOSTIC_MIN_GEO_MOTION_COSINE}" <<'PY'
+import sys, torch
+path = sys.argv[1]
+psnr, lpips, boundary, geo = map(float, sys.argv[2:6])
+artifact = torch.load(path, map_location="cpu", weights_only=False)
+best = artifact.get("best_state", {})
+row = best.get("metrics") or {}
+required = ("eval/psnr", "eval/lpips", "eval/boundary_ratio",
+            "eval/geo_motion_cosine")
+missing = [key for key in required if key not in row]
+if missing:
+    raise SystemExit(f"diagnostic checkpoint metrics missing: {missing}")
+checks = {
+    "psnr": row["eval/psnr"] >= psnr,
+    "lpips": row["eval/lpips"] <= lpips,
+    "boundary": row["eval/boundary_ratio"] <= boundary,
+    "diagnostic_geo_motion": row["eval/geo_motion_cosine"] >= geo,
+}
+print("diagnostic checkpoint checks:", checks, row)
+if not all(checks.values()):
+    raise SystemExit(2)
 PY
 }
 
@@ -189,7 +227,11 @@ PY
 fi
 
 if want cache; then
-  verify_gate_marker
+  if [[ "${ALLOW_DIAGNOSTIC_DIFFUSION}" == 1 ]]; then
+    verify_diagnostic_checkpoint
+  else
+    verify_gate_marker
+  fi
   echo "=== R7 durable train/eval cache ==="
   # Run every train partition serially. All nodes participate in each torchrun;
   # a barrier separates durable partition publication before the next launch.
@@ -213,21 +255,38 @@ if want cache; then
 fi
 
 if want diffusion; then
-  verify_gate_marker
-  echo "=== R7 production diffusion ==="
-  MODE=train R7_NAMESPACE="${R7_NAMESPACE}" R7_CKPT="${R7_BEST}" \
-    R7_CKPT_URL="${R7_BEST_URL}" R7_CKPT_MIRROR_URL="${R7_BEST_MIRROR_URL}" \
-    bash "${SCRIPT_DIR}/13_train_causal_video_diffusion.sh"
+  if [[ "${ALLOW_DIAGNOSTIC_DIFFUSION}" == 1 ]]; then
+    verify_diagnostic_checkpoint
+    echo "=== R7 diagnostic diffusion (not acceptance-promoted) ==="
+    MODE=train R7_NAMESPACE="${R7_NAMESPACE}" R7_CKPT="${R7_BEST}" \
+      R7_CKPT_URL="${R7_BEST_URL}" R7_CKPT_MIRROR_URL="${R7_BEST_MIRROR_URL}" \
+      DIFFUSION_NAMESPACE="${DIAGNOSTIC_DIFFUSION_NAMESPACE}" \
+      bash "${SCRIPT_DIR}/13_train_causal_video_diffusion.sh"
+  else
+    verify_gate_marker
+    echo "=== R7 production diffusion ==="
+    MODE=train R7_NAMESPACE="${R7_NAMESPACE}" R7_CKPT="${R7_BEST}" \
+      R7_CKPT_URL="${R7_BEST_URL}" R7_CKPT_MIRROR_URL="${R7_BEST_MIRROR_URL}" \
+      bash "${SCRIPT_DIR}/13_train_causal_video_diffusion.sh"
+  fi
   barrier
 fi
 
 if want sample; then
-  verify_gate_marker
-  echo "=== R7 best-EMA sample ==="
-  # The sample wrapper deterministically reads SAMPLE_INDEX from eval manifest.
-  MODE=sample R7_NAMESPACE="${R7_NAMESPACE}" R7_CKPT="${R7_BEST}" \
-    R7_CKPT_URL="${R7_BEST_URL}" R7_CKPT_MIRROR_URL="${R7_BEST_MIRROR_URL}" \
-    bash "${SCRIPT_DIR}/13_train_causal_video_diffusion.sh"
+  if [[ "${ALLOW_DIAGNOSTIC_DIFFUSION}" == 1 ]]; then
+    verify_diagnostic_checkpoint
+    echo "=== R7 diagnostic best-EMA sample ==="
+    MODE=sample R7_NAMESPACE="${R7_NAMESPACE}" R7_CKPT="${R7_BEST}" \
+      R7_CKPT_URL="${R7_BEST_URL}" R7_CKPT_MIRROR_URL="${R7_BEST_MIRROR_URL}" \
+      DIFFUSION_NAMESPACE="${DIAGNOSTIC_DIFFUSION_NAMESPACE}" \
+      bash "${SCRIPT_DIR}/13_train_causal_video_diffusion.sh"
+  else
+    verify_gate_marker
+    echo "=== R7 best-EMA sample ==="
+    MODE=sample R7_NAMESPACE="${R7_NAMESPACE}" R7_CKPT="${R7_BEST}" \
+      R7_CKPT_URL="${R7_BEST_URL}" R7_CKPT_MIRROR_URL="${R7_BEST_MIRROR_URL}" \
+      bash "${SCRIPT_DIR}/13_train_causal_video_diffusion.sh"
+  fi
   barrier
 fi
 

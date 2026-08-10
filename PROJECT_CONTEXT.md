@@ -155,7 +155,11 @@ cluster) or `scripts/10k/` (local A100). See `scripts/h200/README.md`.
   weights-only initialization (legacy codec for codec, v3 codec-best for joint),
   with fresh optimizer/scheduler state; it does not full-resume v2. Downstream
   cache/diffusion defaults also point to v3 and must remain blocked until all
-  quality and causality gates pass.**
+  quality and causality gates pass. A separately named diagnostic diffusion may
+  run only with explicit `ALLOW_DIAGNOSTIC_DIFFUSION=1`; it still requires strict
+  causality, production RGB/boundary gates, and geometry cosine >=0.82, writes to
+  `r7_diffusion_t2_c192_ctx1_fut4_v3_diag`, and never creates or bypasses a
+  production passed-gate marker.**
   latest Wan run (`outputs/scale/wan_compact_i2v14b480p_v1`, step 36250)
   showed under-dispersion consistent with both the old 20-PSNR latent and
   the whitened residual target.
