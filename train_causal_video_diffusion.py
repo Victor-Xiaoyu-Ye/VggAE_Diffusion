@@ -27,6 +27,7 @@ from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 
 from data.latent_shard_dataset import LatentShardDataset, latent_collate_fn
+from data.loader_utils import multiprocessing_loader_kwargs
 from models.compact_dit import CompactLatentDiT
 from utils.device import (configure_backend_compatibility, create_grad_scaler,
                           get_device, get_device_name, manual_seed_all,
@@ -709,10 +710,10 @@ def main(argv=None):
 
     dataset = LatentShardDataset(args.manifest, args.shuffle_buffer, args.seed,
                                  True, rank, world_size)
-    loader = DataLoader(dataset, batch_size=args.batch_size,
-                        num_workers=args.num_workers, collate_fn=latent_collate_fn,
-                        pin_memory=device_type == "cuda", drop_last=True,
-                        persistent_workers=args.num_workers > 0)
+    loader = DataLoader(
+        dataset, batch_size=args.batch_size, num_workers=args.num_workers,
+        collate_fn=latent_collate_fn, pin_memory=device_type == "cuda",
+        drop_last=True, **multiprocessing_loader_kwargs(args.num_workers))
     eval_batches = load_eval_batches(args.eval_manifest, args.eval_clips, args) \
         if main_process else None
 
