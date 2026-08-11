@@ -160,6 +160,29 @@ cluster) or `scripts/10k/` (local A100). See `scripts/h200/README.md`.
   causality, production RGB/boundary gates, and geometry cosine >=0.82, writes to
   `r7_diffusion_t2_c192_ctx1_fut4_v3_diag`, and never creates or bypasses a
   production passed-gate marker.**
+- **R7 DIFFUSION FAILURE DIAGNOSIS + WAN-1.3B PIVOT (2026-08-11): the v3
+  diagnostic diffusion (6K steps) is numerically healthy but severely
+  under-trained (velocity MSE 2.0 -> 1.26 and still falling at stop; latent
+  correlation ~0.93) and its near-manifold latents decode to colorful noise
+  because the DualStreamDecoder never saw perturbed latents. Motion collapses
+  with horizon (chunk cosine 0.996/0.805/0.29/0.05) — the absolute-target
+  velocity objective lets static content dominate and rewards copying the
+  anchor. Fix order (user decision, strictly serial): (1) decoder_robust
+  noise-augmentation phase in `train_causal_dual_tokenizer.py` (tokenizer
+  frozen, decoder-only, Gaussian sigma~U(0,0.35) on future chunks, anchor
+  clean; best requires noised-PSNR improvement over the init baseline; output
+  `r7_t2_c192_v3/decoder_robust/checkpoint_best.pt` — it can NEVER be passed as
+  `--r7_ckpt` because cache signatures.r7 binds the accepted joint bytes;
+  diffusion consumes it via the separate `--decoder_ckpt` override that
+  strictly loads only `decoder.*`); then (2) full-parameter finetune of
+  Wan2.1-T2V-1.3B (`train_causal_wan_video_diffusion.py`, stage 16) with
+  x0/clean-target prediction + FM sampling (VGGT-World velocity-collapse
+  evidence), anchor-as-clean-frame conditioning, native UMT5-xxl text
+  conditioning from a precomputed sidecar (stage 15; captions looked up from
+  annotation_index by cached video_id — no cache rebuild), time_shift_alpha 3.0,
+  CFG dropout 0.1, two-speed LR (adapter 1e-4 / trunk 1e-5), wan_freeze_steps
+  500, 30K default steps on the existing 10k cache with train/eval-gap overfit
+  monitoring. The old I2V-14B last-4-QKV path is discarded for this stage.**
   latest Wan run (`outputs/scale/wan_compact_i2v14b480p_v1`, step 36250)
   showed under-dispersion consistent with both the old 20-PSNR latent and
   the whitened residual target.
@@ -377,7 +400,7 @@ makes the generator's motion contribution unmeasurable.
   stats only; spatial-position normalization.
 - Impact: resume refuses mismatched stats and representation signatures.
 
-### Decision: Use Wan 14B As Pretrained Video Prior
+### Decision: Use Wan 14B As Pretrained Video Prior — SUPERSEDED for R7 (2026-08-11)
 
 - Content: use `Wan2.1-I2V-14B-480P` through `WanCompactAdapter` on the same
   StreamVGGT compact latent contract.
@@ -387,8 +410,14 @@ makes the generator's motion contribution unmeasurable.
   VAE latent semantics; old online Wan harness.
 - Impact: checkpoint stores trainable deltas only and requires the same
   `WAN_CKPT_DIR` at resume/sampling.
+- Superseded (R7 path): stage 16 uses `Wan2.1-T2V-1.3B` with FULL-parameter
+  finetuning instead. The 14B last-4-QKV compromise gave too little trainable
+  capacity to re-aim the prior at the StreamVGGT latent distribution (Gen3R
+  alignment lesson), while 1.3B full finetune fits replicated DDP on 60GiB
+  NPUs (~1.4B trainable, ~21G optimizer state). The old E7/E8 dual paths are
+  unaffected.
 
-### Decision: Train Last-N Wan QKV Blocks By Default
+### Decision: Train Last-N Wan QKV Blocks By Default — SUPERSEDED for R7 (2026-08-11)
 
 - Content: default `TRAIN_QKV=1`, `TRAIN_QKV_LAST_N=4`.
 - Reason: full 14B QKV under replicated DDP OOMed; last layers adapt high-level
@@ -397,8 +426,13 @@ makes the generator's motion contribution unmeasurable.
   DDP; full model finetune without FSDP/ZeRO.
 - Impact: if last-4 improves samples, expand to last 8/12; full QKV needs a
   different memory strategy.
+- Superseded (R7 path): `full_finetune=True` in `WanCompactAdapter` unfreezes
+  the entire 1.3B trunk (QKV, cross-attn, FFN, norms, text_embedding, time
+  path); only forward-unused modules (patch_embedding, head, img_emb, legacy
+  CLIP text_proj) stay frozen for DDP correctness. A hard guard rejects >1.5B
+  trainable and non-1.3B configs.
 
-### Decision: Keep Text Conditioning Off
+### Decision: Keep Text Conditioning Off — SUPERSEDED for R7 (2026-08-11)
 
 - Content: current generator is non-text, I0-conditioned.
 - Reason: the project must first prove geometry-aware latent generation; text
@@ -406,6 +440,11 @@ makes the generator's motion contribution unmeasurable.
 - Rejected alternatives: CLIP conditioning from legacy Wan scripts; immediate
   native UMT5 conditioning.
 - Impact: Wan text projection is not trained unless explicitly enabled.
+- Superseded (R7 path): stage 16 conditions on native UMT5-xxl embeddings from
+  the stage-15 precomputed sidecar (SceneDescription captions keyed by cached
+  video_id; empty-prompt embedding for missing captions and CFG dropout 0.1).
+  The T5 encoder never enters trainer memory. The legacy CLIP `text_proj`
+  branch remains frozen and unused.
 
 ## Conventions
 
