@@ -42,6 +42,22 @@ if [[ "${NODE_RANK}" -ne 0 ]]; then
   echo "Text-embedding precompute runs on node 0 only; node ${NODE_RANK} idle."
   exit 0
 fi
+
+# Idempotent chain stage: the sidecar is durable, keyed by its _SUCCESS
+# marker. Re-running the chain must not redo the full UMT5 encode.
+sidecar_published() {
+  PYTHONPATH="${PROJECT}" "${PYTHON_BIN}" - \
+    "${TEXT_EMBEDDING_OBS_DIR}/_SUCCESS" <<'PY'
+import sys
+from utils.moxing_io import remote_exists
+sys.exit(0 if remote_exists(sys.argv[1]) else 1)
+PY
+}
+if [[ "${FORCE_TEXT_EMBED:-0}" != 1 ]] && sidecar_published; then
+  echo "Text-embedding sidecar already published: ${TEXT_EMBEDDING_OBS_DIR}"
+  echo "Set FORCE_TEXT_EMBED=1 to rebuild."
+  exit 0
+fi
 ensure_spatialvid_subset_splits
 
 require_dir "${WAN_T2V_13B_DIR}" "Wan2.1-T2V-1.3B checkpoint directory"
