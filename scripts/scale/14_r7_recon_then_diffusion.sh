@@ -3,6 +3,8 @@
 # Examples:
 #   STAGES=codec,joint,gate,cache,diffusion,sample bash scripts/scale/14_r7_recon_then_diffusion.sh
 #   STAGES=gate,cache,diffusion bash scripts/scale/14_r7_recon_then_diffusion.sh
+#   STAGES=decoder_robust,text_embed,wan_diffusion,wan_sample \
+#     ALLOW_DIAGNOSTIC_DIFFUSION=1 bash scripts/scale/14_r7_recon_then_diffusion.sh
 set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -20,6 +22,10 @@ JOINT_MIRROR="${SCALE_MIRROR_ROOT}/${R7_NAMESPACE}/joint"
 R7_BEST="${R7_CKPT:-${JOINT_DIR}/checkpoint_best.pt}"
 R7_BEST_URL="${R7_CKPT_URL:-${JOINT_REMOTE}/checkpoint_best.pt}"
 R7_BEST_MIRROR_URL="${R7_CKPT_MIRROR_URL:-${JOINT_MIRROR}/checkpoint_best.pt}"
+DECODER_ROBUST_DIR="${SCALE_ROOT}/${R7_NAMESPACE}/decoder_robust"
+DECODER_ROBUST_REMOTE="${SCALE_REMOTE_ROOT}/${R7_NAMESPACE}/decoder_robust"
+DECODER_ROBUST_MIRROR="${SCALE_MIRROR_ROOT}/${R7_NAMESPACE}/decoder_robust"
+DECODER_ROBUST_BEST="${DECODER_ROBUST_DIR}/checkpoint_best.pt"
 GATE_METRICS="${JOINT_DIR}/metrics.jsonl"
 GATE_MARKER="${JOINT_DIR}/gate_passed.json"
 GATE_MARKER_URL="${JOINT_REMOTE}/gate_passed.json"
@@ -287,6 +293,73 @@ if want sample; then
       R7_CKPT_URL="${R7_BEST_URL}" R7_CKPT_MIRROR_URL="${R7_BEST_MIRROR_URL}" \
       bash "${SCRIPT_DIR}/13_train_causal_video_diffusion.sh"
   fi
+  barrier
+fi
+
+if want decoder_robust; then
+  # Decoder-only noise-robustness finetune from the accepted joint best.
+  # The chain requires the same checkpoint qualification as the downstream
+  # consumer: production gate marker, or the explicit diagnostic bypass.
+  if [[ "${ALLOW_DIAGNOSTIC_DIFFUSION}" == 1 ]]; then
+    verify_diagnostic_checkpoint
+  else
+    verify_gate_marker
+  fi
+  echo "=== R7 decoder_robust (joint-best init, decoder-only) ==="
+  PHASE=decoder_robust R7_NAMESPACE="${R7_NAMESPACE}" \
+    bash "${SCRIPT_DIR}/11_train_causal_tokenizer.sh"
+  barrier
+  stage_r7_checkpoint \
+    "${DECODER_ROBUST_BEST}" \
+    "${DECODER_ROBUST_REMOTE}/checkpoint_best.pt" \
+    "${DECODER_ROBUST_MIRROR}/checkpoint_best.pt" \
+    "published decoder_robust-best checkpoint"
+  barrier
+fi
+
+if want text_embed; then
+  echo "=== Wan UMT5-xxl text-embedding sidecar (node 0) ==="
+  # 15 exits immediately on non-zero NODE_RANK; the barrier makes every node
+  # wait for the durable OBS publication before wan_diffusion consumes it.
+  bash "${SCRIPT_DIR}/15_precompute_wan_text_embeddings.sh"
+  barrier
+fi
+
+if want wan_diffusion; then
+  if [[ "${ALLOW_DIAGNOSTIC_DIFFUSION}" == 1 ]]; then
+    verify_diagnostic_checkpoint
+  else
+    verify_gate_marker
+  fi
+  stage_r7_checkpoint \
+    "${DECODER_ROBUST_BEST}" \
+    "${DECODER_ROBUST_REMOTE}/checkpoint_best.pt" \
+    "${DECODER_ROBUST_MIRROR}/checkpoint_best.pt" \
+    "decoder_robust checkpoint"
+  echo "=== R7 Wan2.1-T2V-1.3B full-finetune diffusion ==="
+  MODE=train R7_NAMESPACE="${R7_NAMESPACE}" R7_CKPT="${R7_BEST}" \
+    R7_CKPT_URL="${R7_BEST_URL}" R7_CKPT_MIRROR_URL="${R7_BEST_MIRROR_URL}" \
+    DECODER_CKPT="${DECODER_ROBUST_BEST}" \
+    bash "${SCRIPT_DIR}/16_train_wan_t2v_diffusion.sh"
+  barrier
+fi
+
+if want wan_sample; then
+  if [[ "${ALLOW_DIAGNOSTIC_DIFFUSION}" == 1 ]]; then
+    verify_diagnostic_checkpoint
+  else
+    verify_gate_marker
+  fi
+  stage_r7_checkpoint \
+    "${DECODER_ROBUST_BEST}" \
+    "${DECODER_ROBUST_REMOTE}/checkpoint_best.pt" \
+    "${DECODER_ROBUST_MIRROR}/checkpoint_best.pt" \
+    "decoder_robust checkpoint"
+  echo "=== R7 Wan T2V best-EMA sample ==="
+  MODE=sample R7_NAMESPACE="${R7_NAMESPACE}" R7_CKPT="${R7_BEST}" \
+    R7_CKPT_URL="${R7_BEST_URL}" R7_CKPT_MIRROR_URL="${R7_BEST_MIRROR_URL}" \
+    DECODER_CKPT="${DECODER_ROBUST_BEST}" \
+    bash "${SCRIPT_DIR}/16_train_wan_t2v_diffusion.sh"
   barrier
 fi
 

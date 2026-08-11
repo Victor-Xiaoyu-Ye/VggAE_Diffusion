@@ -182,7 +182,14 @@ cluster) or `scripts/10k/` (local A100). See `scripts/h200/README.md`.
   annotation_index by cached video_id — no cache rebuild), time_shift_alpha 3.0,
   CFG dropout 0.1, two-speed LR (adapter 1e-4 / trunk 1e-5), wan_freeze_steps
   500, 30K default steps on the existing 10k cache with train/eval-gap overfit
-  monitoring. The old I2V-14B last-4-QKV path is discarded for this stage.**
+  monitoring. The old I2V-14B last-4-QKV path is discarded for this stage.
+  Launching follows the single-submission chain model: stages
+  `decoder_robust,text_embed,wan_diffusion,wan_sample` are wired into
+  `14_r7_recon_then_diffusion.sh` with durable OBS publication + barriers and
+  gate/diagnostic re-verification per stage — never a sequence of interactive
+  bash commands. Stage 15 prefers a durable prebuilt annotation index on OBS
+  and hard-fails (with instructions) on silently-empty annotation staging,
+  because `copy_parallel` is a no-op for missing OBS prefixes.**
   latest Wan run (`outputs/scale/wan_compact_i2v14b480p_v1`, step 36250)
   showed under-dispersion consistent with both the old 20-PSNR latent and
   the whitened residual target.
