@@ -2,7 +2,9 @@
 """Production R7 causal dual-tokenizer reconstruction training.
 
 ``codec`` trains only the tokenizer. ``joint`` trains tokenizer plus decoder.
-StreamVGGT, CompactCompressor, and TextureEncoder are frozen in both phases.
+``decoder_robust`` freezes the tokenizer and finetunes only the decoder on
+noise-perturbed latents so near-manifold generated latents decode gracefully.
+StreamVGGT, CompactCompressor, and TextureEncoder are frozen in every phase.
 """
 from __future__ import annotations
 
@@ -50,7 +52,8 @@ def parse_args():
     p.add_argument("--geo_latent_dim", type=int, default=96)
     p.add_argument("--tex_latent_dim", type=int, default=96)
     p.add_argument("--temporal_depth", type=int, default=3)
-    p.add_argument("--phase", choices=["codec", "joint"], default="codec")
+    p.add_argument("--phase", choices=["codec", "joint", "decoder_robust"],
+                   default="codec")
     p.add_argument("--seq_len", type=int, default=9)
     p.add_argument("--target_size", type=int, default=518)
     p.add_argument("--clip_duration_seconds", type=float, default=1.0)
@@ -69,6 +72,12 @@ def parse_args():
                           ("geo_motion", 0.1), ("comp_reg", 0.01)):
         p.add_argument("--lambda_" + name, type=float, default=default)
     p.add_argument("--lambda_geo_motion_cosine", type=float, default=0.5)
+    p.add_argument("--latent_noise_sigma_max", type=float, default=0.35,
+                   help="decoder_robust only: per-sample sigma ~ U(0, max) "
+                        "added to future latent chunks in raw-latent units")
+    p.add_argument("--latent_noise_eval_sigma", type=float, default=0.22,
+                   help="decoder_robust only: fixed sigma for the noised eval "
+                        "pass (matches the measured diffusion error scale)")
     p.add_argument("--lpips_chunk_size", type=int, default=1)
     p.add_argument("--lpips_resize", type=int, default=256)
     p.add_argument("--max_grad_norm", type=float, default=1.0)
@@ -102,8 +111,25 @@ class R7TrainingCore(nn.Module):
         super().__init__()
         self.tokenizer, self.decoder = tokenizer, decoder
 
-    def forward(self, geo, tex, chunk=None):
-        geo_rec, tex_rec, latent = self.tokenizer(geo, tex)
+    def forward(self, geo, tex, chunk=None, noise_sigma=None, noise=None):
+        if noise_sigma is None:
+            geo_rec, tex_rec, latent = self.tokenizer(geo, tex)
+        else:
+            # decoder_robust: the tokenizer is frozen, so the latent path runs
+            # without autograd and only the RGB decoder receives gradients.
+            # The anchor chunk stays clean, matching diffusion inference where
+            # chunk 0 is the observed condition and only futures are sampled.
+            with torch.no_grad():
+                latent = self.tokenizer.encode(geo, tex)
+                noised = latent.clone()
+                if noise is None:
+                    noise = torch.randn_like(noised[:, 1:])
+                sigma = torch.as_tensor(
+                    noise_sigma, device=latent.device,
+                    dtype=latent.dtype).reshape(-1, 1, 1, 1, 1)
+                noised[:, 1:] = noised[:, 1:] \
+                    + noise.to(dtype=noised.dtype) * sigma
+                geo_rec, tex_rec = self.tokenizer.decode(noised)
         rgb = self.decoder(geo_rec, tex_rec, frames_chunk_size=chunk)
         return rgb, geo_rec, tex_rec, latent
 
@@ -172,9 +198,17 @@ def set_trainable(module, enabled):
 
 
 def build_optimizer(core, args):
-    groups = [{"params": list(core.tokenizer.parameters()), "lr": args.lr,
-               "weight_decay": args.wd, "name": "tokenizer"}]
-    if args.phase == "joint":
+    groups = []
+    if args.phase != "decoder_robust":
+        groups.append({"params": list(core.tokenizer.parameters()),
+                       "lr": args.lr, "weight_decay": args.wd,
+                       "name": "tokenizer"})
+    if args.phase in ("joint", "decoder_robust"):
+        # decoder_robust is a decoder-only stage and drives the decoder at the
+        # primary --lr; joint keeps the decoder at the conservative
+        # --pretrained_lr under the tokenizer's faster schedule.
+        decoder_lr = args.lr if args.phase == "decoder_robust" \
+            else args.pretrained_lr
         decay, no_decay = [], []
         for name, parameter in core.decoder.named_parameters():
             (no_decay if parameter.ndim < 2 or "norm" in name or "bias" in name
@@ -182,8 +216,10 @@ def build_optimizer(core, args):
         for params, wd, name in ((decay, args.wd, "decoder"),
                                  (no_decay, 0.0, "decoder_no_decay")):
             if params:
-                groups.append({"params": params, "lr": args.pretrained_lr,
+                groups.append({"params": params, "lr": decoder_lr,
                                "weight_decay": wd, "name": name})
+    if not groups:
+        raise ValueError(f"no trainable parameter groups for phase {args.phase}")
     return torch.optim.AdamW(groups, betas=(0.9, 0.95), eps=1e-8)
 
 
@@ -229,7 +265,11 @@ def resume_objective(args):
              "lambda_geo_motion_cosine", "lambda_comp_reg",
              "lpips_resize", "lpips_chunk_size",
              "batch_size", "accum_steps", "lr", "pretrained_lr", "wd")
-    return {name: getattr(args, name) for name in names}
+    objective = {name: getattr(args, name) for name in names}
+    if args.phase == "decoder_robust":
+        objective["latent_noise_sigma_max"] = args.latent_noise_sigma_max
+        objective["latent_noise_eval_sigma"] = args.latent_noise_eval_sigma
+    return objective
 
 
 def main():
@@ -246,6 +286,21 @@ def main():
         raise ValueError("extension settings must be nonnegative")
     if args.lambda_geo_motion_cosine < 0:
         raise ValueError("--lambda_geo_motion_cosine must be nonnegative")
+    if args.phase == "decoder_robust":
+        if not args.init_ckpt and not args.resume:
+            raise ValueError(
+                "decoder_robust requires --init_ckpt (accepted joint best) "
+                "or --resume")
+        if args.latent_noise_sigma_max <= 0 or args.latent_noise_eval_sigma <= 0:
+            raise ValueError("decoder_robust noise sigmas must be positive")
+        # The latent path is frozen and runs under no_grad, so latent-side
+        # objectives cannot influence the decoder; requiring zero keeps the
+        # resume objective honest instead of silently dropping terms.
+        for name in ("latent", "geo_motion", "geo_motion_cosine", "comp_reg"):
+            if getattr(args, "lambda_" + name) != 0:
+                raise ValueError(
+                    f"--lambda_{name} must be 0 in decoder_robust (no "
+                    "gradient path through the frozen tokenizer)")
 
     use_ddp, rank, local_rank, world_size = setup_ddp()
     main_process = is_main_process()
@@ -342,8 +397,8 @@ def main():
     core = R7TrainingCore(tokenizer.to(device), decoder.to(device)).to(device)
     for module in (encoder, compressor, tex_encoder):
         set_trainable(module, False)
-    set_trainable(core.tokenizer, True)
-    set_trainable(core.decoder, args.phase == "joint")
+    set_trainable(core.tokenizer, args.phase in ("codec", "joint"))
+    set_trainable(core.decoder, args.phase in ("joint", "decoder_robust"))
     core.train()  # frozen decoder still checkpoints activations in codec phase
     optimizer = build_optimizer(core, args)
     scheduler = build_scheduler(optimizer, args.warmup_steps, args.max_steps)
@@ -445,10 +500,12 @@ def main():
         from PIL import Image
         core.eval(); lp = get_lpips(device)
         psnr, l1s, perceptual, geo_rt, tex_rt, geo_cos = [], [], [], [], [], []
+        noised_psnr, noised_l1s, noised_perceptual = [], [], []
         transitions = [[] for _ in range(config.seq_len - 1)]
         latent_means = [[] for _ in range(config.latent_seq_len)]
         latent_stds = [[] for _ in range(config.latent_seq_len)]
         grid_saved = False
+        clip_index = 0
         for batch in eval_loader:
             frames = batch["frames"].to(device)
             geo, tex = frozen_encode(frames)
@@ -470,12 +527,42 @@ def main():
             for index in range(config.latent_seq_len):
                 latent_means[index].append(latent[:, index].float().mean().item())
                 latent_stds[index].append(latent[:, index].float().std(unbiased=False).item())
+            noised_pred = None
+            if args.phase == "decoder_robust":
+                # Deterministic per-clip noise keeps the noised curve
+                # comparable across evals and resumes.
+                generator = torch.Generator().manual_seed(
+                    args.seed + 1009 * clip_index)
+                noise = torch.randn(
+                    (frames.shape[0], config.latent_seq_len - 1,
+                     config.latent_grid, config.latent_grid,
+                     config.latent_dim), generator=generator).to(device)
+                noised_pred, _, _, _ = core(
+                    geo, tex, chunk,
+                    noise_sigma=args.latent_noise_eval_sigma, noise=noise)
+                noised_pred = noised_pred[..., :3].float().clamp(0, 1)
+                noised_mse = (noised_pred - target).square().mean((1, 2, 3, 4))
+                noised_psnr.extend(
+                    (-10 * torch.log10(noised_mse.clamp_min(1e-10))).cpu().tolist())
+                noised_l1s.append(F.l1_loss(noised_pred, target).item())
+                noised_perceptual.append(lpips_chunked(
+                    lp, noised_pred, target,
+                    args.lpips_chunk_size, args.lpips_resize).item())
             if not grid_saved:
                 image = torch.cat([torch.cat([target[0, i], pred[0, i]], 1)
                                    for i in range(config.seq_len)], 0)
                 Image.fromarray((image.cpu().numpy() * 255).astype(np.uint8)).save(
                     os.path.join(args.output_dir, "samples", f"step{step:07d}_grid.png"))
+                if noised_pred is not None:
+                    image = torch.cat(
+                        [torch.cat([target[0, i], noised_pred[0, i]], 1)
+                         for i in range(config.seq_len)], 0)
+                    Image.fromarray(
+                        (image.cpu().numpy() * 255).astype(np.uint8)).save(
+                        os.path.join(args.output_dir, "samples",
+                                     f"step{step:07d}_noised_grid.png"))
                 grid_saved = True
+            clip_index += 1
         if not psnr:
             raise RuntimeError("evaluation dataset yielded no clips")
         trans = [float(np.mean(values)) for values in transitions]
@@ -500,6 +587,11 @@ def main():
             row[f"eval/latent_{pos}_mean"] = float(np.mean(latent_means[i]))
             row[f"eval/latent_{pos}_std"] = float(np.mean(latent_stds[i]))
         row["eval/anchor_boundary_error"] = trans[0]
+        if noised_psnr:
+            row["eval/noised_psnr"] = float(np.mean(noised_psnr))
+            row["eval/noised_l1"] = float(np.mean(noised_l1s))
+            row["eval/noised_lpips"] = float(np.mean(noised_perceptual))
+            row["eval/noised_sigma"] = args.latent_noise_eval_sigma
         row.update({"gate/psnr": row["eval/psnr"] >= args.gate_psnr,
                     "gate/lpips": row["eval/lpips"] <= args.gate_lpips,
                     "gate/boundary": row["eval/boundary_ratio"] <= args.gate_boundary_ratio,
@@ -525,6 +617,16 @@ def main():
         improved = ((passing and not best.get("passing", False))
                     or (passing == best.get("passing", False)
                         and value < best["value"] - args.early_stop_min_delta))
+        if args.phase == "decoder_robust":
+            # The whole point of this phase is robustness: the first eval
+            # (init weights) sets the noised baseline, and no checkpoint may
+            # become best until it decodes noised latents better than that.
+            noised = row["eval/noised_psnr"]
+            if early.get("noised_psnr_baseline") is None:
+                early["noised_psnr_baseline"] = noised
+                improved = False
+            elif noised <= early["noised_psnr_baseline"]:
+                improved = False
         if improved:
             best.update(value=value, step=step, metrics=dict(row),
                         passing=passing)
@@ -552,7 +654,13 @@ def main():
             sync = (micro + 1) % args.accum_steps == 0
             sync_context = contextlib.nullcontext() if sync or not use_ddp else model.no_sync()
             with sync_context:
-                pred, geo_rec, tex_rec, latent = model(geo, tex, chunk)
+                noise_sigma = None
+                if args.phase == "decoder_robust":
+                    noise_sigma = torch.rand(
+                        frames.shape[0], device=device) \
+                        * args.latent_noise_sigma_max
+                pred, geo_rec, tex_rec, latent = model(
+                    geo, tex, chunk, noise_sigma=noise_sigma)
                 target = frames.float().clamp(0, 1).permute(0, 1, 3, 4, 2)
                 losses = {"l1": F.l1_loss(pred, target),
                           "latent": F.l1_loss(geo_rec, geo) + F.l1_loss(tex_rec, tex),

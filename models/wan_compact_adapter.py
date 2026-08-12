@@ -77,7 +77,8 @@ class WanCompactAdapter(nn.Module):
                  seq_len=8, wan_dim=None, freq_dim=None, num_heads=None,
                  i0_condition=False, train_text_adapter=False,
                  train_qkv=True, train_qkv_last_n=0, train_ffn_last_n=0,
-                 num_pseudo_text=0):
+                 num_pseudo_text=0, full_finetune=False, anchor_frame=False,
+                 allow_other_wan=False):
         super().__init__()
 
         # Load pretrained Wan backbone. Do not hard-code the 1.3B dimensions:
@@ -112,6 +113,20 @@ class WanCompactAdapter(nn.Module):
         self.train_qkv_last_n = int(train_qkv_last_n)
         self.train_ffn_last_n = int(train_ffn_last_n)
         self.num_pseudo_text = int(num_pseudo_text)
+        self.full_finetune = bool(full_finetune)
+        self.anchor_frame = bool(anchor_frame)
+        if self.anchor_frame and self.i0_condition:
+            raise ValueError(
+                "anchor_frame replaces i0_condition; enable only one")
+        if self.full_finetune and not allow_other_wan:
+            expected = {"dim": 1536, "num_layers": 30, "num_heads": 12}
+            actual = {"dim": self.wan_dim,
+                      "num_layers": len(self.wan.blocks),
+                      "num_heads": self.num_heads}
+            if actual != expected:
+                raise ValueError(
+                    f"full_finetune expects Wan2.1-T2V-1.3B {expected}, got "
+                    f"{actual}; pass allow_other_wan=True to override")
 
         # Learned pseudo-text context (E8-v1 finding): Wan pretraining ALWAYS
         # ran cross-attention — even the CFG unconditional branch encodes the
@@ -171,6 +186,9 @@ class WanCompactAdapter(nn.Module):
 
     def _unfreeze_trainable(self):
         """Unfreeze adapters, modulation, time path, and optional last-N QKV."""
+        if self.full_finetune:
+            self._unfreeze_full()
+            return
         # Adapter layers
         for p in self.time_concat_mlp.parameters():
             p.requires_grad_(True)
@@ -236,6 +254,37 @@ class WanCompactAdapter(nn.Module):
             f"(qkv_blocks={self.qkv_trainable_blocks}/{len(self.wan.blocks)}, "
             f"ffn_blocks={self.ffn_trainable_blocks}/{len(self.wan.blocks)})")
 
+    def _unfreeze_full(self):
+        """Full-parameter finetune: the entire trunk plus adapter layers.
+
+        Modules the adapter forward never calls (patch_embedding, head,
+        img_emb, the legacy CLIP text_proj) remain frozen — unfreezing them
+        would break DDP with find_unused_parameters=False.
+        """
+        unused = [self.wan.patch_embedding, self.wan.head, self.text_proj]
+        if getattr(self.wan, "img_emb", None) is not None:
+            unused.append(self.wan.img_emb)
+        unused_params = {
+            id(p) for module in unused for p in module.parameters()}
+        for p in self.parameters():
+            p.requires_grad_(id(p) not in unused_params)
+        if self.num_pseudo_text > 0:
+            self.pseudo_context.requires_grad_(True)
+        num_blocks = len(self.wan.blocks)
+        self.qkv_trainable_blocks = num_blocks
+        self.ffn_trainable_blocks = num_blocks
+        trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
+        total = sum(p.numel() for p in self.parameters())
+        if trainable > 1.5e9:
+            raise RuntimeError(
+                f"full_finetune trainable count {trainable/1e9:.2f}B exceeds "
+                "the 1.5B replicated-DDP budget (known 14B OOM); use the "
+                "Wan2.1-T2V-1.3B checkpoint")
+        print(
+            f"WanCompactAdapter[full_finetune]: {trainable/1e6:.1f}M "
+            f"trainable / {total/1e9:.2f}B total "
+            f"(all {num_blocks} blocks incl. cross-attn/ffn/norms)")
+
     def _ensure_time_emb_float32(self):
         if self._time_emb_converted:
             return
@@ -268,22 +317,45 @@ class WanCompactAdapter(nn.Module):
         """Flow matching forward.
 
         Args:
-            z: [B, S, N, latent_dim] noisy latent
+            z: [B, S, N, latent_dim] noisy latent (future chunks only when
+                ``anchor_frame`` is enabled)
             t: [B] flow time in [0, 1]
             cond: optional first-frame compact latent [B, 1, N, latent_dim]
             text_emb: CLIP [B, L, 768] or native UMT5 [B, L, 4096]
 
         Returns:
-            v: [B, S, N, latent_dim] predicted velocity
+            [B, S, N, latent_dim] prediction (velocity or x0 per the trainer)
         """
         B, S, N, D = z.shape
 
         # ---- 1. Concat time at input (convert to model dtype for fp32 backbone) ----
         model_dtype = next(self.input_proj.parameters()).dtype
-        t_concat = self._concat_time_embed(t)  # [B, time_concat_dim], float32
-        t_concat = t_concat.unsqueeze(1).unsqueeze(1).expand(B, S, N, -1)
-        x = torch.cat([z.to(dtype=model_dtype), t_concat], dim=-1)  # [B, S, N, D+time_dim]
-        x = self.input_proj(x)  # [B, S, N, wan_dim]
+        if self.anchor_frame:
+            # Clean anchor prepended as frame 0. Its concat-time channel is
+            # t=1 (data), so the trunk can distinguish the observed frame from
+            # the noisy futures; adaLN keeps the per-sample noisy t, matching
+            # the dual-conditioning design.
+            if cond is None:
+                raise ValueError("anchor_frame WanCompactAdapter requires cond")
+            if cond.dim() != 4 or cond.shape[0] != B \
+                    or cond.shape[1] != 1 or cond.shape[2:] != (N, D):
+                raise ValueError(
+                    f"Expected cond [B, 1, N, D] compatible with {z.shape}, "
+                    f"got {tuple(cond.shape)}")
+            full = torch.cat([cond.to(dtype=z.dtype), z], dim=1)
+            S_total = S + 1
+            t_anchor = self._concat_time_embed(torch.ones_like(t))
+            t_future = self._concat_time_embed(t)
+            t_concat = torch.stack(
+                [t_anchor] + [t_future] * S, dim=1)  # [B, S_total, time_dim]
+            t_concat = t_concat.unsqueeze(2).expand(B, S_total, N, -1)
+            x = torch.cat([full.to(dtype=model_dtype), t_concat], dim=-1)
+        else:
+            S_total = S
+            t_concat = self._concat_time_embed(t)  # [B, time_concat_dim], float32
+            t_concat = t_concat.unsqueeze(1).unsqueeze(1).expand(B, S, N, -1)
+            x = torch.cat([z.to(dtype=model_dtype), t_concat], dim=-1)
+        x = self.input_proj(x)  # [B, S_total, N, wan_dim]
         if self.i0_condition:
             if cond is None:
                 raise ValueError("I0-conditioned WanCompactAdapter requires cond")
@@ -294,7 +366,7 @@ class WanCompactAdapter(nn.Module):
             i0_context = self.i0_proj(
                 cond.to(dtype=model_dtype).mean(dim=1)).unsqueeze(1)
             x = x + i0_context.expand(B, S, N, self.wan_dim)
-        x = x.reshape(B, S * N, self.wan_dim)  # [B, S*N, wan_dim]
+        x = x.reshape(B, S_total * N, self.wan_dim)  # [B, S_total*N, wan_dim]
 
         # ---- 2. Wan time embedding (adaLN) ----
         t_wan = (t * 1000).to(device=z.device)
@@ -302,10 +374,11 @@ class WanCompactAdapter(nn.Module):
 
         # ---- 3. Grid setup for 3D RoPE ----
         grid_sizes = torch.tensor(
-            [[S, self.latent_grid, self.latent_grid]],
+            [[S_total, self.latent_grid, self.latent_grid]],
             device=z.device, dtype=torch.long
         ).repeat(B, 1)
-        seq_lens = torch.full((B,), S * N, device=z.device, dtype=torch.long)
+        seq_lens = torch.full(
+            (B,), S_total * N, device=z.device, dtype=torch.long)
 
         # ---- 4. Text conditioning ----
         context, context_lens = None, None
@@ -358,8 +431,10 @@ class WanCompactAdapter(nn.Module):
 
         # ---- 6. Output projection ----
         x = self.output_norm(x)
-        x = self.output_proj(x)  # [B, S*N, latent_dim]
+        x = self.output_proj(x)  # [B, S_total*N, latent_dim]
         x = x.to(dtype=z.dtype)  # back to input dtype (bf16)
-        x = x.reshape(B, S, N, self.latent_dim)
+        x = x.reshape(B, S_total, N, self.latent_dim)
+        if self.anchor_frame:
+            x = x[:, 1:]  # drop the clean anchor frame
 
         return x

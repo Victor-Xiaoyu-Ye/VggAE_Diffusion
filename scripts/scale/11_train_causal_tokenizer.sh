@@ -12,7 +12,7 @@ source "${SCRIPT_DIR}/../lib/spatialvid.sh"
 source "${SCRIPT_DIR}/../lib/modelarts.sh"
 
 # -------------------------- centrally editable contract -----------------------
-PHASE="${PHASE:-codec}"                       # codec | joint
+PHASE="${PHASE:-codec}"                       # codec | joint | decoder_robust
 TEMPORAL_FACTOR="${TEMPORAL_FACTOR:-2}"
 GEO_LATENT_DIM="${GEO_LATENT_DIM:-96}"
 TEX_LATENT_DIM="${TEX_LATENT_DIM:-96}"
@@ -55,6 +55,13 @@ if [[ "${PHASE}" == "codec" ]]; then
   PRETRAINED_LR="${PRETRAINED_LR:-5e-5}"
   MIN_STEPS="${MIN_STEPS:-4000}"
   EARLY_STOP_PATIENCE="${EARLY_STOP_PATIENCE:-4}"
+elif [[ "${PHASE}" == "decoder_robust" ]]; then
+  # Decoder-only robustness finetune from the accepted joint checkpoint.
+  MAX_STEPS="${MAX_STEPS:-4000}"
+  LEARNING_RATE="${LEARNING_RATE:-5e-5}"
+  PRETRAINED_LR="${PRETRAINED_LR:-5e-5}"
+  MIN_STEPS="${MIN_STEPS:-2000}"
+  EARLY_STOP_PATIENCE="${EARLY_STOP_PATIENCE:-4}"
 else
   MAX_STEPS="${MAX_STEPS:-12000}"
   LEARNING_RATE="${LEARNING_RATE:-5e-5}"
@@ -66,10 +73,13 @@ WARMUP_STEPS="${WARMUP_STEPS:-200}"
 EXTENSION_LR="${EXTENSION_LR:-$([[ "${EXTEND}" == 1 ]] && printf 2e-5 || printf 0)}"
 EXTENSION_WARMUP_STEPS="${EXTENSION_WARMUP_STEPS:-200}"
 GEO_MOTION_COSINE_LAMBDA="${GEO_MOTION_COSINE_LAMBDA:-1.0}"
+LATENT_NOISE_SIGMA_MAX="${LATENT_NOISE_SIGMA_MAX:-0.35}"
+LATENT_NOISE_EVAL_SIGMA="${LATENT_NOISE_EVAL_SIGMA:-0.22}"
 # -----------------------------------------------------------------------------
 
-[[ "${PHASE}" == "codec" || "${PHASE}" == "joint" ]] || {
-  echo "PHASE must be codec or joint, got ${PHASE}" >&2; exit 2;
+[[ "${PHASE}" == "codec" || "${PHASE}" == "joint" \
+   || "${PHASE}" == "decoder_robust" ]] || {
+  echo "PHASE must be codec, joint, or decoder_robust, got ${PHASE}" >&2; exit 2;
 }
 [[ "${TEMPORAL_FACTOR}" -eq 2 && "${LATENT_DIM}" -eq 192 && "${SEQ_LEN}" -eq 9 ]] || {
   echo "Production R7 contract is t2/c192/seq9." >&2; exit 2;
@@ -83,6 +93,8 @@ elif [[ "${PHASE}" == "codec" && "${MAX_STEPS}" -gt 6000 ]]; then
   echo "The initial codec run is capped at 6000; use EXTEND=1 for 12000." >&2; exit 2
 elif [[ "${PHASE}" == "joint" && "${MAX_STEPS}" -gt 12000 ]]; then
   echo "Joint MAX_STEPS may not exceed 12000." >&2; exit 2
+elif [[ "${PHASE}" == "decoder_robust" && "${MAX_STEPS}" -gt 6000 ]]; then
+  echo "decoder_robust MAX_STEPS may not exceed 6000." >&2; exit 2
 fi
 
 configure_modelarts_distributed
@@ -143,13 +155,20 @@ if [[ -z "${RESUME}" ]]; then
     fi
     ALLOW_LEGACY=1
   else
-    # Joint is a new optimizer/scheduler stage initialized strictly from codec best.
-    CODEC_RUN="${R7_NAMESPACE}/codec"
+    # Joint and decoder_robust are new optimizer/scheduler stages initialized
+    # strictly from the preceding phase's best checkpoint.
+    if [[ "${PHASE}" == "joint" ]]; then
+      SOURCE_RUN="${R7_NAMESPACE}/codec"
+      SOURCE_TAG="codec_best"
+    else
+      SOURCE_RUN="${R7_NAMESPACE}/joint"
+      SOURCE_TAG="joint_best"
+    fi
     INIT_CKPT=$(resolve_resume_checkpoint "" \
-      "${SCALE_ROOT}/${CODEC_RUN}/checkpoint_best.pt" \
-      "${SCALE_REMOTE_ROOT}/${CODEC_RUN}/checkpoint_best.pt" \
-      "${LOCAL_CACHE_ROOT}/resume/${R7_NAMESPACE//\//_}_codec_best.pt" \
-      "${SCALE_MIRROR_ROOT}/${CODEC_RUN}/checkpoint_best.pt")
+      "${SCALE_ROOT}/${SOURCE_RUN}/checkpoint_best.pt" \
+      "${SCALE_REMOTE_ROOT}/${SOURCE_RUN}/checkpoint_best.pt" \
+      "${LOCAL_CACHE_ROOT}/resume/${R7_NAMESPACE//\//_}_${SOURCE_TAG}.pt" \
+      "${SCALE_MIRROR_ROOT}/${SOURCE_RUN}/checkpoint_best.pt")
   fi
   [[ -n "${INIT_CKPT}" ]] || {
     echo "No weights initializer found for ${PHASE}; set LEGACY_INIT_CKPT explicitly." >&2; exit 1;
@@ -163,6 +182,14 @@ EXTRA_ARGS=()
 [[ -n "${RESUME}" ]] && EXTRA_ARGS+=(--resume "${RESUME}")
 [[ -n "${INIT_CKPT}" ]] && EXTRA_ARGS+=(--init_ckpt "${INIT_CKPT}")
 [[ "${ALLOW_LEGACY}" == 1 ]] && EXTRA_ARGS+=(--allow_legacy_checkpoint)
+if [[ "${PHASE}" == "decoder_robust" ]]; then
+  # Latent-side objectives have no gradient path through the frozen tokenizer;
+  # the trainer rejects nonzero values in this phase.
+  GEO_MOTION_COSINE_LAMBDA=0
+  EXTRA_ARGS+=(--lambda_latent 0 --lambda_geo_motion 0 --lambda_comp_reg 0
+               --latent_noise_sigma_max "${LATENT_NOISE_SIGMA_MAX}"
+               --latent_noise_eval_sigma "${LATENT_NOISE_EVAL_SIGMA}")
+fi
 
 start_output_sync "${OUTPUT_DIR}" "${REMOTE_OUTPUT_DIR}"
 trap 'stop_output_sync "${OUTPUT_DIR}" "${REMOTE_OUTPUT_DIR}"' EXIT
