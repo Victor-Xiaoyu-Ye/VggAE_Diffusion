@@ -94,8 +94,30 @@ ensure_local_checkpoint "${DECODER_CKPT}" "${DECODER_CKPT_URL}" \
 LOCAL_TEXT_EMBEDDING_DIR="${LOCAL_CACHE_ROOT}/text_embeddings/${TEXT_EMBEDDING_VERSION}"
 if [[ ! -s "${LOCAL_TEXT_EMBEDDING_DIR}/_SUCCESS" ]]; then
   echo "Staging text embeddings from ${TEXT_EMBEDDING_OBS_DIR}"
-  "${PYTHON_BIN}" "${PROJECT}/scripts/moxing_transfer.py" --directory \
-    "${TEXT_EMBEDDING_OBS_DIR}" "${LOCAL_TEXT_EMBEDDING_DIR}"
+  # Keyed per-file reads: copy_parallel directory staging is silently
+  # unreliable for many-object prefixes (same failure as the annotations
+  # tree). Pull index/empty/_SUCCESS explicitly, then every indexed shard,
+  # and only then write the local _SUCCESS marker.
+  PYTHONPATH="${PROJECT}" "${PYTHON_BIN}" - \
+    "${TEXT_EMBEDDING_OBS_DIR}" "${LOCAL_TEXT_EMBEDDING_DIR}" <<'PY'
+import json, os, sys
+from utils.moxing_io import copy_file, join_remote
+
+remote, local = sys.argv[1], sys.argv[2]
+os.makedirs(local, exist_ok=True)
+for name in ("index.json", "empty_prompt.pt"):
+    copy_file(join_remote(remote, name), os.path.join(local, name))
+with open(os.path.join(local, "index.json"), encoding="utf-8") as stream:
+    index = json.load(stream)
+shards = sorted(set(index.values()))
+for count, shard in enumerate(shards, 1):
+    copy_file(join_remote(remote, shard), os.path.join(local, shard))
+    if count % 5 == 0 or count == len(shards):
+        print(f"text-embedding shards staged: {count}/{len(shards)}")
+copy_file(join_remote(remote, "_SUCCESS"), os.path.join(local, "_SUCCESS"))
+print(f"text-embedding sidecar staged: {len(shards)} shards + "
+      f"index/empty/_SUCCESS -> {local}")
+PY
 fi
 require_file "${LOCAL_TEXT_EMBEDDING_DIR}/_SUCCESS" "text-embedding sidecar marker"
 
