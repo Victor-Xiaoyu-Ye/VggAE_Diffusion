@@ -23,7 +23,6 @@ SPATIALVID_SPLIT_DIR="${RUN_ROOT}/metadata/spatialvid_oft_seed${SPLIT_SEED}"
 SPATIALVID_TRAIN_10K_CSV="${SPATIALVID_SPLIT_DIR}/train_10k.csv"
 SPATIALVID_EVAL_CSV="${SPATIALVID_SPLIT_DIR}/eval.csv"
 SPATIALVID_ANNO_URL="${SPATIALVID_ANNO_URL:-${SPATIALVID_OFT_ROOT}/annotations/SpatialVID/annotations}"
-SPATIALVID_ANNO_DIR="${SPATIALVID_ANNO_DIR:-${LOCAL_CACHE_ROOT}/annotations/spatialvid_oft}"
 ANNOTATION_INDEX="${ANNOTATION_INDEX:-${RUN_ROOT}/metadata/annotation_index_oft.json}"
 # Durable prebuilt index (preferred): one small JSON instead of copying tens of
 # thousands of caption.json files. Built once here, or uploaded manually from
@@ -70,35 +69,22 @@ for asset in "models_t5_umt5-xxl-enc-bf16.pth" "google/umt5-xxl"; do
 done
 
 if [[ ! -s "${ANNOTATION_INDEX}" ]]; then
-  # Preferred path: fetch the durable prebuilt index from OBS.
+  # Try the durable prebuilt index first; else build it by reading the
+  # caption.json objects directly from OBS for exactly the split video ids.
+  # The tree is never copied: copy_parallel over tens of thousands of small
+  # objects proved unreliable (silent partial/no-op), keyed reads are not.
   mkdir -p "$(dirname "${ANNOTATION_INDEX}")"
   "${PYTHON_BIN}" "${PROJECT}/scripts/moxing_transfer.py" \
     "${ANNOTATION_INDEX_URL}" "${ANNOTATION_INDEX}" 2>/dev/null || true
 fi
 if [[ ! -s "${ANNOTATION_INDEX}" ]]; then
-  # Fallback: stage the annotations tree and build the index here.
-  # copy_parallel on a missing OBS prefix is a silent no-op, so validate that
-  # the staged directory actually contains group subdirectories.
-  if [[ ! -d "${SPATIALVID_ANNO_DIR}" ]] \
-      || [[ -z "$(ls -A "${SPATIALVID_ANNO_DIR}" 2>/dev/null)" ]]; then
-    echo "Staging annotations from ${SPATIALVID_ANNO_URL}"
-    "${PYTHON_BIN}" "${PROJECT}/scripts/moxing_transfer.py" --directory \
-      "${SPATIALVID_ANNO_URL}" "${SPATIALVID_ANNO_DIR}"
-  fi
-  if [[ ! -d "${SPATIALVID_ANNO_DIR}" ]] \
-      || [[ -z "$(ls -A "${SPATIALVID_ANNO_DIR}" 2>/dev/null)" ]]; then
-    echo "Annotation staging produced no files from ${SPATIALVID_ANNO_URL}." >&2
-    echo "Either the OBS mirror lacks the annotations tree, or the prefix" >&2
-    echo "differs. Fix SPATIALVID_ANNO_URL, or build annotation_index.json" >&2
-    echo "on the A100 box (scripts/build_annotation_index.sh) and upload it" >&2
-    echo "to ${ANNOTATION_INDEX_URL}." >&2
-    exit 1
-  fi
-  "${PYTHON_BIN}" "${PROJECT}/data/annotation_index.py" \
-    --csv_path "${SPATIALVID_METADATA}" \
-    --anno_dir "${SPATIALVID_ANNO_DIR}" \
-    --out_path "${ANNOTATION_INDEX}"
-  # Publish the built index durably so later runs skip the tree copy.
+  PYTHONPATH="${PROJECT}" "${PYTHON_BIN}" "${PROJECT}/data/annotation_index.py" \
+    --csv_path "${SPATIALVID_TRAIN_10K_CSV}" \
+    --csv_path "${SPATIALVID_EVAL_CSV}" \
+    --anno_dir "${SPATIALVID_ANNO_URL}" \
+    --out_path "${ANNOTATION_INDEX}" \
+    --workers "${ANNOTATION_FETCH_WORKERS:-16}"
+  # Publish the built index durably so later runs skip the OBS reads.
   "${PYTHON_BIN}" "${PROJECT}/scripts/moxing_transfer.py" \
     "${ANNOTATION_INDEX}" "${ANNOTATION_INDEX_URL}" || true
 fi
