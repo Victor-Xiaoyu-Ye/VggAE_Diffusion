@@ -398,6 +398,15 @@ def main():
     for module in (encoder, compressor, tex_encoder):
         set_trainable(module, False)
     set_trainable(core.tokenizer, args.phase in ("codec", "joint"))
+    if config.temporal_factor == 1:
+        # Factor-1 explicitly bypasses these compatibility modules. Re-freeze
+        # after the phase-wide set_trainable call so DDP does not wait for
+        # gradients from parameters that are absent from the forward graph.
+        for module in (core.tokenizer.temporal.encoder.anchor,
+                       core.tokenizer.temporal.encoder.fold,
+                       core.tokenizer.temporal.decoder.anchor,
+                       core.tokenizer.temporal.decoder.expand):
+            set_trainable(module, False)
     set_trainable(core.decoder, args.phase in ("joint", "decoder_robust"))
     core.train()  # frozen decoder still checkpoints activations in codec phase
     optimizer = build_optimizer(core, args)

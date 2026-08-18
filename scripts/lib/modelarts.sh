@@ -77,13 +77,17 @@ resolve_resume_checkpoint() {
     last_candidate="${candidate}"
     rm -f "${staged_path}"
     echo "Trying resume checkpoint: ${candidate}" >&2
+    # A missing object is normal on the first launch of a new namespace. Keep
+    # MoXing's verbose 404 traceback out of the job log, while still requiring
+    # a non-empty staged file before accepting the candidate.
     if "${PYTHON_BIN}" "${PROJECT}/scripts/moxing_transfer.py" \
-        "${candidate}" "${staged_path}" >&2 \
+        "${candidate}" "${staged_path}" >/dev/null 2>&1 \
         && [[ -s "${staged_path}" ]]; then
       echo "Staged resume checkpoint: ${candidate}" >&2
       printf '%s' "${staged_path}"
       return
     fi
+    echo "Resume checkpoint unavailable: ${candidate}" >&2
     rm -f "${staged_path}"
   done
   echo "No remote checkpoint found; starting a new run." >&2

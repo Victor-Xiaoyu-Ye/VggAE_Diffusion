@@ -150,6 +150,11 @@ if [[ -z "${RESUME}" ]]; then
     INIT_CKPT=$(stage_resume_checkpoint "${LEGACY_INIT_CKPT}" \
       "${LOCAL_CACHE_ROOT}/resume/${R7_NAMESPACE//\//_}_${PHASE}_init.pt")
     ALLOW_LEGACY=1
+  elif [[ "${PHASE}" == "codec" && "${PROBE_CONTRACT}" == 1 ]]; then
+    # Factor-1 changes the temporal fold/expand parameter shapes, so no t2
+    # checkpoint can initialize it strictly. Build a fresh tokenizer from the
+    # frozen dual-AE source modules instead.
+    INIT_CKPT=""
   elif [[ "${PHASE}" == "codec" ]]; then
     # Formal v2 codec is always a fresh 0->6k training stage: old 3k state is
     # migrated as model weights only. Optimizer, scheduler, global step, RNG,
@@ -184,9 +189,11 @@ if [[ -z "${RESUME}" ]]; then
       "${LOCAL_CACHE_ROOT}/resume/${R7_NAMESPACE//\//_}_${SOURCE_TAG}.pt" \
       "${SCALE_MIRROR_ROOT}/${SOURCE_RUN}/checkpoint_best.pt")
   fi
-  [[ -n "${INIT_CKPT}" ]] || {
-    echo "No weights initializer found for ${PHASE}; set LEGACY_INIT_CKPT explicitly." >&2; exit 1;
-  }
+  if [[ -z "${INIT_CKPT}" && ! ("${PHASE}" == "codec" && \
+       "${PROBE_CONTRACT}" == 1) ]]; then
+    echo "No weights initializer found for ${PHASE}; set LEGACY_INIT_CKPT explicitly." >&2
+    exit 1
+  fi
 fi
 if [[ "${EXTEND}" == 1 && -z "${RESUME}" ]]; then
   echo "EXTEND=1 requires a same-namespace completed full-state checkpoint." >&2; exit 1
