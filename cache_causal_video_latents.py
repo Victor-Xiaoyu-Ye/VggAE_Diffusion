@@ -226,13 +226,18 @@ def validate_requested_config(args, config):
     if mismatches:
         raise RuntimeError(
             f"Cache arguments differ from accepted R7 config: {mismatches}")
-    if config.seq_len != 9 or config.temporal_factor != 2:
+    if config.seq_len != 9 or config.temporal_factor not in (1, 2):
         raise RuntimeError(
-            "R7 durable cache requires nine RGB frames and temporal_factor=2")
-    if config.latent_dim != 192 or config.latent_seq_len != 5:
+            "R7 probe cache requires nine RGB frames and temporal_factor 1 or 2")
+    if config.latent_dim != 192:
         raise RuntimeError(
-            "R7 durable cache requires latent layout [B,5,G,G,192], got "
-            f"T={config.latent_seq_len}, D={config.latent_dim}")
+            "R7 probe cache requires latent channel dimension 192, got "
+            f"D={config.latent_dim}")
+    expected_latent_frames = 1 + (config.seq_len - 1) // config.temporal_factor
+    if config.latent_seq_len != expected_latent_frames:
+        raise RuntimeError(
+            "R7 latent sequence contract is inconsistent: "
+            f"T={config.latent_seq_len}, expected={expected_latent_frames}")
     if (config.latent_grid != 18
             or config.geo_latent_dim != 96
             or config.tex_latent_dim != 96):
@@ -360,10 +365,12 @@ def main():
     if not 0 <= processed_items <= total_rank_items:
         raise RuntimeError(
             f"Invalid rank cursor {processed_items}/{total_rank_items}")
+    future_chunks = config.latent_seq_len - 1
     target_moments = (progress_state["moments"]["target"]
-                      if progress_state else cpu_moments(4, 192))
+                      if progress_state else cpu_moments(
+                          future_chunks, config.latent_dim))
     cond_moments = (progress_state["moments"]["cond"]
-                    if progress_state else cpu_moments(1, 192))
+                    if progress_state else cpu_moments(1, config.latent_dim))
 
     dataloader = DataLoader(
         Subset(SafeDataset(dataset), rank_indices[processed_items:]),
@@ -463,21 +470,26 @@ def main():
                     encoder, compressor, tex_encoder, frames, encoder_dtype)
                 latent = tokenizer.encode(geo, texture)
                 expected = (
-                    1, 5, config.latent_grid, config.latent_grid, 192)
+                    1, config.latent_seq_len, config.latent_grid,
+                    config.latent_grid, config.latent_dim)
                 if tuple(latent.shape) != expected:
                     raise RuntimeError(
                         f"R7 encode shape {tuple(latent.shape)} != {expected}")
                 throughput_meter.update(count_latent_tokens(latent))
                 flat = latent.reshape(
-                    1, 5, config.latent_grid ** 2, config.latent_dim)
+                    1, config.latent_seq_len,
+                    config.latent_grid ** 2, config.latent_dim)
                 cond = flat[:, :1]
                 target = flat[:, 1:]
                 if tuple(cond.shape[1:]) != (
-                        1, config.latent_grid ** 2, 192):
-                    raise RuntimeError("R7 cond must have shape [B,1,N,192]")
+                        1, config.latent_grid ** 2, config.latent_dim):
+                    raise RuntimeError(
+                        "R7 cond shape differs from representation contract")
                 if tuple(target.shape[1:]) != (
-                        4, config.latent_grid ** 2, 192):
-                    raise RuntimeError("R7 target must have shape [B,4,N,192]")
+                        future_chunks, config.latent_grid ** 2,
+                        config.latent_dim):
+                    raise RuntimeError(
+                        "R7 target shape differs from representation contract")
 
                 window_index = int(batch["window_index"][0])
                 key = (f"p{partition_id:05d}-r{rank:05d}-"
@@ -492,6 +504,7 @@ def main():
                     "requested_video_id": batch.get(
                         "requested_video_id", batch["video_id"])[0],
                     "window_index": window_index,
+                    "clips_per_video": args.clips_per_video,
                 }
                 if args.store_i0_rgb:
                     cached["i0_rgb"] = (

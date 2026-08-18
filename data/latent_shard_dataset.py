@@ -142,6 +142,12 @@ def latent_collate_fn(batch):
         "cond": cond,
         "caption": [sample.get("caption", "") for sample in batch],
         "video_id": [sample.get("video_id", "") for sample in batch],
+        "requested_video_id": [
+            sample.get("requested_video_id", sample.get("video_id", ""))
+            for sample in batch],
+        "window_index": [int(sample.get("window_index", 0)) for sample in batch],
+        "clips_per_video": [
+            int(sample.get("clips_per_video", 1)) for sample in batch],
     }
     if all("i0_rgb" in sample for sample in batch):
         result["i0_rgb"] = torch.stack(

@@ -78,7 +78,7 @@ class WanCompactAdapter(nn.Module):
                  i0_condition=False, train_text_adapter=False,
                  train_qkv=True, train_qkv_last_n=0, train_ffn_last_n=0,
                  num_pseudo_text=0, full_finetune=False, anchor_frame=False,
-                 allow_other_wan=False):
+                 anchor_memory=False, allow_other_wan=False):
         super().__init__()
 
         # Load pretrained Wan backbone. Do not hard-code the 1.3B dimensions:
@@ -115,6 +115,7 @@ class WanCompactAdapter(nn.Module):
         self.num_pseudo_text = int(num_pseudo_text)
         self.full_finetune = bool(full_finetune)
         self.anchor_frame = bool(anchor_frame)
+        self.anchor_memory = bool(anchor_memory)
         if self.anchor_frame and self.i0_condition:
             raise ValueError(
                 "anchor_frame replaces i0_condition; enable only one")
@@ -153,6 +154,19 @@ class WanCompactAdapter(nn.Module):
             nn.SiLU(),
             nn.Linear(self.wan_dim, self.wan_dim),
         )
+        if self.anchor_frame and self.anchor_memory:
+            # T2V Wan has no native image-conditioning branch. The clean anchor
+            # token in self-attention is supplemented by a gated per-token
+            # memory that every block can read. Gates start at zero so a new
+            # branch cannot destroy the pretrained residual stream at init.
+            self.anchor_memory_proj = nn.Sequential(
+                nn.LayerNorm(latent_dim),
+                nn.Linear(latent_dim, self.wan_dim),
+                nn.SiLU(),
+                nn.Linear(self.wan_dim, self.wan_dim),
+            )
+            self.anchor_memory_gate = nn.Parameter(
+                torch.zeros(len(self.wan.blocks), 1, 1, self.wan_dim))
         if i0_condition:
             self.i0_proj = nn.Sequential(
                 nn.LayerNorm(latent_dim),
@@ -194,6 +208,10 @@ class WanCompactAdapter(nn.Module):
             p.requires_grad_(True)
         for p in self.input_proj.parameters():
             p.requires_grad_(True)
+        if self.anchor_frame and self.anchor_memory:
+            for p in self.anchor_memory_proj.parameters():
+                p.requires_grad_(True)
+            self.anchor_memory_gate.requires_grad_(True)
         if self.i0_condition:
             for p in self.i0_proj.parameters():
                 p.requires_grad_(True)
@@ -404,7 +422,13 @@ class WanCompactAdapter(nn.Module):
         if self.wan.freqs.device != x.device:
             self.wan.freqs = self.wan.freqs.to(x.device)
 
-        def _block_fn(x, e, seq_lens, grid_sizes, freqs, context, context_lens, block):
+        def _block_fn(x, e, seq_lens, grid_sizes, freqs, context, context_lens,
+                      block, anchor_memory, anchor_gate):
+            if anchor_memory is not None:
+                memory = anchor_memory[:, None].expand(
+                    B, S_total, N, self.wan_dim).reshape(
+                        B, S_total * N, self.wan_dim)
+                x = x + torch.tanh(anchor_gate).to(x.dtype) * memory.to(x.dtype)
             e_dtype = x.dtype
             e6 = (block.modulation.to(e_dtype) + e.to(e_dtype)).chunk(6, dim=1)
             # Self-attention
@@ -420,14 +444,23 @@ class WanCompactAdapter(nn.Module):
             x = x + y * e6[5].to(x.dtype)
             return x
 
-        for block in self.wan.blocks:
+        anchor_memory = None
+        if self.anchor_frame and self.anchor_memory:
+            anchor_memory = self.anchor_memory_proj(
+                cond.to(dtype=model_dtype).squeeze(1))
+
+        for index, block in enumerate(self.wan.blocks):
+            gate = (self.anchor_memory_gate[index]
+                    if anchor_memory is not None else None)
             if self.training:
                 x = torch.utils.checkpoint.checkpoint(
                     _block_fn, x, e, seq_lens, grid_sizes, self.wan.freqs,
-                    context, context_lens, block, use_reentrant=False)
+                    context, context_lens, block, anchor_memory, gate,
+                    use_reentrant=False)
             else:
                 x = _block_fn(x, e, seq_lens, grid_sizes, self.wan.freqs,
-                             context, context_lens, block)
+                              context, context_lens, block,
+                              anchor_memory, gate)
 
         # ---- 6. Output projection ----
         x = self.output_norm(x)

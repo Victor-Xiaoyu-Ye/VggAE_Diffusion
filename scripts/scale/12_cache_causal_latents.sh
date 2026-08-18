@@ -17,7 +17,13 @@ MODE="${MODE:-train}"                         # train | eval | merge
 TEMPORAL_FACTOR="${TEMPORAL_FACTOR:-2}"
 LATENT_DIM="${LATENT_DIM:-192}"
 SEQ_LEN="${SEQ_LEN:-9}"
-R7_NAMESPACE="${R7_NAMESPACE:-r7_t${TEMPORAL_FACTOR}_c${LATENT_DIM}_v3}"
+PROBE_CONTRACT="${PROBE_CONTRACT:-0}"
+if [[ "${PROBE_CONTRACT}" == 1 ]]; then
+  DEFAULT_R7_NAMESPACE="r7_t${TEMPORAL_FACTOR}_c${LATENT_DIM}_probe_v1"
+else
+  DEFAULT_R7_NAMESPACE="r7_t${TEMPORAL_FACTOR}_c${LATENT_DIM}_v3"
+fi
+R7_NAMESPACE="${R7_NAMESPACE:-${DEFAULT_R7_NAMESPACE}}"
 R7_ACCEPTED_PHASE="${R7_ACCEPTED_PHASE:-joint}"
 CACHE_VERSION="${R7_CACHE_VERSION:-${R7_NAMESPACE}_seq${SEQ_LEN}_frame_channel_v1}"
 R7_CACHE_OBS_ROOT="${R7_CACHE_OBS_ROOT:-${PERSISTENT_OBS_ROOT}/cache_latents/${CACHE_VERSION}}"
@@ -47,9 +53,17 @@ MASTER_PORT="${MASTER_PORT:-29675}"
 [[ "${MODE}" == "train" || "${MODE}" == "eval" || "${MODE}" == "merge" ]] || {
   echo "MODE must be train, eval, or merge." >&2; exit 2;
 }
-[[ "${TEMPORAL_FACTOR}" -eq 2 && "${LATENT_DIM}" -eq 192 && "${SEQ_LEN}" -eq 9 ]] || {
-  echo "Production cache contract is t2/c192/seq9." >&2; exit 2;
-}
+if [[ "${PROBE_CONTRACT}" == 1 ]]; then
+  [[ "${TEMPORAL_FACTOR}" -eq 1 && "${LATENT_DIM}" -eq 192 && \
+     "${SEQ_LEN}" -eq 9 ]] || {
+    echo "Factor-1 cache probe contract is t1/c192/seq9." >&2; exit 2;
+  }
+else
+  [[ "${TEMPORAL_FACTOR}" -eq 2 && "${LATENT_DIM}" -eq 192 && \
+     "${SEQ_LEN}" -eq 9 ]] || {
+    echo "Production cache contract is t2/c192/seq9; set PROBE_CONTRACT=1 for t1." >&2; exit 2;
+  }
+fi
 configure_modelarts_distributed
 require_scale_cluster
 require_output_url

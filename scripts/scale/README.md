@@ -273,11 +273,15 @@ and intended to improve flow optimization, not codec reconstruction.
 The first diffusion stage jointly denoises all four future chunks with a clean
 anchor token and bidirectional temporal attention. It deliberately excludes
 rollout, context mean pooling, generated-context noise, and temporal offsets.
-Every 500 steps it writes durable metrics, EMA latent sample packs, and
-periodic/latest/best checkpoints; `checkpoint_final.pt` is always written.
-Standalone sampling loads EMA by default and decodes the complete nine-frame RGB
-clip. Cluster NPU/HCCL/MoXing behavior still requires the initial smoke run; local
-static checks do not prove those paths.
+Every 500 steps it writes durable metrics, EMA latent sample packs, labelled
+`ANCHOR / AE_TARGET / GENERATED` PNG grids and MP4 previews, and
+periodic/latest/best checkpoints; `checkpoint_final.pt` is always written. The
+training cache does not contain raw future RGB, so `AE_TARGET` means the R7
+autoencoder reconstruction rather than the original video. Standalone sampling
+loads EMA by default and decodes the complete nine-frame RGB clip. Cluster
+NPU/HCCL/MoXing behavior still requires the initial smoke run; local static
+checks do not prove those paths. The 2026-08-17 t2/c192 Wan result and replacement
+experiment matrix are documented in `docs/R7_QUALITY_PLAN.md`.
 
 Cache generation uses shard-level transactional resume. Re-running the same
 `03_cache_latents.sh` with the same 6x8 topology loads each rank's progress

@@ -190,9 +190,35 @@ cluster) or `scripts/10k/` (local A100). See `scripts/h200/README.md`.
   bash commands. Stage 15 prefers a durable prebuilt annotation index on OBS
   and hard-fails (with instructions) on silently-empty annotation staging,
   because `copy_parallel` is a no-op for missing OBS prefixes.**
+- **R7 T2/C192 + WAN-1.3B RESULT AND REDESIGN (2026-08-17):**
+  `decoder_robust` completed 4K steps and improved fixed-sigma-0.22 noised
+  reconstruction from about 20.33 to 20.65 dB (noised LPIPS 0.270 -> 0.248),
+  while leaving the frozen tokenizer geometry cosine at about 0.832 as expected.
+  The Wan T2V-1.3B x0 run reached step 14K: teacher-forced x0 MSE kept falling
+  (about 1.04 -> 0.358), but deterministic sampled RGB/composite peaked around
+  step 7K and then regressed; future chunk motion cosine collapsed with horizon
+  (step 14K about 0.995/0.916/0.591/0.194) and expanded geometry-motion cosine
+  remained near 0.02. This is objective/interface/representation failure, not
+  evidence that the same arm merely needs 30K steps. The current t2/c192 codec
+  and Wan run remain diagnostic and cannot be production-promoted. Training eval
+  now writes labelled ANCHOR/AE_TARGET/GENERATED PNG grids, frame PNGs, MP4s, and
+  preview manifests; large float RGB packs are opt-in. The redesign is gated:
+  first compare factor-1 against t2 codec ceilings, then train a Wan-native
+  teacher bridge (frozen Wan VAE permitted only during training; inference stays
+  R7-only), add per-block anchor memory and horizon/motion losses, and finish
+  with short-window overlapping rollout. Only a 10K arm passing multi-seed
+  late-horizon/RGB/geometry gates may rebuild the full SpatialVID-HQ cache. The
+  formal experiment plan is `docs/R7_QUALITY_PLAN.md`. Formal generation remains
+  restricted to Wan2.1-T2V-1.3B; I2V-14B is not available for this redesign.**
   latest Wan run (`outputs/scale/wan_compact_i2v14b480p_v1`, step 36250)
   showed under-dispersion consistent with both the old 20-PSNR latent and
   the whitened residual target.
+- **R7 QUALITY REDESIGN (2026-08-17): active next work is evaluation-first.**
+  Do not extend `r7_wan13b_t2v_ctx1_fut4_v1` blindly. First replay the 7K/14K
+  checkpoints through the new PNG/MP4 and horizon-guard path; then run the
+  factor-1 codec ceiling and Wan-native teacher-bridge probes defined in
+  `docs/R7_QUALITY_PLAN.md`. New representation experiments require new
+  namespaces/caches/stats and must not overwrite v3 artifacts.
 - Active large-scale dataset: SpatialVID-HQ on OBS.
 - Active local 10K dataset path:
   `/public2/LiZhen/yexiaoyu/dataset/spatial-vid-hq-oft` (A100 box).

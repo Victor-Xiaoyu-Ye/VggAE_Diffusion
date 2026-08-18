@@ -185,8 +185,9 @@ class R7Config:
         return 1 + (self.seq_len - 1) // self.temporal_factor
 
     def validate(self) -> None:
-        if self.temporal_factor not in (2, 4):
-            raise ValueError(f"temporal_factor must be 2 or 4, got {self.temporal_factor}")
+        if self.temporal_factor not in (1, 2, 4):
+            raise ValueError(
+                f"temporal_factor must be 1, 2, or 4, got {self.temporal_factor}")
         if self.seq_len < 2 or (self.seq_len - 1) % self.temporal_factor:
             raise ValueError(
                 f"seq_len={self.seq_len} must satisfy 1 + "

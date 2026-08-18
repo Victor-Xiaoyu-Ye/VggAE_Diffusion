@@ -17,7 +17,13 @@ TEMPORAL_FACTOR="${TEMPORAL_FACTOR:-2}"
 GEO_LATENT_DIM="${GEO_LATENT_DIM:-96}"
 TEX_LATENT_DIM="${TEX_LATENT_DIM:-96}"
 LATENT_DIM=$((GEO_LATENT_DIM + TEX_LATENT_DIM))
-R7_NAMESPACE="${R7_NAMESPACE:-r7_t${TEMPORAL_FACTOR}_c${LATENT_DIM}_v3}"
+PROBE_CONTRACT="${PROBE_CONTRACT:-0}"
+if [[ "${PROBE_CONTRACT}" == 1 ]]; then
+  DEFAULT_R7_NAMESPACE="r7_t${TEMPORAL_FACTOR}_c${LATENT_DIM}_probe_v1"
+else
+  DEFAULT_R7_NAMESPACE="r7_t${TEMPORAL_FACTOR}_c${LATENT_DIM}_v3"
+fi
+R7_NAMESPACE="${R7_NAMESPACE:-${DEFAULT_R7_NAMESPACE}}"
 RUN_NAME="${R7_NAMESPACE}/${PHASE}"
 OUTPUT_DIR="${SCALE_ROOT}/${RUN_NAME}"
 REMOTE_OUTPUT_DIR="${SCALE_REMOTE_ROOT}/${RUN_NAME}"
@@ -81,9 +87,17 @@ LATENT_NOISE_EVAL_SIGMA="${LATENT_NOISE_EVAL_SIGMA:-0.22}"
    || "${PHASE}" == "decoder_robust" ]] || {
   echo "PHASE must be codec, joint, or decoder_robust, got ${PHASE}" >&2; exit 2;
 }
-[[ "${TEMPORAL_FACTOR}" -eq 2 && "${LATENT_DIM}" -eq 192 && "${SEQ_LEN}" -eq 9 ]] || {
-  echo "Production R7 contract is t2/c192/seq9." >&2; exit 2;
-}
+if [[ "${PROBE_CONTRACT}" == 1 ]]; then
+  [[ "${TEMPORAL_FACTOR}" -eq 1 && "${LATENT_DIM}" -eq 192 && \
+     "${SEQ_LEN}" -eq 9 ]] || {
+    echo "Factor-1 probe contract is t1/c192/seq9." >&2; exit 2;
+  }
+else
+  [[ "${TEMPORAL_FACTOR}" -eq 2 && "${LATENT_DIM}" -eq 192 && \
+     "${SEQ_LEN}" -eq 9 ]] || {
+    echo "Production R7 contract is t2/c192/seq9; set PROBE_CONTRACT=1 for t1." >&2; exit 2;
+  }
+fi
 if [[ "${EXTEND}" == 1 ]]; then
   [[ "${MAX_STEPS}" -eq 12000 ]] || { echo "An extension must target MAX_STEPS=12000." >&2; exit 2; }
   "${PYTHON_BIN}" -c "import sys; sys.exit(0 if float('${EXTENSION_LR}') > 0 else 1)" || {

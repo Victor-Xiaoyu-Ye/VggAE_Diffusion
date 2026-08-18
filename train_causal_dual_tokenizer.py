@@ -48,7 +48,7 @@ def parse_args():
     for name in ("csv", "video_root", "eval_csv", "encoder_ckpt",
                  "dual_ae_ckpt", "output_dir"):
         p.add_argument("--" + name, required=True)
-    p.add_argument("--temporal_factor", type=int, choices=[2, 4], default=2)
+    p.add_argument("--temporal_factor", type=int, choices=[1, 2, 4], default=2)
     p.add_argument("--geo_latent_dim", type=int, default=96)
     p.add_argument("--tex_latent_dim", type=int, default=96)
     p.add_argument("--temporal_depth", type=int, default=3)

@@ -38,6 +38,15 @@ class CausalDualTokenizerCore(nn.Module):
         self.temporal_factor = temporal_factor
         self.temporal = CausalSpatiotemporalCodec(
             self.latent_dim, temporal_factor, temporal_depth)
+        if temporal_factor == 1:
+            # Factor-1 bypasses anchor/fold/expand by construction. Mark those
+            # compatibility parameters frozen so DDP does not expect gradients.
+            for module in (self.temporal.encoder.anchor,
+                           self.temporal.encoder.fold,
+                           self.temporal.decoder.anchor,
+                           self.temporal.decoder.expand):
+                for parameter in module.parameters():
+                    parameter.requires_grad_(False)
         self.geo_projection = StreamProjection(geo_dim, geo_latent_dim)
         self.tex_projection = StreamProjection(tex_dim, tex_latent_dim)
 

@@ -14,7 +14,7 @@ from utils.r7_representation import (build_contract, load_checkpoint,
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--factors", type=int, nargs="+", default=[2, 4])
+    parser.add_argument("--factors", type=int, nargs="+", default=[1, 2, 4])
     parser.add_argument("--atol", type=float, default=1e-5)
     parser.add_argument("--checkpoint", default="",
                         help="strictly validate an R7 checkpoint without data")

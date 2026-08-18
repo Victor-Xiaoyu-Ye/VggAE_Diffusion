@@ -44,6 +44,7 @@ def parse_args(argv=None):
     p.add_argument("--dtype", choices=("fp16", "bf16", "fp32"), default="bf16")
     p.add_argument("--weights", choices=("ema", "model"), default="ema")
     p.add_argument("--decode_chunk_size", type=int, default=0)
+    p.add_argument("--preview_fps", type=float, default=8.0)
     return p.parse_args(argv)
 
 
@@ -85,25 +86,17 @@ def load_manifest_anchor(manifest, index):
     raise IndexError(f"sample_index {index} is outside cache manifest")
 
 
-def save_rgb_outputs(rgb, output_path):
-    from PIL import Image
+def save_rgb_outputs(rgb, output_path, fps=8.0, label="generated"):
+    from utils.video_preview import save_video_preview
+
     output_dir = os.path.dirname(os.path.abspath(output_path))
     stem = os.path.splitext(os.path.basename(output_path))[0]
-    frame_dir = os.path.join(output_dir, stem + "_pngs")
-    os.makedirs(frame_dir, exist_ok=True)
-    images = []
-    for index, frame in enumerate(rgb[0]):
-        array = frame.clamp(0, 1).mul(255).round().to(torch.uint8).numpy()
-        image = Image.fromarray(array)
-        image.save(os.path.join(frame_dir, f"frame_{index:02d}.png"))
-        images.append(image)
-    width, height = images[0].size
-    grid = Image.new("RGB", (width * len(images), height))
-    for index, image in enumerate(images):
-        grid.paste(image, (index * width, 0))
-    grid_path = os.path.join(output_dir, stem + "_grid.png")
-    grid.save(grid_path)
-    return frame_dir, grid_path
+    preview = save_video_preview(
+        output_dir, stem, {label: rgb[0]}, fps=fps,
+        metadata={"source": os.path.abspath(output_path)},
+        save_frames=True, save_mp4=True)
+    entry = preview["videos"][label]
+    return entry.get("png_dir", ""), preview["grid"], entry.get("mp4", "")
 
 
 def main(argv=None):
@@ -194,8 +187,10 @@ def main(argv=None):
     torch.save(output, args.output)
     metrics_path = os.path.splitext(os.path.abspath(args.output))[0] + "_metrics.json"
     if "rgb_9frames" in output:
-        frame_dir, grid_path = save_rgb_outputs(output["rgb_9frames"], args.output)
-        metrics.update({"png_dir": frame_dir, "grid": grid_path})
+        frame_dir, grid_path, mp4_path = save_rgb_outputs(
+            output["rgb_9frames"], args.output, args.preview_fps)
+        metrics.update({"png_dir": frame_dir, "grid": grid_path,
+                        "mp4": mp4_path})
     import json
     with open(metrics_path, "w") as handle:
         json.dump(metrics, handle, indent=2, sort_keys=True)

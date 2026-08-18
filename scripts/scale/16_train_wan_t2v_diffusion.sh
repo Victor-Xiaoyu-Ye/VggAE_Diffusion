@@ -6,7 +6,7 @@
 # Examples:
 #   bash scripts/scale/16_train_wan_t2v_diffusion.sh
 #   MODE=sample bash scripts/scale/16_train_wan_t2v_diffusion.sh
-#   EXTEND=1 MAX_STEPS=60000 EXTENSION_LR=5e-6 bash scripts/scale/16_train_wan_t2v_diffusion.sh
+#   EXTEND=1 MAX_STEPS=24000 EXTENSION_LR=5e-6 bash scripts/scale/16_train_wan_t2v_diffusion.sh
 set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -39,14 +39,14 @@ WAN_T2V_13B_DIR="${WAN_T2V_13B_DIR:-${VGGAE_REF_ROOT}/Wan2.1-T2V-1.3B}"
 TEXT_EMBEDDING_VERSION="${TEXT_EMBEDDING_VERSION:-umt5xxl_spatialvid_10k_v1}"
 TEXT_EMBEDDING_OBS_DIR="${TEXT_EMBEDDING_OBS_DIR:-${PERSISTENT_OBS_ROOT}/text_embeddings/${TEXT_EMBEDDING_VERSION}}"
 
-DIFFUSION_NAMESPACE="${DIFFUSION_NAMESPACE:-r7_wan13b_t2v_ctx1_fut4_v1}"
+DIFFUSION_NAMESPACE="${DIFFUSION_NAMESPACE:-r7_wan13b_i2v_anchor_memory_ctx1_fut4_v2}"
 OUTPUT_DIR="${SCALE_ROOT}/${DIFFUSION_NAMESPACE}"
 REMOTE_OUTPUT_DIR="${SCALE_REMOTE_ROOT}/${DIFFUSION_NAMESPACE}"
 MIRROR_OUTPUT_DIR="${SCALE_MIRROR_ROOT}/${DIFFUSION_NAMESPACE}"
 RESUME="${RESUME:-}"
 AUTO_RESUME="${AUTO_RESUME:-1}"
 EXTEND="${EXTEND:-0}"
-MAX_STEPS="${MAX_STEPS:-30000}"
+MAX_STEPS="${MAX_STEPS:-16000}"
 ADAPTER_LR="${ADAPTER_LR:-1e-4}"
 WAN_LR="${WAN_LR:-1e-5}"
 WARMUP_STEPS="${WARMUP_STEPS:-1000}"
@@ -56,6 +56,14 @@ EXTENSION_WARMUP_STEPS="${EXTENSION_WARMUP_STEPS:-200}"
 TIME_SHIFT_ALPHA="${TIME_SHIFT_ALPHA:-3.0}"
 TEXT_DROP_PROB="${TEXT_DROP_PROB:-0.1}"
 CFG_SCALE="${CFG_SCALE:-3.0}"
+PREVIEW_CLIPS="${PREVIEW_CLIPS:-1}"
+PREVIEW_FPS="${PREVIEW_FPS:-8}"
+ENFORCE_QUALITY_GUARDS="${ENFORCE_QUALITY_GUARDS:-0}"
+GUARD_MOTION_RATIO_MIN="${GUARD_MOTION_RATIO_MIN:-0.55}"
+GUARD_MOTION_RATIO_MAX="${GUARD_MOTION_RATIO_MAX:-1.50}"
+GUARD_MOTION_COSINE_CHUNK3="${GUARD_MOTION_COSINE_CHUNK3:-0.45}"
+GUARD_MOTION_COSINE_CHUNK4="${GUARD_MOTION_COSINE_CHUNK4:-0.35}"
+GUARD_EXPANDED_GEO_COSINE="${GUARD_EXPANDED_GEO_COSINE:-0.10}"
 echo "DI_throughput reports raw tokens/s/npu"
 MASTER_PORT="${MASTER_PORT:-29685}"
 
@@ -173,6 +181,7 @@ if [[ "${MODE}" == "sample" ]]; then
       --cfg_scale "${CFG_SCALE}" \
       --output "${SAMPLE_OUTPUT:-${SAMPLE_DIR}/best_ema.pt}" \
       --sample_steps "${SAMPLE_STEPS:-30}" --weights ema \
+      --preview_fps "${PREVIEW_FPS}" \
       --decode_chunk_size "${DECODE_CHUNK_SIZE:-0}" --dtype bf16
   fi
   exit 0
@@ -211,6 +220,7 @@ if [[ -n "${RESUME}" && ! -s "${OUTPUT_DIR}/metrics.jsonl" ]]; then
   done
 fi
 EXTRA_ARGS=(); [[ -n "${RESUME}" ]] && EXTRA_ARGS+=(--resume "${RESUME}")
+[[ "${ENFORCE_QUALITY_GUARDS}" == 1 ]] && EXTRA_ARGS+=(--enforce_quality_guards)
 start_output_sync "${OUTPUT_DIR}" "${REMOTE_OUTPUT_DIR}"
 trap 'stop_output_sync "${OUTPUT_DIR}" "${REMOTE_OUTPUT_DIR}"' EXIT
 run_torchrun "${PROJECT}/train_causal_wan_video_diffusion.py" \
@@ -234,12 +244,25 @@ run_torchrun "${PROJECT}/train_causal_wan_video_diffusion.py" \
   --text_drop_prob "${TEXT_DROP_PROB}" --cfg_scale "${CFG_SCALE}" \
   --lambda_motion "${LAMBDA_MOTION:-0.10}" --lambda_accel "${LAMBDA_ACCEL:-0.05}" \
   --lambda_geo_motion "${LAMBDA_GEO_MOTION:-0.05}" \
+  --lambda_motion_cosine "${LAMBDA_MOTION_COSINE:-0.10}" \
+  --lambda_motion_magnitude "${LAMBDA_MOTION_MAGNITUDE:-0.05}" \
+  --horizon_weights "${HORIZON_WEIGHTS:-1,1.5,2,3}" \
+  --rollout_window "${ROLLOUT_WINDOW:-2}" --rollout_overlap "${ROLLOUT_OVERLAP:-1}" \
+  --scheduled_context_start "${SCHEDULED_CONTEXT_START:-4000}" \
+  --scheduled_context_ramp "${SCHEDULED_CONTEXT_RAMP:-4000}" \
+  --scheduled_context_max "${SCHEDULED_CONTEXT_MAX:-0.25}" \
   --aux_warmup_steps "${AUX_WARMUP_STEPS:-1000}" \
   --aux_ramp_steps "${AUX_RAMP_STEPS:-1000}" --aux_t_min "${AUX_T_MIN:-0.60}" \
   --num_workers "${NUM_WORKERS_VALUE}" --shuffle_buffer "${SHUFFLE_BUFFER:-256}" \
-  --eval_clips "${EVAL_CLIPS:-16}" --sample_clips "${SAMPLE_CLIPS:-4}" \
+  --eval_clips "${EVAL_CLIPS:-64}" --sample_clips "${SAMPLE_CLIPS:-1}" \
+  --preview_clips "${PREVIEW_CLIPS}" --preview_fps "${PREVIEW_FPS}" \
   --sample_steps "${SAMPLE_STEPS:-30}" --decode_chunk_size "${DECODE_CHUNK_SIZE:-0}" \
-  --early_stop_min_steps "${EARLY_STOP_MIN_STEPS:-10000}" \
-  --patience "${EARLY_STOP_PATIENCE:-8}" \
+  --guard_motion_ratio_min "${GUARD_MOTION_RATIO_MIN}" \
+  --guard_motion_ratio_max "${GUARD_MOTION_RATIO_MAX}" \
+  --guard_motion_cosine_chunk3 "${GUARD_MOTION_COSINE_CHUNK3}" \
+  --guard_motion_cosine_chunk4 "${GUARD_MOTION_COSINE_CHUNK4}" \
+  --guard_expanded_geo_cosine "${GUARD_EXPANDED_GEO_COSINE}" \
+  --early_stop_min_steps "${EARLY_STOP_MIN_STEPS:-6000}" \
+  --patience "${EARLY_STOP_PATIENCE:-6}" \
   --log_every "${LOG_EVERY:-50}" --eval_every "${EVAL_EVERY:-500}" \
   --save_every "${SAVE_EVERY:-500}" --dtype bf16 "${EXTRA_ARGS[@]}"

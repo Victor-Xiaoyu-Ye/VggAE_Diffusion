@@ -86,8 +86,8 @@ class CausalTemporalDownsample(nn.Module):
 
     def __init__(self, channels=512, factor=2, depth=3):
         super().__init__()
-        if factor not in (2, 4):
-            raise ValueError(f"factor must be 2 or 4, got {factor}")
+        if factor not in (1, 2, 4):
+            raise ValueError(f"factor must be 1, 2, or 4, got {factor}")
         self.channels = channels
         self.factor = factor
         self.anchor = nn.Conv2d(channels, channels, 1)
@@ -131,8 +131,8 @@ class CausalTemporalUpsample(nn.Module):
 
     def __init__(self, channels=512, factor=2, depth=3):
         super().__init__()
-        if factor not in (2, 4):
-            raise ValueError(f"factor must be 2 or 4, got {factor}")
+        if factor not in (1, 2, 4):
+            raise ValueError(f"factor must be 1, 2, or 4, got {factor}")
         self.channels = channels
         self.factor = factor
         self.anchor = nn.Conv2d(channels, channels, 1)
@@ -160,6 +160,8 @@ class CausalTemporalUpsample(nn.Module):
     def forward(self, x):
         if x.dim() != 5:
             raise ValueError(f"expected [B,C,T,H,W], got {tuple(x.shape)}")
+        if self.factor == 1:
+            return self.blocks(x)
         anchor = self.anchor(x[:, :, 0]).unsqueeze(2)
         tail = self.expand(x[:, :, 1:])
         B, CR, K, H, W = tail.shape

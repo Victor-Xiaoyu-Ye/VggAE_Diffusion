@@ -63,6 +63,7 @@ def parse_args(argv=None):
     p.add_argument("--dtype", choices=("fp16", "bf16", "fp32"), default="bf16")
     p.add_argument("--weights", choices=("ema", "model"), default="ema")
     p.add_argument("--decode_chunk_size", type=int, default=0)
+    p.add_argument("--preview_fps", type=float, default=8.0)
     return p.parse_args(argv)
 
 
@@ -130,7 +131,8 @@ def main(argv=None):
     model = WanCompactAdapter(
         args.wan_ckpt_dir, latent_dim=int(config["latent_dim"]),
         latent_grid=grid, seq_len=FUTURE_CHUNKS,
-        full_finetune=True, anchor_frame=True).to(
+        full_finetune=True, anchor_frame=True,
+        anchor_memory=bool(architecture.get("anchor_memory", False))).to(
         device=device, dtype=torch.float32)
     saved_wan_config = checkpoint.get("wan_config")
     if saved_wan_config and dict(saved_wan_config) != wan_config_snapshot(model):
@@ -213,8 +215,10 @@ def main(argv=None):
     torch.save(output, args.output)
     metrics_path = os.path.splitext(os.path.abspath(args.output))[0] + "_metrics.json"
     if "rgb_9frames" in output:
-        frame_dir, grid_path = save_rgb_outputs(output["rgb_9frames"], args.output)
-        metrics.update({"png_dir": frame_dir, "grid": grid_path})
+        frame_dir, grid_path, mp4_path = save_rgb_outputs(
+            output["rgb_9frames"], args.output, args.preview_fps)
+        metrics.update({"png_dir": frame_dir, "grid": grid_path,
+                        "mp4": mp4_path})
     with open(metrics_path, "w") as handle:
         json.dump(metrics, handle, indent=2, sort_keys=True)
     print(f"saved 1 anchor + 4 future chunks"

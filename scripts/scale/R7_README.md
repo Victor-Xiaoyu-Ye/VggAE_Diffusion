@@ -207,10 +207,13 @@ nonexistent sources) is a hard error with instructions, not a no-op; the
 fastest manual fix is building `annotation_index.json` on the A100 box with
 `scripts/build_annotation_index.sh` and uploading that single file.
 
-Stage-16 defaults: 30K steps, batch 4/NPU, adapter LR 1e-4 / trunk LR 1e-5,
-`wan_freeze_steps=500`, EMA 0.9999, CFG dropout 0.1, eval CFG scale 3.0,
-early stop from 10K, namespace `r7_wan13b_t2v_ctx1_fut4_v1`. The eval loop,
-LPIPS-based best selection, composite guard, checkpoint layout, and
-`DI_throughput` conventions match stage 13 exactly (x0-MSE buckets replace the
-velocity buckets). With ~10k cached clips one epoch is ~52 optimizer steps at
-world 48; watch the train/eval x0-MSE gap for overfit before extending.
+Stage-16 historical defaults were 30K steps, batch 4/NPU, adapter LR 1e-4 /
+trunk LR 1e-5, `wan_freeze_steps=500`, EMA 0.9999, CFG dropout 0.1, eval CFG
+scale 3.0, and early stop from 10K. The completed run overturned the 30K
+assumption: sampled RGB peaked near 7K while teacher-forced x0 MSE continued to
+fall through 14K. The wrapper now caps the default at 16K, begins early-stop
+accounting at 6K, evaluates 64 clips, and emits labelled PNG/MP4 previews every
+eval. The old arm remains diagnostic; use `docs/R7_QUALITY_PLAN.md` for the
+factor-1/teacher-bridge/horizon-motion redesign rather than extending it blindly.
+With ~10k cached clips one epoch is ~52 optimizer steps at world 48; watch both
+train/eval x0-MSE and sampled late-horizon guards before extending.

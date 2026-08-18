@@ -31,6 +31,8 @@ from torch.utils.tensorboard import SummaryWriter
 
 from data.latent_shard_dataset import LatentShardDataset, latent_collate_fn
 from data.loader_utils import multiprocessing_loader_kwargs
+from models.r7_overlap_rollout import (overlapping_windows,
+                                       scheduled_context_probability)
 from models.wan_compact_adapter import WanCompactAdapter
 from train_causal_video_diffusion import (
     CONTEXT_CHUNKS, FUTURE_CHUNKS, LATENT_DIM, assert_same_representation,
@@ -51,12 +53,22 @@ X0_MSE_BUCKETS = (0.1, 0.3, 0.5, 0.7, 0.9)
 STRICT_MODEL_ARGS = ("latent_dim", "latent_grid", "time_shift_alpha",
                      "normalization_mode")
 STRICT_TRAIN_ARGS = ("lambda_motion", "lambda_accel", "lambda_geo_motion",
-                     "aux_warmup_steps", "aux_ramp_steps", "aux_t_min",
-                     "batch_size", "accum_steps", "adapter_lr", "wan_lr", "wd",
-                     "warmup_steps", "wan_freeze_steps", "ema_decay",
-                     "max_grad_norm", "dtype", "require_rgb_lpips",
+                     "lambda_motion_cosine", "lambda_motion_magnitude",
+                     "horizon_weights", "rollout_window", "rollout_overlap",
+                     "scheduled_context_start", "scheduled_context_ramp",
+                     "scheduled_context_max", "aux_warmup_steps", "aux_ramp_steps",
+                     "aux_t_min", "batch_size", "accum_steps", "adapter_lr",
+                     "wan_lr", "wd", "warmup_steps", "wan_freeze_steps",
+                     "ema_decay", "max_grad_norm", "dtype", "require_rgb_lpips",
                      "text_drop_prob")
-OBJECTIVE_SCHEMA = "r7-wan13b-t2v-x0-fm-v1"
+OBJECTIVE_SCHEMA = "r7-wan13b-i2v-anchor-memory-x0-v2"
+DIAGNOSTIC_QUALITY_DEFAULTS = {
+    "guard_motion_ratio_min": 0.55,
+    "guard_motion_ratio_max": 1.50,
+    "guard_motion_cosine_chunk3": 0.45,
+    "guard_motion_cosine_chunk4": 0.35,
+    "guard_expanded_geo_cosine": 0.10,
+}
 
 
 def parse_args(argv=None):
@@ -107,6 +119,10 @@ def parse_args(argv=None):
     p.add_argument("--lambda_motion", type=float, default=0.10)
     p.add_argument("--lambda_accel", type=float, default=0.05)
     p.add_argument("--lambda_geo_motion", type=float, default=0.05)
+    p.add_argument("--lambda_motion_cosine", type=float, default=0.10)
+    p.add_argument("--lambda_motion_magnitude", type=float, default=0.05)
+    p.add_argument("--horizon_weights", default="1,1.5,2,3",
+                   help="comma-separated per-future x0/motion weights")
     p.add_argument("--aux_warmup_steps", type=int, default=1000)
     p.add_argument("--aux_ramp_steps", type=int, default=1000)
     p.add_argument("--aux_t_min", type=float, default=0.6)
@@ -115,6 +131,23 @@ def parse_args(argv=None):
     p.add_argument("--eval_clips", type=int, default=16)
     p.add_argument("--sample_clips", type=int, default=4)
     p.add_argument("--sample_steps", type=int, default=30)
+    p.add_argument("--preview_clips", type=int, default=1,
+                   help="number of deterministic eval clips written as PNG/MP4")
+    p.add_argument("--preview_fps", type=float, default=8.0)
+    p.add_argument("--save_debug_sample_pack", action="store_true",
+                   help="save the full float RGB/latent eval pack (large)")
+    p.add_argument("--guard_motion_ratio_min", type=float, default=0.55)
+    p.add_argument("--guard_motion_ratio_max", type=float, default=1.50)
+    p.add_argument("--guard_motion_cosine_chunk3", type=float, default=0.45)
+    p.add_argument("--guard_motion_cosine_chunk4", type=float, default=0.35)
+    p.add_argument("--guard_expanded_geo_cosine", type=float, default=0.10)
+    p.add_argument("--enforce_quality_guards", action="store_true",
+                   help="exclude guard-failing evals from checkpoint_best")
+    p.add_argument("--rollout_window", type=int, default=2)
+    p.add_argument("--rollout_overlap", type=int, default=1)
+    p.add_argument("--scheduled_context_start", type=int, default=4000)
+    p.add_argument("--scheduled_context_ramp", type=int, default=4000)
+    p.add_argument("--scheduled_context_max", type=float, default=0.25)
     p.add_argument("--decode_chunk_size", type=int, default=0)
     p.add_argument("--require_rgb_lpips", action="store_true")
     p.add_argument("--log_every", type=int, default=50)
@@ -202,6 +235,32 @@ class TextEmbeddingBank:
                           drop_mask=[True] * count)
 
 
+def wan_quality_guards(row, args):
+    required = (
+        "eval/motion_ratio_chunk3", "eval/motion_ratio_chunk4",
+        "eval/motion_cosine_chunk3", "eval/motion_cosine_chunk4",
+        "eval/expanded_geo_motion_cosine",
+    )
+    missing = [key for key in required if key not in row]
+    checks = {
+        "metrics_complete": not missing,
+        "std": 0.5 <= row.get("eval/gen_std_ratio", 0.0) <= 1.5,
+    }
+    if not missing:
+        lo, hi = args.guard_motion_ratio_min, args.guard_motion_ratio_max
+        checks.update({
+            "chunk3_motion_ratio": lo <= row["eval/motion_ratio_chunk3"] <= hi,
+            "chunk4_motion_ratio": lo <= row["eval/motion_ratio_chunk4"] <= hi,
+            "chunk3_motion_cosine": row["eval/motion_cosine_chunk3"] >=
+                                      args.guard_motion_cosine_chunk3,
+            "chunk4_motion_cosine": row["eval/motion_cosine_chunk4"] >=
+                                      args.guard_motion_cosine_chunk4,
+            "expanded_geo_motion": row["eval/expanded_geo_motion_cosine"] >=
+                                    args.guard_expanded_geo_cosine,
+        })
+    return checks, missing
+
+
 def wan_config_snapshot(model):
     return {"dim": int(model.wan_dim), "freq_dim": int(model.freq_dim),
             "num_heads": int(model.num_heads),
@@ -213,7 +272,8 @@ def wan_config_snapshot(model):
 
 def architecture_contract(args, wan_config):
     return {"class": "WanCompactAdapter", "full_finetune": True,
-            "anchor_frame": True, "i0_condition": False,
+            "anchor_frame": True, "anchor_memory": True,
+            "i0_condition": False,
             "latent_dim": int(args.latent_dim),
             "latent_grid": int(args.latent_grid),
             "seq_len": FUTURE_CHUNKS, "text_cond": True,
@@ -230,6 +290,17 @@ def objective_contract(args):
         "lambda_motion": float(args.lambda_motion),
         "lambda_accel": float(args.lambda_accel),
         "lambda_geo_motion": float(args.lambda_geo_motion),
+        "lambda_motion_cosine": float(args.lambda_motion_cosine),
+        "lambda_motion_magnitude": float(args.lambda_motion_magnitude),
+        "horizon_weights": [float(value) for value in args.horizon_weight_values],
+        "anchor_memory": True,
+        "rollout_windows": overlapping_windows(
+            args.future_chunks, args.rollout_window, args.rollout_overlap),
+        "scheduled_context": {
+            "start": int(args.scheduled_context_start),
+            "ramp": int(args.scheduled_context_ramp),
+            "maximum": float(args.scheduled_context_max),
+        },
         "aux_warmup_steps": int(args.aux_warmup_steps),
         "aux_ramp_steps": int(args.aux_ramp_steps),
         "aux_t_min": float(args.aux_t_min),
@@ -249,7 +320,8 @@ def build_model(args):
     return WanCompactAdapter(
         args.wan_ckpt_dir, latent_dim=args.latent_dim,
         latent_grid=args.latent_grid, seq_len=FUTURE_CHUNKS,
-        full_finetune=True, anchor_frame=True)
+        full_finetune=True, anchor_frame=True,
+        anchor_memory=True)
 
 
 def build_wan_optimizer(model, args):
@@ -273,13 +345,52 @@ def build_wan_optimizer(model, args):
     return torch.optim.AdamW(param_groups, betas=(0.9, 0.95), eps=1e-8)
 
 
-def flow_forward_x0(model, x1, cond, text_emb, alpha):
+def parse_horizon_weights(value, count):
+    try:
+        weights = [float(item.strip()) for item in str(value).split(",")]
+    except ValueError as exc:
+        raise ValueError("--horizon_weights must be comma-separated numbers") from exc
+    if len(weights) != count or any(weight <= 0 for weight in weights):
+        raise ValueError(
+            f"--horizon_weights must contain {count} positive values, got "
+            f"{weights}")
+    tensor = torch.tensor(weights, dtype=torch.float32)
+    return tensor / tensor.mean()
+
+
+def weighted_x0_loss(prediction, target, weights):
+    error = (prediction.float() - target.float()).square().mean((0, 2, 3))
+    return (error * weights.to(error.device)).mean(), error
+
+
+def motion_direction_magnitude_losses(prediction, target, cond, weights, t,
+                                      threshold):
+    pred = torch.cat((cond.float(), prediction.float()), 1)
+    truth = torch.cat((cond.float(), target.float()), 1)
+    pred_delta = pred[:, 1:] - pred[:, :-1]
+    truth_delta = truth[:, 1:] - truth[:, :-1]
+    pred_flat = pred_delta.flatten(2)
+    truth_flat = truth_delta.flatten(2)
+    cosine = F.cosine_similarity(pred_flat, truth_flat, dim=2)
+    magnitude = pred_flat.norm(dim=2) / truth_flat.norm(dim=2).clamp_min(1e-8)
+    active = (t.float() >= threshold).float().unsqueeze(1)
+    horizon = weights.to(active.device).unsqueeze(0)
+    denominator = (active * horizon).sum().clamp_min(1.0)
+    cosine_loss = ((1.0 - cosine) * active * horizon).sum() / denominator
+    magnitude_loss = (magnitude.clamp_min(1e-8).log().abs()
+                      * active * horizon).sum() / denominator
+    return cosine_loss, magnitude_loss, cosine, magnitude
+
+
+def flow_forward_x0(model, x1, cond, text_emb, alpha, horizon_weights):
     x0 = torch.randn_like(x1)
     t = shift_time(torch.rand(x1.shape[0], device=x1.device), alpha).to(x1.dtype)
     te = t.view(-1, 1, 1, 1)
     xt = (1 - te) * x0 + te * x1
     x1_hat = model(xt, t, cond=cond, text_emb=text_emb)
-    return F.mse_loss(x1_hat.float(), x1.float()), {"t": t, "x1_pred": x1_hat}
+    loss, horizon_mse = weighted_x0_loss(x1_hat, x1, horizon_weights)
+    return loss, {"t": t, "x1_pred": x1_hat,
+                  "x0_mse_horizon": horizon_mse}
 
 
 def sample_x0_shifted(model, cond, shape, steps, alpha, noise, text_emb,
@@ -384,7 +495,9 @@ def checkpoint_payload(core, ema, optimizer, scheduler, scaler, step, args,
             "ema": ema.state_dict(), "optimizer": optimizer.state_dict(),
             "scheduler": scheduler.state_dict(), "scaler": scaler.state_dict(),
             "global_step": step, "world_size": world_size,
-            "rng_by_rank": rng_by_rank, "args": vars(args),
+            "rng_by_rank": rng_by_rank, "args": {
+                key: value for key, value in vars(args).items()
+                if key != "horizon_weight_values"},
             "architecture": architecture_contract(args, wan_config),
             "objective": objective_contract(args),
             "wan_config": dict(wan_config),
@@ -396,6 +509,12 @@ def checkpoint_payload(core, ema, optimizer, scheduler, scaler, step, args,
 
 def main(argv=None):
     args = parse_args(argv)
+    args.horizon_weight_values = parse_horizon_weights(
+        args.horizon_weights, args.future_chunks).tolist()
+    # Preserve a canonical textual form in checkpoints so strict resume compares
+    # CLI values, while objective_contract stores the normalized numeric vector.
+    args.horizon_weights = ",".join(
+        item.strip() for item in str(args.horizon_weights).split(","))
     if (args.context_chunks, args.future_chunks, args.latent_dim) != (1, 4, 192):
         raise ValueError("production R7 contract is strictly context=1, future=4, D=192")
     if args.require_rgb_lpips and not args.r7_ckpt:
@@ -403,15 +522,31 @@ def main(argv=None):
     if args.normalization_mode == "none":
         print("[WARN] normalization=none is diagnostic only; checkpoint is non-production")
     for value in (args.accum_steps, args.eval_every, args.save_every,
-                  args.sample_steps, args.eval_clips, args.early_stop_min_steps):
+                  args.sample_steps, args.eval_clips, args.preview_clips,
+                  args.early_stop_min_steps):
         if value < 1:
             raise ValueError("step/count arguments must be positive")
     if args.warmup_steps >= args.max_steps:
         raise ValueError("warmup must be < max_steps")
     if not 0.0 <= args.text_drop_prob < 1.0:
         raise ValueError("--text_drop_prob must be in [0, 1)")
+    if not (0 <= args.rollout_overlap < args.rollout_window
+            <= args.future_chunks):
+        raise ValueError("rollout must satisfy 0 <= overlap < window <= futures")
+    if not 0 <= args.scheduled_context_max <= 1:
+        raise ValueError("--scheduled_context_max must be in [0,1]")
+    if args.scheduled_context_start < 0 or args.scheduled_context_ramp < 0:
+        raise ValueError("scheduled-context step settings must be nonnegative")
+    # Validate and freeze the rollout schedule into the objective contract. The
+    # first production v2 arm still denoises the full fixed window; these short
+    # windows define the follow-up generated-context curriculum and evaluation.
+    rollout_schedule = overlapping_windows(
+        args.future_chunks, args.rollout_window, args.rollout_overlap)
+    if not rollout_schedule:
+        raise ValueError("rollout schedule is empty")
     if any(v < 0 for v in (args.lambda_motion, args.lambda_accel,
-                            args.lambda_geo_motion, args.extension_lr)):
+                            args.lambda_geo_motion, args.lambda_motion_cosine,
+                            args.lambda_motion_magnitude, args.extension_lr)):
         raise ValueError("loss weights and extension_lr must be nonnegative")
     if "14B" in os.path.basename(os.path.normpath(args.wan_ckpt_dir)):
         raise ValueError(
@@ -591,13 +726,48 @@ def main(argv=None):
                     print(f"[WARN] RGB decode disabled after failure: {exc}")
             aggregate.append(row)
             if index < args.sample_clips:
-                packs.append({"cond_anchor": cond_raw.cpu(),
-                              "target_future": target_raw.cpu(),
-                              "sampled_future": gen_raw.cpu(),
-                              "sampled_normalized": generated.float().cpu(),
-                              "rgb_generated_9f": rgb_generated,
-                              "rgb_ae_target_9f": rgb_target,
-                              "video_id": video_ids[0]})
+                pack = {"cond_anchor": cond_raw.cpu(),
+                        "target_future": target_raw.cpu(),
+                        "sampled_future": gen_raw.cpu(),
+                        "video_id": video_ids[0],
+                        "requested_video_id": (
+                            cpu_batch.get("requested_video_id", video_ids)[0]),
+                        "window_index": int(
+                            cpu_batch.get("window_index", [0])[0]),
+                        "clips_per_video": int(
+                            cpu_batch.get("clips_per_video", [1])[0]),
+                        "noise_seed": args.seed + 1009 * index,
+                        "cfg_scale": args.cfg_scale}
+                if args.save_debug_sample_pack:
+                    pack.update({
+                        "sampled_normalized": generated.float().cpu(),
+                        "rgb_generated_9f": rgb_generated,
+                        "rgb_ae_target_9f": rgb_target,
+                    })
+                packs.append(pack)
+            if (index < args.preview_clips and rgb_generated is not None
+                    and rgb_target is not None):
+                from utils.video_preview import save_video_preview
+
+                anchor_rgb = rgb_target[0].clone()
+                anchor_rgb[1:] = anchor_rgb[:1]
+                save_video_preview(
+                    os.path.join(args.output_dir, "samples"),
+                    f"step{step:07d}_eval{index:02d}_ema",
+                    {"ANCHOR": anchor_rgb,
+                     "AE_TARGET": rgb_target[0],
+                     "GENERATED": rgb_generated[0]},
+                    fps=args.preview_fps,
+                    metadata={
+                        "step": step,
+                        "weights": "ema",
+                        "video_id": video_ids[0],
+                        "noise_seed": args.seed + 1009 * index,
+                        "cfg_scale": args.cfg_scale,
+                        "target_kind": "R7 autoencoder reconstruction",
+                    },
+                    save_frames=index == 0,
+                    save_mp4=True)
         keys = set.intersection(*(set(row) for row in aggregate))
         result = {key: _mean([row[key] for row in aggregate]) for key in keys}
         if args.require_rgb_lpips and (
@@ -608,17 +778,29 @@ def main(argv=None):
         result.update({"step": step, "eval/weights": "ema",
                        "eval/normalization_signature": signature,
                        "eval/decode_available": decode_enabled,
-                       "eval/cfg_scale": args.cfg_scale})
-        score, source, guarded = composite_score(result)
+                       "eval/cfg_scale": args.cfg_scale,
+                       "eval/text_bank_hits": text_bank.hits,
+                       "eval/text_bank_misses": text_bank.misses})
+        score, source, legacy_guarded = composite_score(result)
+        guards, missing = wan_quality_guards(result, args)
+        guarded = legacy_guarded or (
+            args.enforce_quality_guards and not all(guards.values()))
+        if guarded:
+            score = 1e9
+        for name, passed in guards.items():
+            result[f"eval/guard_{name}"] = bool(passed)
         result.update({"eval/composite": score, "eval/composite_source": source,
-                       "eval/composite_guarded": guarded})
-        atomic_torch_save({"schema": "r7-wan-diffusion-samples-v1", "step": step,
-                           "checkpoint_weights": "ema", "samples": packs,
-                           "representation": stats["representation"],
-                           "normalization": stats,
-                           "normalization_signature": signature},
-                          os.path.join(args.output_dir, "samples",
-                                       f"samples_step{step:07d}.pt"))
+                       "eval/composite_guarded": guarded,
+                       "eval/guard_missing": ",".join(missing)})
+        if packs:
+            atomic_torch_save({"schema": "r7-wan-diffusion-samples-v2",
+                               "step": step, "checkpoint_weights": "ema",
+                               "samples": packs,
+                               "contains_rgb": bool(args.save_debug_sample_pack),
+                               "representation": stats["representation"],
+                               "normalization_signature": signature},
+                              os.path.join(args.output_dir, "samples",
+                                           f"samples_step{step:07d}.pt"))
         core.train(); return result
 
     def write_checkpoint(kind, rng_states):
@@ -648,7 +830,7 @@ def main(argv=None):
     drop_generator = torch.Generator()
     drop_generator.manual_seed(args.seed * 7919 + rank + step)
     while step < args.max_steps and not stop:
-        totals = torch.zeros(4, device=device)
+        totals = torch.zeros(6, device=device)
         for micro in range(args.accum_steps):
             batch = next(iterator)
             cond_raw, target_raw = validate_batch(batch, args)
@@ -670,10 +852,11 @@ def main(argv=None):
                         device_type=device_type, dtype=compute_dtype,
                         enabled=compute_dtype != torch.float32):
                     flow_loss, out = flow_forward_x0(
-                        model, target, cond, text_emb, args.time_shift_alpha)
+                        model, target, cond, text_emb, args.time_shift_alpha,
+                        args.horizon_weight_values)
                 scale = aux_scale(step, args)
                 zero = flow_loss.new_zeros(())
-                motion = accel = geo = zero
+                motion = accel = geo = motion_cos = motion_mag = zero
                 if scale and (args.lambda_motion or args.lambda_accel
                               or args.lambda_geo_motion):
                     # x0 prediction: x1_pred IS the model output, no velocity
@@ -681,14 +864,25 @@ def main(argv=None):
                     motion, accel, geo = auxiliary_losses(
                         out["x1_pred"], target_raw, cond_raw, st["target"],
                         args.normalization_mode, out["t"], args, tokenizer)
-                total = flow_loss + scale * (args.lambda_motion*motion +
-                    args.lambda_accel*accel + args.lambda_geo_motion*geo)
+                if scale and (args.lambda_motion_cosine
+                              or args.lambda_motion_magnitude):
+                    motion_cos, motion_mag, _, _ = \
+                        motion_direction_magnitude_losses(
+                            out["x1_pred"], target, cond,
+                            args.horizon_weight_values, out["t"],
+                            args.aux_t_min)
+                total = flow_loss + scale * (
+                    args.lambda_motion*motion + args.lambda_accel*accel
+                    + args.lambda_geo_motion*geo
+                    + args.lambda_motion_cosine*motion_cos
+                    + args.lambda_motion_magnitude*motion_mag)
                 if use_scaler:
                     scaler.scale(total / args.accum_steps).backward()
                 else:
                     (total / args.accum_steps).backward()
             totals += torch.stack((total.detach(), motion.detach(),
-                                   accel.detach(), geo.detach()))
+                                   accel.detach(), geo.detach(),
+                                   motion_cos.detach(), motion_mag.detach()))
         if use_scaler: scaler.unscale_(optimizer)
         if step < args.wan_freeze_steps:
             # Adapter warm-up (train_dual_diffusion precedent): grads are
@@ -713,6 +907,13 @@ def main(argv=None):
                    "train/motion_loss": totals[1].item(),
                    "train/accel_loss": totals[2].item(),
                    "train/geo_motion_loss": totals[3].item(),
+                   "train/motion_cosine_loss": totals[4].item(),
+                   "train/motion_magnitude_loss": totals[5].item(),
+                   "train/scheduled_context_probability":
+                       scheduled_context_probability(
+                           step, args.scheduled_context_start,
+                           args.scheduled_context_ramp,
+                           args.scheduled_context_max),
                    "train/grad_norm": float(grad),
                    "train/lr": optimizer.param_groups[0]["lr"],
                    "DI_throughput": throughput}
