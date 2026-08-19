@@ -339,7 +339,20 @@ def main():
     else:
         source = load_checkpoint(args.dual_ae_ckpt)
         source_cfg, compressor, tex_encoder, decoder, matched = \
-            load_source_modules(source)
+            load_source_modules(
+                source,
+                # The frozen dual-AE checkpoint predates the R7 temporal
+                # contract and may contain metadata such as seq_len=8.  Those
+                # fields describe the source training loader, not the R7
+                # tokenizer being created in this phase.  Supply the requested
+                # R7 contract while loading only the source spatial modules.
+                overrides={
+                    "temporal_factor": args.temporal_factor,
+                    "temporal_depth": args.temporal_depth,
+                    "seq_len": args.seq_len,
+                    "clip_duration_seconds": args.clip_duration_seconds,
+                },
+            )
         config = replace(
             source_cfg,
             target_size=args.target_size,
