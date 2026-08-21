@@ -51,7 +51,8 @@ from utils.training import (EMA, ThroughputMeter, append_metrics,
 
 X0_MSE_BUCKETS = (0.1, 0.3, 0.5, 0.7, 0.9)
 STRICT_MODEL_ARGS = ("latent_dim", "latent_grid", "time_shift_alpha",
-                     "normalization_mode")
+                     "normalization_mode", "context_chunks", "future_chunks",
+                     "temporal_factor")
 STRICT_TRAIN_ARGS = ("lambda_motion", "lambda_accel", "lambda_geo_motion",
                      "lambda_motion_cosine", "lambda_motion_magnitude",
                      "horizon_weights", "rollout_window", "rollout_overlap",
@@ -93,6 +94,10 @@ def parse_args(argv=None):
     p.add_argument("--latent_grid", type=int, default=18)
     p.add_argument("--context_chunks", type=int, default=CONTEXT_CHUNKS)
     p.add_argument("--future_chunks", type=int, default=FUTURE_CHUNKS)
+    p.add_argument("--temporal_factor", type=int, default=2,
+                   help="R7 codec temporal factor (1: 8 future chunks, "
+                        "2: 4 future chunks); must match the cached "
+                        "representation contract")
     p.add_argument("--time_shift_alpha", type=float, default=3.0,
                    help="RAE high-dimensional time shift (identity at 1.0)")
     p.add_argument("--normalization_mode", choices=("zscore", "none"),
@@ -236,9 +241,13 @@ class TextEmbeddingBank:
 
 
 def wan_quality_guards(row, args):
+    # Late-horizon guards always target the last two future chunks
+    # (t2 -> chunks 3/4, t1 -> chunks 7/8).
+    chunk_a = int(args.future_chunks) - 1
+    chunk_b = int(args.future_chunks)
     required = (
-        "eval/motion_ratio_chunk3", "eval/motion_ratio_chunk4",
-        "eval/motion_cosine_chunk3", "eval/motion_cosine_chunk4",
+        f"eval/motion_ratio_chunk{chunk_a}", f"eval/motion_ratio_chunk{chunk_b}",
+        f"eval/motion_cosine_chunk{chunk_a}", f"eval/motion_cosine_chunk{chunk_b}",
         "eval/expanded_geo_motion_cosine",
     )
     missing = [key for key in required if key not in row]
@@ -249,12 +258,12 @@ def wan_quality_guards(row, args):
     if not missing:
         lo, hi = args.guard_motion_ratio_min, args.guard_motion_ratio_max
         checks.update({
-            "chunk3_motion_ratio": lo <= row["eval/motion_ratio_chunk3"] <= hi,
-            "chunk4_motion_ratio": lo <= row["eval/motion_ratio_chunk4"] <= hi,
-            "chunk3_motion_cosine": row["eval/motion_cosine_chunk3"] >=
-                                      args.guard_motion_cosine_chunk3,
-            "chunk4_motion_cosine": row["eval/motion_cosine_chunk4"] >=
-                                      args.guard_motion_cosine_chunk4,
+            f"chunk{chunk_a}_motion_ratio": lo <= row[required[0]] <= hi,
+            f"chunk{chunk_b}_motion_ratio": lo <= row[required[1]] <= hi,
+            f"chunk{chunk_a}_motion_cosine": row[required[2]] >=
+                                              args.guard_motion_cosine_chunk3,
+            f"chunk{chunk_b}_motion_cosine": row[required[3]] >=
+                                              args.guard_motion_cosine_chunk4,
             "expanded_geo_motion": row["eval/expanded_geo_motion_cosine"] >=
                                     args.guard_expanded_geo_cosine,
         })
@@ -276,7 +285,11 @@ def architecture_contract(args, wan_config):
             "i0_condition": False,
             "latent_dim": int(args.latent_dim),
             "latent_grid": int(args.latent_grid),
-            "seq_len": FUTURE_CHUNKS, "text_cond": True,
+            "seq_len": int(args.future_chunks),
+            "context_chunks": int(args.context_chunks),
+            "future_chunks": int(args.future_chunks),
+            "temporal_factor": int(args.temporal_factor),
+            "text_cond": True,
             "wan_config": dict(wan_config)}
 
 
@@ -319,7 +332,7 @@ def objective_contract(args):
 def build_model(args):
     return WanCompactAdapter(
         args.wan_ckpt_dir, latent_dim=args.latent_dim,
-        latent_grid=args.latent_grid, seq_len=FUTURE_CHUNKS,
+        latent_grid=args.latent_grid, seq_len=args.future_chunks,
         full_finetune=True, anchor_frame=True,
         anchor_memory=True)
 
@@ -475,9 +488,11 @@ def strict_resume(checkpoint, args, stats, signature, world_size, wan_config):
         int(checkpoint.get("world_size", world_size))
     if saved_effective != args.batch_size * args.accum_steps * world_size:
         raise ValueError("resume effective batch mismatch")
-    for key, expected in (("context_chunks", 1), ("future_chunks", 4)):
-        if int(saved.get(key, -1)) != expected:
-            raise ValueError(f"resume {key} mismatch")
+    if int(saved.get("context_chunks", -1)) != 1:
+        raise ValueError("resume context_chunks mismatch")
+    if int(saved.get("future_chunks", -1)) != args.future_chunks:
+        raise ValueError(f"resume future_chunks mismatch: "
+                         f"{saved.get('future_chunks')} != {args.future_chunks}")
     if not exact_equal(checkpoint.get("architecture"),
                        architecture_contract(args, wan_config)):
         raise ValueError("resume architecture contract is not exactly identical")
@@ -515,8 +530,15 @@ def main(argv=None):
     # CLI values, while objective_contract stores the normalized numeric vector.
     args.horizon_weights = ",".join(
         item.strip() for item in str(args.horizon_weights).split(","))
-    if (args.context_chunks, args.future_chunks, args.latent_dim) != (1, 4, 192):
-        raise ValueError("production R7 contract is strictly context=1, future=4, D=192")
+    if args.context_chunks != 1 or args.latent_dim != 192 or \
+            args.temporal_factor not in (1, 2):
+        raise ValueError(
+            "R7 diffusion contract is context=1, D=192, temporal_factor "
+            "1 (future=8) or 2 (future=4)")
+    if args.future_chunks != (8 if args.temporal_factor == 1 else 4):
+        raise ValueError(
+            f"--future_chunks {args.future_chunks} is inconsistent with "
+            f"--temporal_factor {args.temporal_factor}")
     if args.require_rgb_lpips and not args.r7_ckpt:
         raise ValueError("--require_rgb_lpips requires --r7_ckpt")
     if args.normalization_mode == "none":
@@ -564,8 +586,8 @@ def main(argv=None):
 
     stats = load_torch_artifact(args.stats)
     eval_stats = load_torch_artifact(args.eval_stats)
-    signature = validate_stats(stats, "train stats")
-    validate_stats(eval_stats, "eval stats")
+    signature = validate_stats(stats, "train stats", args)
+    validate_stats(eval_stats, "eval stats", args)
     assert_same_representation(stats, eval_stats)
     st = stats_tensors(stats, device)
     representation_config = stats["representation"].get("config") or {}
@@ -702,7 +724,7 @@ def main(argv=None):
                 args.cfg_scale, device_type, compute_dtype)
             latent_row, gen_raw = latent_metrics(
                 generated, target_raw, cond_raw, st["target"],
-                args.normalization_mode)
+                args.normalization_mode, args)
             row.update(latent_row)
             if tokenizer is not None:
                 try:

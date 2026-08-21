@@ -30,7 +30,14 @@ R7_CKPT="${R7_CKPT:-${SCALE_ROOT}/${R7_NAMESPACE}/joint/checkpoint_best.pt}"
 R7_CKPT_URL="${R7_CKPT_URL:-${SCALE_REMOTE_ROOT}/${R7_NAMESPACE}/joint/checkpoint_best.pt}"
 R7_CKPT_MIRROR_URL="${R7_CKPT_MIRROR_URL:-${SCALE_MIRROR_ROOT}/${R7_NAMESPACE}/joint/checkpoint_best.pt}"
 
-DIFFUSION_NAMESPACE="${DIFFUSION_NAMESPACE:-r7_diffusion_t2_c192_ctx1_fut4_v2}"
+DIFFUSION_NAMESPACE="${DIFFUSION_NAMESPACE:-}"
+if [[ -z "${DIFFUSION_NAMESPACE}" ]]; then
+  if [[ "${TEMPORAL_FACTOR}" -eq 1 ]]; then
+    DIFFUSION_NAMESPACE="r7_diffusion_t1_c192_ctx1_fut8_v1"
+  else
+    DIFFUSION_NAMESPACE="r7_diffusion_t2_c192_ctx1_fut4_v2"
+  fi
+fi
 OUTPUT_DIR="${SCALE_ROOT}/${DIFFUSION_NAMESPACE}"
 REMOTE_OUTPUT_DIR="${SCALE_REMOTE_ROOT}/${DIFFUSION_NAMESPACE}"
 MIRROR_OUTPUT_DIR="${SCALE_MIRROR_ROOT}/${DIFFUSION_NAMESPACE}"
@@ -50,9 +57,10 @@ echo "DI_throughput reports raw tokens/s/npu"
 MASTER_PORT="${MASTER_PORT:-29680}"
 
 [[ "${MODE}" == "train" || "${MODE}" == "sample" ]] || { echo "MODE must be train or sample." >&2; exit 2; }
-[[ "${TEMPORAL_FACTOR}" -eq 2 && "${LATENT_DIM}" -eq 192 && \
-   "${CONTEXT_CHUNKS}" -eq 1 && "${FUTURE_CHUNKS}" -eq 4 ]] || {
-  echo "Production diffusion contract is strictly t2/c192/context1/future4." >&2; exit 2;
+[[ "${LATENT_DIM}" -eq 192 && "${CONTEXT_CHUNKS}" -eq 1 && \
+   ( ( "${TEMPORAL_FACTOR}" -eq 2 && "${FUTURE_CHUNKS}" -eq 4 ) || \
+     ( "${TEMPORAL_FACTOR}" -eq 1 && "${FUTURE_CHUNKS}" -eq 8 ) ) ]] || {
+  echo "Diffusion contract is t2/c192/context1/future4 or t1/c192/context1/future8." >&2; exit 2;
 }
 [[ "${MODEL_DIM}" -eq 1152 && "${SPATIAL_DEPTH}" -eq 10 && \
    "${TEMPORAL_DEPTH}" -eq 6 && "${NUM_HEADS}" -eq 16 ]] || {
@@ -170,6 +178,7 @@ run_torchrun "${PROJECT}/train_causal_video_diffusion.py" \
   --r7_ckpt "${R7_CKPT}" --require_rgb_lpips --output_dir "${OUTPUT_DIR}" \
   --latent_dim "${LATENT_DIM}" --latent_grid 18 \
   --context_chunks "${CONTEXT_CHUNKS}" --future_chunks "${FUTURE_CHUNKS}" \
+  --temporal_factor "${TEMPORAL_FACTOR}" \
   --normalization_mode zscore \
   --model_dim "${MODEL_DIM}" --spatial_depth "${SPATIAL_DEPTH}" \
   --temporal_depth "${TEMPORAL_DEPTH}" --num_heads "${NUM_HEADS}" \

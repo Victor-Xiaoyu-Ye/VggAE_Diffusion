@@ -219,6 +219,15 @@ cluster) or `scripts/10k/` (local A100). See `scripts/h200/README.md`.
   factor-1 codec ceiling and Wan-native teacher-bridge probes defined in
   `docs/R7_QUALITY_PLAN.md`. New representation experiments require new
   namespaces/caches/stats and must not overwrite v3 artifacts.
+- **R7 T1 GENERATION SUPPORT (2026-08-21, code):** the diffusion trainers
+  (13/16) and their wrappers are now parameterized by `temporal_factor` /
+  `future_chunks` (t2/ctx1/fut4 default unchanged; t1/ctx1/fut8 supported).
+  The latent contract is derived from the cached representation config
+  (`expected_future = (seq_len-1)//temporal_factor`), stats/args cross-validated,
+  late-horizon quality guards target the last two future chunks, and the Wan
+  `--horizon_weights` defaults to 8 entries for t1. Runbook: R7_README.md
+  "Factor-1 (t1) generation". NPU runtime still requires a smoke run.
+
 - Active large-scale dataset: SpatialVID-HQ on OBS.
 - Active local 10K dataset path:
   `/public2/LiZhen/yexiaoyu/dataset/spatial-vid-hq-oft` (A100 box).

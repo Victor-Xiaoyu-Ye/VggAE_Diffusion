@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import types
 
 import torch
 
@@ -16,7 +17,6 @@ from models.compact_dit import CompactLatentDiT
 from utils.device import (configure_backend_compatibility, get_device,
                           get_device_name, manual_seed_all)
 from train_causal_video_diffusion import (
-    CONTEXT_CHUNKS, FUTURE_CHUNKS, LATENT_DIM,
     checked_decode_chunk_size, exact_equal, inverse_fp32, load_torch_artifact,
     normalize_fp32, normalization_signature, sample_shifted, stats_tensors,
     validate_r7_artifact_representation, validate_stats,
@@ -55,7 +55,8 @@ def build_model(config):
         model_dim=int(config["model_dim"]),
         spatial_depth=int(config["spatial_depth"]),
         temporal_depth=int(config["temporal_depth"]),
-        num_heads=int(config["num_heads"]), seq_len=FUTURE_CHUNKS,
+        num_heads=int(config["num_heads"]),
+        seq_len=int(config["future_chunks"]),
         text_cond=False, i0_condition=False, clean_frame0=True,
         block_schedule="interleaved", time_scale=float(config["time_scale"]))
 
@@ -107,19 +108,28 @@ def main(argv=None):
     torch.manual_seed(args.seed); manual_seed_all(args.seed)
     checkpoint = load_torch_artifact(args.checkpoint)
     config = checkpoint["args"]
-    if (int(config.get("context_chunks", -1)),
-            int(config.get("future_chunks", -1)),
-            int(config.get("latent_dim", -1))) != (1, 4, 192):
-        raise ValueError("checkpoint is not production fixed-window R7 (1+4,D=192)")
+    context_chunks = int(config.get("context_chunks", 1))
+    future_chunks = int(config.get("future_chunks", -1))
+    latent_dim = int(config.get("latent_dim", -1))
+    if context_chunks != 1 or latent_dim != 192 or future_chunks not in (4, 8):
+        raise ValueError(
+            "checkpoint is not production fixed-window R7 "
+            f"(1+{future_chunks},D={latent_dim})")
     if checkpoint.get("production_mode") is False:
         print("[WARN] sampling a diagnostic normalization=none checkpoint")
     stats = checkpoint.get("normalization")
-    signature = validate_stats(stats, "checkpoint stats")
+    sampler_args = types.SimpleNamespace(
+        context_chunks=context_chunks,
+        future_chunks=future_chunks,
+        latent_dim=latent_dim,
+        temporal_factor=int(config.get("temporal_factor", 2)),
+    )
+    signature = validate_stats(stats, "checkpoint stats", sampler_args)
     if checkpoint.get("normalization_signature") != signature:
         raise ValueError("checkpoint normalization signature is invalid")
     if args.stats:
         supplied = load_torch_artifact(args.stats)
-        validate_stats(supplied, "supplied stats")
+        validate_stats(supplied, "supplied stats", sampler_args)
         if not exact_equal(stats, supplied):
             raise ValueError(
                 "supplied stats do not exactly match checkpoint normalization")
@@ -128,8 +138,9 @@ def main(argv=None):
     anchor_raw = (load_anchor(args.anchor) if args.anchor else
                   load_manifest_anchor(args.manifest, args.sample_index))
     grid = int(config.get("latent_grid", 18))
-    if tuple(anchor_raw.shape[1:]) != (CONTEXT_CHUNKS, grid*grid, LATENT_DIM):
-        raise ValueError(f"anchor must be [B,1,{grid*grid},192], got {tuple(anchor_raw.shape)}")
+    if tuple(anchor_raw.shape[1:]) != (context_chunks, grid*grid, latent_dim):
+        raise ValueError(f"anchor must be [B,{context_chunks},{grid*grid},{latent_dim}], "
+                         f"got {tuple(anchor_raw.shape)}")
     anchor_raw = anchor_raw.to(device)
     mode = config.get("normalization_mode", "zscore")
     cond = normalize_fp32(anchor_raw, st["cond"], mode)
@@ -139,7 +150,7 @@ def main(argv=None):
     model.load_state_dict(state, strict=True); model.eval()
     cond = cond.to(dtype)
     cpu_generator = torch.Generator(device="cpu"); cpu_generator.manual_seed(args.seed)
-    shape = (cond.shape[0], FUTURE_CHUNKS, grid*grid, LATENT_DIM)
+    shape = (cond.shape[0], future_chunks, grid*grid, latent_dim)
     noise = torch.randn(shape, generator=cpu_generator).to(device=device, dtype=dtype)
     with torch.inference_mode():
         sampled_norm = sample_shifted(
@@ -176,7 +187,8 @@ def main(argv=None):
             r7_config, decoder, args.decode_chunk_size)
         tokenizer = tokenizer.to(device).eval(); decoder = decoder.to(device).eval()
         latent = torch.cat((anchor_raw.float(), future.float()), 1)
-        latent = latent.reshape(cond.shape[0], 5, grid, grid, LATENT_DIM)
+        latent = latent.reshape(
+            cond.shape[0], 1 + future_chunks, grid, grid, latent_dim)
         with torch.inference_mode():
             geo, tex = tokenizer.decode(latent)
             rgb = decoder(geo, tex, frames_chunk_size=decode_chunk_size)[..., :3]
@@ -194,7 +206,7 @@ def main(argv=None):
     import json
     with open(metrics_path, "w") as handle:
         json.dump(metrics, handle, indent=2, sort_keys=True)
-    print(f"saved 1 anchor + 4 future chunks"
+    print(f"saved 1 anchor + {future_chunks} future chunks"
           f"{' and complete 9-frame RGB' if 'rgb_9frames' in output else ''}: {args.output}")
     print(f"saved metrics: {metrics_path}")
 

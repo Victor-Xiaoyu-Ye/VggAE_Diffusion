@@ -13,13 +13,13 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import types
 
 import torch
 
 from sample_causal_video_diffusion import (
     load_anchor, load_manifest_anchor, save_rgb_outputs)
 from train_causal_video_diffusion import (
-    CONTEXT_CHUNKS, FUTURE_CHUNKS, LATENT_DIM,
     checked_decode_chunk_size, exact_equal, inverse_fp32, load_torch_artifact,
     normalize_fp32, stats_tensors, validate_r7_artifact_representation,
     validate_stats)
@@ -96,19 +96,28 @@ def main(argv=None):
         raise ValueError(
             "checkpoint is not a WanCompactAdapter run; use "
             "sample_causal_video_diffusion.py for CompactLatentDiT checkpoints")
-    if (int(config.get("context_chunks", -1)),
-            int(config.get("future_chunks", -1)),
-            int(config.get("latent_dim", -1))) != (1, 4, 192):
-        raise ValueError("checkpoint is not production fixed-window R7 (1+4,D=192)")
+    context_chunks = int(config.get("context_chunks", 1))
+    future_chunks = int(config.get("future_chunks", -1))
+    latent_dim = int(config.get("latent_dim", -1))
+    if context_chunks != 1 or latent_dim != 192 or future_chunks not in (4, 8):
+        raise ValueError(
+            "checkpoint is not production fixed-window R7 "
+            f"(1+{future_chunks},D={latent_dim})")
     if checkpoint.get("production_mode") is False:
         print("[WARN] sampling a diagnostic normalization=none checkpoint")
     stats = checkpoint.get("normalization")
-    signature = validate_stats(stats, "checkpoint stats")
+    sampler_args = types.SimpleNamespace(
+        context_chunks=context_chunks,
+        future_chunks=future_chunks,
+        latent_dim=latent_dim,
+        temporal_factor=int(config.get("temporal_factor", 2)),
+    )
+    signature = validate_stats(stats, "checkpoint stats", sampler_args)
     if checkpoint.get("normalization_signature") != signature:
         raise ValueError("checkpoint normalization signature is invalid")
     if args.stats:
         supplied = load_torch_artifact(args.stats)
-        validate_stats(supplied, "supplied stats")
+        validate_stats(supplied, "supplied stats", sampler_args)
         if not exact_equal(stats, supplied):
             raise ValueError(
                 "supplied stats do not exactly match checkpoint normalization")
@@ -121,16 +130,17 @@ def main(argv=None):
         anchor_raw, anchor_video_id = load_manifest_sample(
             args.manifest, args.sample_index)
     grid = int(config.get("latent_grid", 18))
-    if tuple(anchor_raw.shape[1:]) != (CONTEXT_CHUNKS, grid*grid, LATENT_DIM):
+    if tuple(anchor_raw.shape[1:]) != (context_chunks, grid*grid, latent_dim):
         raise ValueError(
-            f"anchor must be [B,1,{grid*grid},192], got {tuple(anchor_raw.shape)}")
+            f"anchor must be [B,{context_chunks},{grid*grid},{latent_dim}], "
+            f"got {tuple(anchor_raw.shape)}")
     anchor_raw = anchor_raw.to(device)
     mode = config.get("normalization_mode", "zscore")
     cond = normalize_fp32(anchor_raw, st["cond"], mode)
 
     model = WanCompactAdapter(
         args.wan_ckpt_dir, latent_dim=int(config["latent_dim"]),
-        latent_grid=grid, seq_len=FUTURE_CHUNKS,
+        latent_grid=grid, seq_len=future_chunks,
         full_finetune=True, anchor_frame=True,
         anchor_memory=bool(architecture.get("anchor_memory", False))).to(
         device=device, dtype=torch.float32)
@@ -156,7 +166,7 @@ def main(argv=None):
     cond = cond.to(torch.float32)
     cpu_generator = torch.Generator(device="cpu")
     cpu_generator.manual_seed(args.seed)
-    shape = (cond.shape[0], FUTURE_CHUNKS, grid*grid, LATENT_DIM)
+    shape = (cond.shape[0], future_chunks, grid*grid, latent_dim)
     noise = torch.randn(shape, generator=cpu_generator).to(
         device=device, dtype=torch.float32)
     with torch.inference_mode():
@@ -203,7 +213,8 @@ def main(argv=None):
             load_robust_decoder(
                 args.decoder_ckpt, checkpoint["representation"], decoder)
         latent = torch.cat((anchor_raw.float(), future.float()), 1)
-        latent = latent.reshape(cond.shape[0], 5, grid, grid, LATENT_DIM)
+        latent = latent.reshape(
+            cond.shape[0], 1 + future_chunks, grid, grid, latent_dim)
         with torch.inference_mode():
             geo, tex = tokenizer.decode(latent)
             rgb = decoder(geo, tex, frames_chunk_size=decode_chunk_size)[..., :3]
@@ -221,7 +232,7 @@ def main(argv=None):
                         "mp4": mp4_path})
     with open(metrics_path, "w") as handle:
         json.dump(metrics, handle, indent=2, sort_keys=True)
-    print(f"saved 1 anchor + 4 future chunks"
+    print(f"saved 1 anchor + {future_chunks} future chunks"
           f"{' and complete 9-frame RGB' if 'rgb_9frames' in output else ''}: "
           f"{args.output}")
     print(f"saved metrics: {metrics_path}")

@@ -41,10 +41,12 @@ from utils.training import (EMA, ThroughputMeter, append_metrics,
 CONTEXT_CHUNKS = 1
 FUTURE_CHUNKS = 4
 LATENT_DIM = 192
+TEMPORAL_FACTOR = 2
 VMSE_BUCKETS = (0.1, 0.3, 0.5, 0.7, 0.9)
 STRICT_MODEL_ARGS = ("latent_dim", "latent_grid", "model_dim", "spatial_depth",
                      "temporal_depth", "num_heads", "time_scale",
-                     "time_shift_alpha", "normalization_mode")
+                     "time_shift_alpha", "normalization_mode",
+                     "context_chunks", "future_chunks", "temporal_factor")
 STRICT_TRAIN_ARGS = ("lambda_motion", "lambda_accel", "lambda_geo_motion",
                      "aux_warmup_steps", "aux_ramp_steps", "aux_t_min",
                      "batch_size", "accum_steps", "lr", "wd", "warmup_steps",
@@ -55,7 +57,6 @@ ARCHITECTURE_CONTRACT = {
     "clean_frame0": True,
     "i0_condition": False,
     "block_schedule": "interleaved",
-    "seq_len": FUTURE_CHUNKS,
     "text_cond": False,
 }
 OBJECTIVE_SCHEMA = "r7-fixed-window-shifted-ot-cfm-v1"
@@ -75,6 +76,10 @@ def parse_args(argv=None):
     p.add_argument("--latent_grid", type=int, default=18)
     p.add_argument("--context_chunks", type=int, default=CONTEXT_CHUNKS)
     p.add_argument("--future_chunks", type=int, default=FUTURE_CHUNKS)
+    p.add_argument("--temporal_factor", type=int, default=TEMPORAL_FACTOR,
+                   help="R7 codec temporal factor (1: 8 future chunks, "
+                        "2: 4 future chunks); must match the cached "
+                        "representation contract")
     p.add_argument("--model_dim", type=int, default=1152)
     p.add_argument("--spatial_depth", type=int, default=10)
     p.add_argument("--temporal_depth", type=int, default=6)
@@ -173,39 +178,54 @@ def exact_equal(a: Any, b: Any) -> bool:
     return a == b
 
 
-def validate_stats(stats, label):
+def validate_stats(stats, label, args=None):
     if not isinstance(stats, Mapping):
         raise ValueError(f"{label}: stats.pt must contain a mapping")
     if stats.get("normalization_version") != 2:
         raise ValueError(f"{label}: normalization_version must be exactly 2")
     if not isinstance(stats.get("representation"), dict):
         raise ValueError(f"{label}: stats.pt requires representation dict")
-    for name, frames in (("cond", CONTEXT_CHUNKS), ("target", FUTURE_CHUNKS)):
-        group = stats.get(name)
-        if not isinstance(group, dict):
-            raise ValueError(f"{label}: missing {name} normalization")
-        mean, std = torch.as_tensor(group.get("mean")), torch.as_tensor(group.get("std"))
-        if mean.shape != (frames, LATENT_DIM) or std.shape != mean.shape:
-            raise ValueError(f"{label}: {name} mean/std must be [{frames},{LATENT_DIM}], "
-                             f"got {tuple(mean.shape)}/{tuple(std.shape)}")
-        if not torch.isfinite(mean).all() or not torch.isfinite(std).all() or \
-                (std <= 0).any():
-            raise ValueError(f"{label}: invalid {name} mean/std")
     rep = stats["representation"]
     from utils.r7_representation import R7_CONTRACT_SCHEMA
     if rep.get("schema") != R7_CONTRACT_SCHEMA:
         raise ValueError(f"{label}: unsupported R7 representation schema")
     config = rep.get("config") or {}
     layout = rep.get("layout") or {}
-    if (int(config.get("temporal_factor", -1)),
-            int(config.get("geo_latent_dim", -1))
-            + int(config.get("tex_latent_dim", -1)),
-            int(config.get("seq_len", -1))) != (2, 192, 9):
-        raise ValueError(f"{label}: expected t2/c192/seq9 R7 config")
+    factor = int(config.get("temporal_factor", -1))
+    seq_len = int(config.get("seq_len", -1))
+    latent_dim = int(config.get("geo_latent_dim", 0)) + \
+        int(config.get("tex_latent_dim", 0))
+    if factor not in (1, 2) or seq_len != 9:
+        raise ValueError(f"{label}: expected t1/t2 with seq_len=9, got "
+                         f"temporal_factor={factor}, seq_len={seq_len}")
+    expected_future = (seq_len - 1) // factor  # t2 -> 4, t1 -> 8
     if (int(config.get("latent_grid", -1)) != 18
-            or layout.get("anchor_chunks") != [1, 4]
+            or layout.get("anchor_chunks") != [1, expected_future]
             or layout.get("channel_split") != [96, 96]):
         raise ValueError(f"{label}: invalid R7 grid/chunk/channel layout")
+    if args is not None:
+        if int(args.context_chunks) != 1:
+            raise ValueError(f"{label}: context_chunks must be 1, got {args.context_chunks}")
+        if int(args.future_chunks) != expected_future:
+            raise ValueError(
+                f"{label}: --future_chunks {args.future_chunks} does not match "
+                f"cached representation (temporal_factor={factor} -> "
+                f"{expected_future} future chunks)")
+        if int(args.latent_dim) != latent_dim:
+            raise ValueError(
+                f"{label}: --latent_dim {args.latent_dim} does not match "
+                f"cached representation ({latent_dim})")
+    for name, frames in (("cond", 1), ("target", expected_future)):
+        group = stats.get(name)
+        if not isinstance(group, dict):
+            raise ValueError(f"{label}: missing {name} normalization")
+        mean, std = torch.as_tensor(group.get("mean")), torch.as_tensor(group.get("std"))
+        if mean.shape != (frames, latent_dim) or std.shape != mean.shape:
+            raise ValueError(f"{label}: {name} mean/std must be [{frames},{latent_dim}], "
+                             f"got {tuple(mean.shape)}/{tuple(std.shape)}")
+        if not torch.isfinite(mean).all() or not torch.isfinite(std).all() or \
+                (std <= 0).any():
+            raise ValueError(f"{label}: invalid {name} mean/std")
     signatures = rep.get("signatures") or {}
     missing = [name for name in ("streamvggt", "source_dual_ae", "r7")
                if name not in signatures]
@@ -253,6 +273,10 @@ def architecture_contract(args):
         "temporal_depth": int(args.temporal_depth),
         "num_heads": int(args.num_heads),
         "time_scale": float(args.time_scale),
+        "seq_len": int(args.future_chunks),
+        "context_chunks": int(args.context_chunks),
+        "future_chunks": int(args.future_chunks),
+        "temporal_factor": int(args.temporal_factor),
     })
     return contract
 
@@ -284,18 +308,20 @@ def build_model(args):
         latent_dim=args.latent_dim, num_tokens=args.latent_grid ** 2,
         model_dim=args.model_dim, spatial_depth=args.spatial_depth,
         temporal_depth=args.temporal_depth, num_heads=args.num_heads,
-        seq_len=FUTURE_CHUNKS, text_cond=False, i0_condition=False,
+        seq_len=args.future_chunks, text_cond=False, i0_condition=False,
         clean_frame0=True, block_schedule="interleaved",
         time_scale=args.time_scale)
 
 
 def validate_batch(batch, args):
     cond, target = batch["cond"], batch["target"]
-    expected_tail = (args.latent_grid ** 2, LATENT_DIM)
-    if tuple(cond.shape[1:]) != (CONTEXT_CHUNKS, *expected_tail):
-        raise ValueError(f"cache cond must be [B,1,N,192], got {tuple(cond.shape)}")
-    if tuple(target.shape[1:]) != (FUTURE_CHUNKS, *expected_tail):
-        raise ValueError(f"cache target must be [B,4,N,192], got {tuple(target.shape)}")
+    expected_tail = (args.latent_grid ** 2, args.latent_dim)
+    if tuple(cond.shape[1:]) != (args.context_chunks, *expected_tail):
+        raise ValueError(f"cache cond must be [B,{args.context_chunks},N,{args.latent_dim}], "
+                         f"got {tuple(cond.shape)}")
+    if tuple(target.shape[1:]) != (args.future_chunks, *expected_tail):
+        raise ValueError(f"cache target must be [B,{args.future_chunks},N,{args.latent_dim}], "
+                         f"got {tuple(target.shape)}")
     return cond, target
 
 
@@ -447,13 +473,13 @@ def sample_shifted(model, cond, shape, steps, alpha, noise=None,
 def _mean(values): return float(sum(values) / max(len(values), 1))
 
 
-def latent_metrics(generated, target, cond_raw, target_stats, mode):
+def latent_metrics(generated, target, cond_raw, target_stats, mode, args):
     gen_raw = inverse_fp32(generated, target_stats, mode)
     tgt_raw = target.float()
     row = {"eval/latent_mse": F.mse_loss(gen_raw, tgt_raw).item(),
            "eval/gen_std_ratio": gen_raw.std().item() /
                                   max(tgt_raw.std().item(), 1e-8)}
-    for i in range(FUTURE_CHUNKS):
+    for i in range(args.future_chunks):
         row[f"eval/latent_mse_chunk{i+1}"] = F.mse_loss(
             gen_raw[:, i], tgt_raw[:, i]).item()
         row[f"eval/std_ratio_chunk{i+1}"] = gen_raw[:, i].std().item() / \
@@ -465,19 +491,20 @@ def latent_metrics(generated, target, cond_raw, target_stats, mode):
     cosines = F.cosine_similarity(gm.flatten(2), tm.flatten(2), dim=2)
     row["eval/motion_ratio"] = ratios.mean().item()
     row["eval/motion_cosine"] = cosines.mean().item()
-    for i in range(FUTURE_CHUNKS):
+    for i in range(args.future_chunks):
         row[f"eval/motion_ratio_chunk{i+1}"] = ratios[:, i].mean().item()
         row[f"eval/motion_cosine_chunk{i+1}"] = cosines[:, i].mean().item()
     return row, gen_raw
 
 
 def expanded_geo_motion_metrics(gen_raw, target_raw, cond_raw, tokenizer, args):
-    b, _, _, c = gen_raw.shape
+    b, future, _, c = gen_raw.shape
     g = args.latent_grid
     generated = torch.cat((cond_raw.float(), gen_raw.float()), 1)
     target = torch.cat((cond_raw.float(), target_raw.float()), 1)
-    generated_geo, _ = tokenizer.decode(generated.reshape(b, 5, g, g, c))
-    target_geo, _ = tokenizer.decode(target.reshape(b, 5, g, g, c))
+    generated_geo, _ = tokenizer.decode(
+        generated.reshape(b, 1 + future, g, g, c))
+    target_geo, _ = tokenizer.decode(target.reshape(b, 1 + future, g, g, c))
     gm = generated_geo[:, 1:] - generated_geo[:, :-1]
     tm = target_geo[:, 1:] - target_geo[:, :-1]
     ratio = gm.flatten(2).norm(dim=2) / tm.flatten(2).norm(dim=2).clamp_min(1e-8)
@@ -487,11 +514,13 @@ def expanded_geo_motion_metrics(gen_raw, target_raw, cond_raw, tokenizer, args):
         "eval/expanded_geo_motion_ratio": ratio.mean().item(),
         "eval/expanded_geo_motion_cosine": cosine.mean().item(),
     }
-    for i in range(FUTURE_CHUNKS):
+    factor = int(getattr(args, "temporal_factor", 2))
+    for i in range(future):
         # R7 factor=2 expands each latent future chunk into two RGB-time
-        # transitions. Aggregate exactly that pair rather than mislabelling
-        # individual expanded-frame transitions as latent chunks.
-        start, end = i * 2, (i + 1) * 2
+        # transitions; factor=1 expands one-to-one. Aggregate exactly that
+        # chunk's transitions rather than mislabelling individual expanded
+        # frames as latent chunks.
+        start, end = i * factor, (i + 1) * factor
         row[f"eval/expanded_geo_motion_ratio_chunk{i+1}"] = \
             ratio[:, start:end].mean().item()
         row[f"eval/expanded_geo_motion_cosine_chunk{i+1}"] = \
@@ -502,10 +531,10 @@ def expanded_geo_motion_metrics(gen_raw, target_raw, cond_raw, tokenizer, args):
 def decode_rgb_metrics(gen_raw, target_raw, cond_raw, tokenizer, decoder,
                        decode_chunk_size, args, lpips_model=None,
                        device_type="cpu", compute_dtype=torch.float32):
-    b, _, n, c = gen_raw.shape; g = args.latent_grid
-    def decode(future):
-        latent = torch.cat((cond_raw.float(), future.float()), 1)
-        latent = latent.reshape(b, 5, g, g, c)
+    b, future, n, c = gen_raw.shape; g = args.latent_grid
+    def decode(future_latents):
+        latent = torch.cat((cond_raw.float(), future_latents.float()), 1)
+        latent = latent.reshape(b, 1 + future, g, g, c)
         with torch.autocast(
                 device_type=device_type, dtype=compute_dtype,
                 enabled=compute_dtype != torch.float32):
@@ -591,8 +620,11 @@ def strict_resume(checkpoint, args, stats, signature, world_size):
     current_effective = args.batch_size * args.accum_steps * world_size
     if saved_effective != current_effective:
         raise ValueError(f"resume effective batch mismatch: {saved_effective} != {current_effective}")
-    for key, expected in (("context_chunks", 1), ("future_chunks", 4)):
-        if int(saved.get(key, -1)) != expected: raise ValueError(f"resume {key} mismatch")
+    if int(saved.get("context_chunks", -1)) != 1:
+        raise ValueError("resume context_chunks mismatch")
+    if int(saved.get("future_chunks", -1)) != args.future_chunks:
+        raise ValueError(f"resume future_chunks mismatch: "
+                         f"{saved.get('future_chunks')} != {args.future_chunks}")
     expected_architecture = architecture_contract(args)
     if not exact_equal(checkpoint.get("architecture"), expected_architecture):
         raise ValueError("resume architecture contract is not exactly identical")
@@ -671,8 +703,15 @@ def composite_score(row):
 
 def main(argv=None):
     args = parse_args(argv)
-    if (args.context_chunks, args.future_chunks, args.latent_dim) != (1, 4, 192):
-        raise ValueError("production R7 contract is strictly context=1, future=4, D=192")
+    if args.context_chunks != 1 or args.latent_dim != 192 or \
+            args.temporal_factor not in (1, 2):
+        raise ValueError(
+            "R7 diffusion contract is context=1, D=192, temporal_factor "
+            "1 (future=8) or 2 (future=4)")
+    if args.future_chunks != (8 if args.temporal_factor == 1 else 4):
+        raise ValueError(
+            f"--future_chunks {args.future_chunks} is inconsistent with "
+            f"--temporal_factor {args.temporal_factor}")
     if args.require_rgb_lpips and not args.r7_ckpt:
         raise ValueError("--require_rgb_lpips requires --r7_ckpt")
     if args.normalization_mode == "none":
@@ -700,8 +739,8 @@ def main(argv=None):
 
     stats = load_torch_artifact(args.stats)
     eval_stats = load_torch_artifact(args.eval_stats)
-    signature = validate_stats(stats, "train stats")
-    validate_stats(eval_stats, "eval stats")
+    signature = validate_stats(stats, "train stats", args)
+    validate_stats(eval_stats, "eval stats", args)
     assert_same_representation(stats, eval_stats)
     st = stats_tensors(stats, device)
     representation_config = stats["representation"].get("config") or {}
@@ -826,7 +865,8 @@ def main(argv=None):
                 core, cond, target.shape, args.sample_steps,
                 args.time_shift_alpha, noise, device_type, compute_dtype)
             latent_row, gen_raw = latent_metrics(generated, target_raw, cond_raw,
-                                                  st["target"], args.normalization_mode)
+                                                  st["target"], args.normalization_mode,
+                                                  args)
             row.update(latent_row)
             if tokenizer is not None:
                 try:

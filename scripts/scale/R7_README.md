@@ -217,3 +217,36 @@ eval. The old arm remains diagnostic; use `docs/R7_QUALITY_PLAN.md` for the
 factor-1/teacher-bridge/horizon-motion redesign rather than extending it blindly.
 With ~10k cached clips one epoch is ~52 optimizer steps at world 48; watch both
 train/eval x0-MSE and sampled late-horizon guards before extending.
+
+## Factor-1 (t1) generation
+
+After the factor-1 codec ceiling probe (stage 17) passes its gates
+(PSNR >= 24.5, LPIPS <= 0.12, geometry-motion cosine >= 0.95), the diffusion
+trainers (13, 16) and their shell wrappers accept `TEMPORAL_FACTOR=1` /
+`FUTURE_CHUNKS=8` with the same contract enforcement as t2/ctx1/fut4.
+
+```bash
+# Build the t1 cache (after codec+joint pass gates)
+STAGES=cache_train,cache_eval,cache_merge bash scripts/scale/17_probe_r7_factor1.sh
+
+# Train the R7 diffusion (13) on the t1 cache
+TEMPORAL_FACTOR=1 FUTURE_CHUNKS=8 MODE=train bash scripts/scale/13_train_causal_video_diffusion.sh
+
+# Sample from the t1 checkpoint
+TEMPORAL_FACTOR=1 FUTURE_CHUNKS=8 MODE=sample bash scripts/scale/13_train_causal_video_diffusion.sh
+
+# Train the Wan 1.3B diffusion (16) on the t1 cache
+TEMPORAL_FACTOR=1 FUTURE_CHUNKS=8 MODE=train R7_NAMESPACE=r7_t1_c192_probe_v1 \
+  bash scripts/scale/16_train_wan_t2v_diffusion.sh
+
+# Extend t1 diffusion (6k -> 12k)
+TEMPORAL_FACTOR=1 MODE=train EXTEND=1 bash scripts/scale/extend_r7_diffusion_12k.sh
+```
+
+The t1 latent contract uses 9 RGB frames -> 9 latent frames (anchor + 8 future),
+with [position, channel] stats shape `[8, 192]`. The diffusion architecture
+(model_dim=1152, 10S/6T, 16 heads) is identical; only the sequence length in
+the DiT / Wan adapter changes (`seq_len=8`). All quality guards (motion ratio,
+motion cosine, expanded geo motion) are computed against the last two future
+chunks (chunks 7/8 instead of t2's 3/4). The Wan adapter's `--horizon_weights`
+defaults to 8 entries for t1.

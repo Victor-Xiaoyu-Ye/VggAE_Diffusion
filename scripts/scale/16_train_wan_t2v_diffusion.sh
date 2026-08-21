@@ -39,7 +39,14 @@ WAN_T2V_13B_DIR="${WAN_T2V_13B_DIR:-${VGGAE_REF_ROOT}/Wan2.1-T2V-1.3B}"
 TEXT_EMBEDDING_VERSION="${TEXT_EMBEDDING_VERSION:-umt5xxl_spatialvid_10k_v1}"
 TEXT_EMBEDDING_OBS_DIR="${TEXT_EMBEDDING_OBS_DIR:-${PERSISTENT_OBS_ROOT}/text_embeddings/${TEXT_EMBEDDING_VERSION}}"
 
-DIFFUSION_NAMESPACE="${DIFFUSION_NAMESPACE:-r7_wan13b_i2v_anchor_memory_ctx1_fut4_v2}"
+DIFFUSION_NAMESPACE="${DIFFUSION_NAMESPACE:-}"
+if [[ -z "${DIFFUSION_NAMESPACE}" ]]; then
+  if [[ "${TEMPORAL_FACTOR}" -eq 1 ]]; then
+    DIFFUSION_NAMESPACE="r7_wan13b_i2v_anchor_memory_ctx1_fut8_v1"
+  else
+    DIFFUSION_NAMESPACE="r7_wan13b_i2v_anchor_memory_ctx1_fut4_v2"
+  fi
+fi
 OUTPUT_DIR="${SCALE_ROOT}/${DIFFUSION_NAMESPACE}"
 REMOTE_OUTPUT_DIR="${SCALE_REMOTE_ROOT}/${DIFFUSION_NAMESPACE}"
 MIRROR_OUTPUT_DIR="${SCALE_MIRROR_ROOT}/${DIFFUSION_NAMESPACE}"
@@ -64,13 +71,22 @@ GUARD_MOTION_RATIO_MAX="${GUARD_MOTION_RATIO_MAX:-1.50}"
 GUARD_MOTION_COSINE_CHUNK3="${GUARD_MOTION_COSINE_CHUNK3:-0.45}"
 GUARD_MOTION_COSINE_CHUNK4="${GUARD_MOTION_COSINE_CHUNK4:-0.35}"
 GUARD_EXPANDED_GEO_COSINE="${GUARD_EXPANDED_GEO_COSINE:-0.10}"
+HORIZON_WEIGHTS="${HORIZON_WEIGHTS:-}"
+if [[ -z "${HORIZON_WEIGHTS}" ]]; then
+  if [[ "${TEMPORAL_FACTOR}" -eq 1 ]]; then
+    HORIZON_WEIGHTS="1,1.5,2,3,4,5,6,7"   # 8 future chunks
+  else
+    HORIZON_WEIGHTS="1,1.5,2,3"           # 4 future chunks
+  fi
+fi
 echo "DI_throughput reports raw tokens/s/npu"
 MASTER_PORT="${MASTER_PORT:-29685}"
 
 [[ "${MODE}" == "train" || "${MODE}" == "sample" ]] || { echo "MODE must be train or sample." >&2; exit 2; }
-[[ "${TEMPORAL_FACTOR}" -eq 2 && "${LATENT_DIM}" -eq 192 && \
-   "${CONTEXT_CHUNKS}" -eq 1 && "${FUTURE_CHUNKS}" -eq 4 ]] || {
-  echo "Production diffusion contract is strictly t2/c192/context1/future4." >&2; exit 2;
+[[ "${LATENT_DIM}" -eq 192 && "${CONTEXT_CHUNKS}" -eq 1 && \
+   ( ( "${TEMPORAL_FACTOR}" -eq 2 && "${FUTURE_CHUNKS}" -eq 4 ) || \
+     ( "${TEMPORAL_FACTOR}" -eq 1 && "${FUTURE_CHUNKS}" -eq 8 ) ) ]] || {
+  echo "Diffusion contract is t2/c192/context1/future4 or t1/c192/context1/future8." >&2; exit 2;
 }
 case "$(basename "${WAN_T2V_13B_DIR}")" in
   *14B*) echo "This stage is restricted to Wan2.1-T2V-1.3B (14B OOMs under replicated DDP)." >&2; exit 2;;
@@ -232,6 +248,7 @@ run_torchrun "${PROJECT}/train_causal_wan_video_diffusion.py" \
   --require_rgb_lpips --output_dir "${OUTPUT_DIR}" \
   --latent_dim "${LATENT_DIM}" --latent_grid 18 \
   --context_chunks "${CONTEXT_CHUNKS}" --future_chunks "${FUTURE_CHUNKS}" \
+  --temporal_factor "${TEMPORAL_FACTOR}" \
   --normalization_mode zscore \
   --time_shift_alpha "${TIME_SHIFT_ALPHA}" \
   --batch_size "${BATCH_SIZE:-4}" --accum_steps "${ACCUM_STEPS:-1}" \
@@ -246,7 +263,7 @@ run_torchrun "${PROJECT}/train_causal_wan_video_diffusion.py" \
   --lambda_geo_motion "${LAMBDA_GEO_MOTION:-0.05}" \
   --lambda_motion_cosine "${LAMBDA_MOTION_COSINE:-0.10}" \
   --lambda_motion_magnitude "${LAMBDA_MOTION_MAGNITUDE:-0.05}" \
-  --horizon_weights "${HORIZON_WEIGHTS:-1,1.5,2,3}" \
+  --horizon_weights "${HORIZON_WEIGHTS}" \
   --rollout_window "${ROLLOUT_WINDOW:-2}" --rollout_overlap "${ROLLOUT_OVERLAP:-1}" \
   --scheduled_context_start "${SCHEDULED_CONTEXT_START:-4000}" \
   --scheduled_context_ramp "${SCHEDULED_CONTEXT_RAMP:-4000}" \
