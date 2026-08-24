@@ -250,3 +250,27 @@ the DiT / Wan adapter changes (`seq_len=8`). All quality guards (motion ratio,
 motion cosine, expanded geo motion) are computed against the last two future
 chunks (chunks 7/8 instead of t2's 3/4). The Wan adapter's `--horizon_weights`
 defaults to 8 entries for t1.
+
+## Teacher bridge (18/19) for t1
+
+The diagnostic R7->Wan-native-patch bridge is representation-agnostic (it reads
+the R7 checkpoint config and the teacher shards), but the default OBS prefixes
+target t2. For the t1 probe use separate prefixes so t1/t2 teacher caches and
+bridge runs never mix:
+
+```bash
+# 18: teacher cache over ~1k videos (node 0)
+WAN_TEACHER_OUTPUT="${PERSISTENT_OBS_ROOT}/teacher_cache/r7_wan_native_1k_t1_v1" \
+R7_NAMESPACE=r7_t1_c192_probe_v1 \
+bash scripts/scale/18_cache_wan_teacher_bridge.sh
+
+# 19: bridge training from that cache (node 0)
+WAN_TEACHER_OUTPUT="${PERSISTENT_OBS_ROOT}/teacher_cache/r7_wan_native_1k_t1_v1" \
+BRIDGE_NAMESPACE=r7_wan_teacher_bridge_t1_v1 \
+bash scripts/scale/19_train_wan_teacher_bridge.sh
+```
+
+`train_r7_wan_teacher_bridge.py` hard-codes the bridge input dim to 192, which
+is also the t1 latent dim (geo96|tex96); the temporal/spatial shapes are derived
+from the teacher tensors, so no t1-specific code change is required. The bridge
+is diagnostic only: production inference never loads the Wan VAE.

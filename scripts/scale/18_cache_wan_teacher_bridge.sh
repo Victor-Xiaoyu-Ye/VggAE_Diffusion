@@ -20,6 +20,9 @@ R7_NAMESPACE="${R7_NAMESPACE:-r7_t2_c192_v3}"
 R7_CKPT="${R7_CKPT:-${SCALE_ROOT}/${R7_NAMESPACE}/joint/checkpoint_best.pt}"
 R7_CKPT_URL="${R7_CKPT_URL:-${SCALE_REMOTE_ROOT}/${R7_NAMESPACE}/joint/checkpoint_best.pt}"
 R7_CKPT_MIRROR_URL="${R7_CKPT_MIRROR_URL:-${SCALE_MIRROR_ROOT}/${R7_NAMESPACE}/joint/checkpoint_best.pt}"
+# Teacher cache is keyed by representation so t1/t2 runs never mix R7 tensors
+# with different latent frame counts. Default targets t2; t1 users must point
+# WAN_TEACHER_OUTPUT at a t1-specific prefix (see R7_README).
 TEACHER_OUTPUT="${WAN_TEACHER_OUTPUT:-${PERSISTENT_OBS_ROOT}/teacher_cache/r7_wan_native_1k_v1}"
 require_dir "${WAN_T2V_13B_DIR}" "Wan2.1-T2V-1.3B"
 require_file "${WAN_VAE_CKPT}" "Wan VAE checkpoint"

@@ -13,8 +13,10 @@ require_output_url
 
 TEACHER_DIR="${WAN_TEACHER_LOCAL_DIR:-${LOCAL_CACHE_ROOT}/teacher_cache/r7_wan_native_1k_v1}"
 TEACHER_URL="${WAN_TEACHER_OUTPUT:-${PERSISTENT_OBS_ROOT}/teacher_cache/r7_wan_native_1k_v1}"
-OUTPUT_DIR="${SCALE_ROOT}/r7_wan_teacher_bridge_v1"
-REMOTE_OUTPUT_DIR="${SCALE_REMOTE_ROOT}/r7_wan_teacher_bridge_v1"
+# Keep t1/t2 bridge runs in separate namespaces so their outputs never collide.
+BRIDGE_NAMESPACE="${BRIDGE_NAMESPACE:-r7_wan_teacher_bridge_v1}"
+OUTPUT_DIR="${BRIDGE_OUTPUT_DIR:-${SCALE_ROOT}/${BRIDGE_NAMESPACE}}"
+REMOTE_OUTPUT_DIR="${BRIDGE_REMOTE_OUTPUT_DIR:-${SCALE_REMOTE_ROOT}/${BRIDGE_NAMESPACE}}"
 mkdir -p "${TEACHER_DIR}" "${OUTPUT_DIR}"
 
 # The cache is a small diagnostic directory. Stage its manifest and numbered
