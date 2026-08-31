@@ -589,16 +589,20 @@ def main():
             raise RuntimeError("evaluation dataset yielded no clips")
         trans = [float(np.mean(values)) for values in transitions]
         boundaries = [i for i in range(len(trans))
-                      if i % config.temporal_factor == 0]
+                      if config.temporal_factor > 1
+                      and i % config.temporal_factor == 0]
         within = [i for i in range(len(trans)) if i not in boundaries]
-        boundary_error = float(np.mean([trans[i] for i in boundaries])) if boundaries else 0.
+        boundary_error = (float(np.mean([trans[i] for i in boundaries]))
+                          if boundaries else None)
         within_error = float(np.mean([trans[i] for i in within])) if within else 0.
+        boundary_ratio = (boundary_error / max(within_error, 1e-12)
+                          if boundary_error is not None else None)
         row = {"step": step, "eval/psnr": float(np.mean(psnr)),
                "eval/psnr_std": float(np.std(psnr)), "eval/l1": float(np.mean(l1s)),
                "eval/lpips": float(np.mean(perceptual)),
                "eval/transition_within": within_error,
                "eval/transition_boundary": boundary_error,
-               "eval/boundary_ratio": boundary_error / max(within_error, 1e-12),
+               "eval/boundary_ratio": boundary_ratio,
                "eval/latent_roundtrip_geo_l1": float(np.mean(geo_rt)),
                "eval/latent_roundtrip_tex_l1": float(np.mean(tex_rt)),
                "eval/geo_motion_cosine": float(np.mean(geo_cos)),
@@ -614,17 +618,22 @@ def main():
             row["eval/noised_l1"] = float(np.mean(noised_l1s))
             row["eval/noised_lpips"] = float(np.mean(noised_perceptual))
             row["eval/noised_sigma"] = args.latent_noise_eval_sigma
+        boundary_passed = (config.temporal_factor == 1 or
+                           row["eval/boundary_ratio"] <= args.gate_boundary_ratio)
         row.update({"gate/psnr": row["eval/psnr"] >= args.gate_psnr,
                     "gate/lpips": row["eval/lpips"] <= args.gate_lpips,
-                    "gate/boundary": row["eval/boundary_ratio"] <= args.gate_boundary_ratio,
+                    "gate/boundary": boundary_passed,
+                    "gate/boundary_applicable": config.temporal_factor > 1,
                     "gate/geo_motion": row["eval/geo_motion_cosine"] >= args.gate_geo_motion_cosine})
         row["gate/passed"] = all(row[key] for key in
             ("gate/psnr", "gate/lpips", "gate/boundary", "gate/geo_motion"))
         # LPIPS is primary; soft penalties prevent selecting a perceptually sharp
-        # checkpoint that regresses the R7 temporal/geometry contract.
+        # checkpoint that regresses the R7 temporal/geometry contract.  A fold
+        # boundary does not exist when factor=1.
+        boundary_penalty = (0.10 * max(row["eval/boundary_ratio"] - 1.0, 0.0)
+                            if config.temporal_factor > 1 else 0.0)
         row["eval/quality_composite"] = (
-            row["eval/lpips"]
-            + 0.10 * max(row["eval/boundary_ratio"] - 1.0, 0.0)
+            row["eval/lpips"] + boundary_penalty
             + 0.10 * max(args.gate_geo_motion_cosine
                          - row["eval/geo_motion_cosine"], 0.0))
         append_metrics(metrics_path, row); log_scalars(writer, row, step)
@@ -640,15 +649,19 @@ def main():
                     or (passing == best.get("passing", False)
                         and value < best["value"] - args.early_stop_min_delta))
         if args.phase == "decoder_robust":
-            # The whole point of this phase is robustness: the first eval
-            # (init weights) sets the noised baseline, and no checkpoint may
-            # become best until it decodes noised latents better than that.
+            # The whole point of this phase is robustness. A step-0 eval sets
+            # the fixed-noise baseline before any optimizer update. The robust
+            # decoder must also preserve the clean RGB contract; geometry is
+            # excluded because the tokenizer is frozen in this phase.
             noised = row["eval/noised_psnr"]
+            clean_eligible = (row["gate/psnr"] and row["gate/lpips"]
+                              and row["gate/boundary"])
             if early.get("noised_psnr_baseline") is None:
                 early["noised_psnr_baseline"] = noised
                 improved = False
-            elif noised <= early["noised_psnr_baseline"]:
-                improved = False
+            else:
+                improved = (improved and clean_eligible
+                            and noised > early["noised_psnr_baseline"])
         if improved:
             best.update(value=value, step=step, metrics=dict(row),
                         passing=passing)
@@ -659,11 +672,18 @@ def main():
                             and early["bad_evals"] >= args.early_stop_patience)
         return improved, early["stopped"]
 
+    last_eval = -1
     if main_process:
         print(f"R7 {args.phase}: factor={config.temporal_factor} "
               f"split={config.geo_latent_dim}+{config.tex_latent_dim} world={world_size}")
+        if args.phase == "decoder_robust" and step == 0:
+            baseline_row = evaluate()
+            early["noised_psnr_baseline"] = baseline_row["eval/noised_psnr"]
+            last_eval = 0
+            print("[decoder_robust baseline] "
+                  f"noised_psnr={early['noised_psnr_baseline']:.6f}")
     optimizer.zero_grad(set_to_none=True)
-    epoch = micro = 0; stopped = step >= args.max_steps; last_eval = -1
+    epoch = micro = 0; stopped = step >= args.max_steps
     throughput_meter = ThroughputMeter()
     while not stopped:
         if sampler: sampler.set_epoch(epoch)

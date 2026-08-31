@@ -15,11 +15,11 @@ import torch
 
 from models.compact_dit import CompactLatentDiT
 from utils.device import (configure_backend_compatibility, get_device,
-                          get_device_name, manual_seed_all)
+                          get_device_name, manual_seed_all, resolve_dtype)
 from train_causal_video_diffusion import (
-    checked_decode_chunk_size, exact_equal, inverse_fp32, load_torch_artifact,
-    normalize_fp32, normalization_signature, sample_shifted, stats_tensors,
-    validate_r7_artifact_representation, validate_stats,
+    checked_decode_chunk_size, exact_equal, inverse_fp32, load_robust_decoder,
+    load_torch_artifact, normalize_fp32, normalization_signature, sample_shifted,
+    stats_tensors, validate_r7_artifact_representation, validate_stats,
 )
 
 
@@ -37,6 +37,8 @@ def parse_args(argv=None):
     p.add_argument("--stats", default="",
                    help="optional stats.pt; must exactly match checkpoint normalization")
     p.add_argument("--r7_ckpt", default="", help="strict tokenizer+RGB decoder")
+    p.add_argument("--decoder_ckpt", default="",
+                   help="decoder_robust checkpoint overriding decoder.* weights")
     p.add_argument("--sample_steps", type=int, default=30)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--device", default="",
@@ -107,6 +109,12 @@ def main(argv=None):
     device = torch.device(args.device) if args.device else get_device(0)
     torch.manual_seed(args.seed); manual_seed_all(args.seed)
     checkpoint = load_torch_artifact(args.checkpoint)
+    objective = checkpoint.get("objective") or {}
+    if objective.get("schema") != "r7-fixed-window-x0-v1" \
+            or objective.get("prediction") != "x0":
+        raise ValueError(
+            "checkpoint is not a corrected x0 R7 diffusion; legacy velocity "
+            "checkpoints require their original sampler")
     config = checkpoint["args"]
     context_chunks = int(config.get("context_chunks", 1))
     future_chunks = int(config.get("future_chunks", -1))
@@ -145,6 +153,7 @@ def main(argv=None):
     mode = config.get("normalization_mode", "zscore")
     cond = normalize_fp32(anchor_raw, st["cond"], mode)
     dtype = torch.float32
+    compute_dtype = resolve_dtype(args.dtype)
     model = build_model(config).to(device=device, dtype=dtype)
     state = checkpoint["ema"] if args.weights == "ema" else checkpoint["model"]
     model.load_state_dict(state, strict=True); model.eval()
@@ -155,7 +164,8 @@ def main(argv=None):
     with torch.inference_mode():
         sampled_norm = sample_shifted(
             model, cond, shape, args.sample_steps,
-            float(config.get("time_shift_alpha", 1.0)), noise)
+            float(config.get("time_shift_alpha", 1.0)), noise,
+            device_type, compute_dtype)
         future = inverse_fp32(sampled_norm, st["target"], mode)
 
     output = {"schema": "r7-diffusion-sample-v1",
@@ -186,6 +196,9 @@ def main(argv=None):
         decode_chunk_size = checked_decode_chunk_size(
             r7_config, decoder, args.decode_chunk_size)
         tokenizer = tokenizer.to(device).eval(); decoder = decoder.to(device).eval()
+        if args.decoder_ckpt:
+            load_robust_decoder(
+                args.decoder_ckpt, checkpoint["representation"], decoder)
         latent = torch.cat((anchor_raw.float(), future.float()), 1)
         latent = latent.reshape(
             cond.shape[0], 1 + future_chunks, grid, grid, latent_dim)

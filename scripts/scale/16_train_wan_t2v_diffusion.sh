@@ -18,7 +18,7 @@ MODE="${MODE:-train}"                         # train | sample
 TEMPORAL_FACTOR="${TEMPORAL_FACTOR:-2}"
 LATENT_DIM="${LATENT_DIM:-192}"
 CONTEXT_CHUNKS="${CONTEXT_CHUNKS:-1}"
-FUTURE_CHUNKS="${FUTURE_CHUNKS:-4}"
+FUTURE_CHUNKS="${FUTURE_CHUNKS:-$(( (9 - 1) / TEMPORAL_FACTOR ))}"
 R7_NAMESPACE="${R7_NAMESPACE:-r7_t${TEMPORAL_FACTOR}_c${LATENT_DIM}_v3}"
 R7_CACHE_VERSION="${R7_CACHE_VERSION:-${R7_NAMESPACE}_seq9_frame_channel_v1}"
 R7_CACHE_OBS_ROOT="${R7_CACHE_OBS_ROOT:-${PERSISTENT_OBS_ROOT}/cache_latents/${R7_CACHE_VERSION}}"
@@ -39,12 +39,24 @@ WAN_T2V_13B_DIR="${WAN_T2V_13B_DIR:-${VGGAE_REF_ROOT}/Wan2.1-T2V-1.3B}"
 TEXT_EMBEDDING_VERSION="${TEXT_EMBEDDING_VERSION:-umt5xxl_spatialvid_10k_v1}"
 TEXT_EMBEDDING_OBS_DIR="${TEXT_EMBEDDING_OBS_DIR:-${PERSISTENT_OBS_ROOT}/text_embeddings/${TEXT_EMBEDDING_VERSION}}"
 
+ALLOW_DIAGNOSTIC_DIFFUSION="${ALLOW_DIAGNOSTIC_DIFFUSION:-0}"
+GATE_MARKER="${R7_GATE_MARKER:-${SCALE_ROOT}/${R7_NAMESPACE}/joint/gate_passed.json}"
+GATE_MARKER_URL="${R7_GATE_MARKER_URL:-${SCALE_REMOTE_ROOT}/${R7_NAMESPACE}/joint/gate_passed.json}"
+GATE_MARKER_MIRROR_URL="${R7_GATE_MARKER_MIRROR_URL:-${SCALE_MIRROR_ROOT}/${R7_NAMESPACE}/joint/gate_passed.json}"
+if [[ "${TEMPORAL_FACTOR}" -eq 1 ]]; then
+  GATE_PSNR="${GATE_PSNR:-24.5}"; GATE_LPIPS="${GATE_LPIPS:-0.12}"
+else
+  GATE_PSNR="${GATE_PSNR:-23.9}"; GATE_LPIPS="${GATE_LPIPS:-0.13}"
+fi
+GATE_BOUNDARY_RATIO="${GATE_BOUNDARY_RATIO:-1.10}"
+GATE_GEO_MOTION_COSINE="${GATE_GEO_MOTION_COSINE:-0.95}"
+
 DIFFUSION_NAMESPACE="${DIFFUSION_NAMESPACE:-}"
 if [[ -z "${DIFFUSION_NAMESPACE}" ]]; then
   if [[ "${TEMPORAL_FACTOR}" -eq 1 ]]; then
-    DIFFUSION_NAMESPACE="r7_wan13b_i2v_anchor_memory_ctx1_fut8_v1"
+    DIFFUSION_NAMESPACE="r7_wan13b_i2v_anchor_memory_ctx1_fut8_timefix_v3"
   else
-    DIFFUSION_NAMESPACE="r7_wan13b_i2v_anchor_memory_ctx1_fut4_v2"
+    DIFFUSION_NAMESPACE="r7_wan13b_i2v_anchor_memory_ctx1_fut4_timefix_v3"
   fi
 fi
 OUTPUT_DIR="${SCALE_ROOT}/${DIFFUSION_NAMESPACE}"
@@ -65,7 +77,7 @@ TEXT_DROP_PROB="${TEXT_DROP_PROB:-0.1}"
 CFG_SCALE="${CFG_SCALE:-3.0}"
 PREVIEW_CLIPS="${PREVIEW_CLIPS:-1}"
 PREVIEW_FPS="${PREVIEW_FPS:-8}"
-ENFORCE_QUALITY_GUARDS="${ENFORCE_QUALITY_GUARDS:-0}"
+ENFORCE_QUALITY_GUARDS="${ENFORCE_QUALITY_GUARDS:-1}"
 GUARD_MOTION_RATIO_MIN="${GUARD_MOTION_RATIO_MIN:-0.55}"
 GUARD_MOTION_RATIO_MAX="${GUARD_MOTION_RATIO_MAX:-1.50}"
 GUARD_MOTION_COSINE_CHUNK3="${GUARD_MOTION_COSINE_CHUNK3:-0.45}"
@@ -111,6 +123,17 @@ mkdir -p "${OUTPUT_DIR}" "${LOCAL_CACHE_ROOT}/resume" \
 if [[ "${NODE_RANK}" -ne 0 ]]; then rm -f "${R7_CKPT}" "${DECODER_CKPT}"; fi
 ensure_local_checkpoint "${R7_CKPT}" "${R7_CKPT_URL}" \
   "accepted R7 checkpoint" "${R7_CKPT_MIRROR_URL}"
+if [[ "${ALLOW_DIAGNOSTIC_DIFFUSION}" != 1 ]]; then
+  rm -f "${GATE_MARKER}"
+  ensure_local_checkpoint "${GATE_MARKER}" "${GATE_MARKER_URL}" \
+    "R7 passed-gate marker" "${GATE_MARKER_MIRROR_URL}"
+  verify_r7_gate_marker "${GATE_MARKER}" "${R7_CKPT}" \
+    "${GATE_PSNR}" "${GATE_LPIPS}" "${GATE_BOUNDARY_RATIO}" \
+    "${GATE_GEO_MOTION_COSINE}" "${TEMPORAL_FACTOR}"
+elif [[ "${DIFFUSION_NAMESPACE}" != *diag* ]]; then
+  echo "Diagnostic Wan diffusion requires a namespace containing 'diag'." >&2
+  exit 2
+fi
 ensure_local_checkpoint "${DECODER_CKPT}" "${DECODER_CKPT_URL}" \
   "decoder_robust checkpoint" "${DECODER_CKPT_MIRROR_URL}"
 
@@ -236,7 +259,11 @@ if [[ -n "${RESUME}" && ! -s "${OUTPUT_DIR}/metrics.jsonl" ]]; then
   done
 fi
 EXTRA_ARGS=(); [[ -n "${RESUME}" ]] && EXTRA_ARGS+=(--resume "${RESUME}")
-[[ "${ENFORCE_QUALITY_GUARDS}" == 1 ]] && EXTRA_ARGS+=(--enforce_quality_guards)
+if [[ "${ENFORCE_QUALITY_GUARDS}" == 1 ]]; then
+  EXTRA_ARGS+=(--enforce_quality_guards)
+else
+  EXTRA_ARGS+=(--no-enforce_quality_guards)
+fi
 start_output_sync "${OUTPUT_DIR}" "${REMOTE_OUTPUT_DIR}"
 trap 'stop_output_sync "${OUTPUT_DIR}" "${REMOTE_OUTPUT_DIR}"' EXIT
 run_torchrun "${PROJECT}/train_causal_wan_video_diffusion.py" \
@@ -264,10 +291,10 @@ run_torchrun "${PROJECT}/train_causal_wan_video_diffusion.py" \
   --lambda_motion_cosine "${LAMBDA_MOTION_COSINE:-0.10}" \
   --lambda_motion_magnitude "${LAMBDA_MOTION_MAGNITUDE:-0.05}" \
   --horizon_weights "${HORIZON_WEIGHTS}" \
-  --rollout_window "${ROLLOUT_WINDOW:-2}" --rollout_overlap "${ROLLOUT_OVERLAP:-1}" \
-  --scheduled_context_start "${SCHEDULED_CONTEXT_START:-4000}" \
-  --scheduled_context_ramp "${SCHEDULED_CONTEXT_RAMP:-4000}" \
-  --scheduled_context_max "${SCHEDULED_CONTEXT_MAX:-0.25}" \
+  --rollout_window "${ROLLOUT_WINDOW:-0}" --rollout_overlap "${ROLLOUT_OVERLAP:-0}" \
+  --scheduled_context_start "${SCHEDULED_CONTEXT_START:-0}" \
+  --scheduled_context_ramp "${SCHEDULED_CONTEXT_RAMP:-0}" \
+  --scheduled_context_max "${SCHEDULED_CONTEXT_MAX:-0}" \
   --aux_warmup_steps "${AUX_WARMUP_STEPS:-1000}" \
   --aux_ramp_steps "${AUX_RAMP_STEPS:-1000}" --aux_t_min "${AUX_T_MIN:-0.60}" \
   --num_workers "${NUM_WORKERS_VALUE}" --shuffle_buffer "${SHUFFLE_BUFFER:-256}" \
@@ -281,5 +308,6 @@ run_torchrun "${PROJECT}/train_causal_wan_video_diffusion.py" \
   --guard_expanded_geo_cosine "${GUARD_EXPANDED_GEO_COSINE}" \
   --early_stop_min_steps "${EARLY_STOP_MIN_STEPS:-6000}" \
   --patience "${EARLY_STOP_PATIENCE:-6}" \
+  --keep_periodic_checkpoints "${KEEP_PERIODIC_CHECKPOINTS:-2}" \
   --log_every "${LOG_EVERY:-50}" --eval_every "${EVAL_EVERY:-500}" \
-  --save_every "${SAVE_EVERY:-500}" --dtype bf16 "${EXTRA_ARGS[@]}"
+  --save_every "${SAVE_EVERY:-2000}" --dtype bf16 "${EXTRA_ARGS[@]}"

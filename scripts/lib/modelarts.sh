@@ -127,6 +127,43 @@ ensure_local_checkpoint() {
   exit 1
 }
 
+verify_r7_gate_marker() {
+  local marker=$1
+  local checkpoint=$2
+  local psnr=$3
+  local lpips=$4
+  local boundary=$5
+  local geo_motion=$6
+  local temporal_factor=$7
+  "${PYTHON_BIN}" - "${marker}" "${checkpoint}" \
+      "${psnr}" "${lpips}" "${boundary}" "${geo_motion}" \
+      "${temporal_factor}" <<'PY'
+import hashlib, json, sys
+
+marker_path, checkpoint_path = sys.argv[1:3]
+expected_limits = tuple(map(float, sys.argv[3:7]))
+expected_factor = int(sys.argv[7])
+with open(marker_path, encoding="utf-8") as stream:
+    marker = json.load(stream)
+if marker.get("passed") is not True:
+    raise SystemExit(f"R7 gate did not pass: {marker}")
+if tuple(marker.get("limits", ())) != expected_limits:
+    raise SystemExit(
+        "R7 gate thresholds changed; rerun the gate: "
+        f"{marker.get('limits')} != {expected_limits}")
+if int(marker.get("temporal_factor", -1)) != expected_factor:
+    raise SystemExit(
+        "R7 gate temporal factor changed; rerun the gate: "
+        f"{marker.get('temporal_factor')} != {expected_factor}")
+digest = hashlib.sha256()
+with open(checkpoint_path, "rb") as stream:
+    for block in iter(lambda: stream.read(8 * 1024 * 1024), b""):
+        digest.update(block)
+if marker.get("checkpoint_sha256") != digest.hexdigest():
+    raise SystemExit("R7 gate marker belongs to different checkpoint bytes")
+PY
+}
+
 require_scale_cluster() {
   if [[ -n "${EXPECTED_NNODES:-}" && "${NNODES}" -ne "${EXPECTED_NNODES}" ]]; then
     echo "[WARN] Scale job expected ${EXPECTED_NNODES} nodes, got ${NNODES}." >&2

@@ -18,6 +18,7 @@ GEO_LATENT_DIM="${GEO_LATENT_DIM:-96}"
 TEX_LATENT_DIM="${TEX_LATENT_DIM:-96}"
 LATENT_DIM=$((GEO_LATENT_DIM + TEX_LATENT_DIM))
 PROBE_CONTRACT="${PROBE_CONTRACT:-0}"
+MATRIX_CONTRACT="${MATRIX_CONTRACT:-0}"
 if [[ "${PROBE_CONTRACT}" == 1 ]]; then
   DEFAULT_R7_NAMESPACE="r7_t${TEMPORAL_FACTOR}_c${LATENT_DIM}_probe_v1"
 else
@@ -81,6 +82,14 @@ EXTENSION_WARMUP_STEPS="${EXTENSION_WARMUP_STEPS:-200}"
 GEO_MOTION_COSINE_LAMBDA="${GEO_MOTION_COSINE_LAMBDA:-1.0}"
 LATENT_NOISE_SIGMA_MAX="${LATENT_NOISE_SIGMA_MAX:-0.35}"
 LATENT_NOISE_EVAL_SIGMA="${LATENT_NOISE_EVAL_SIGMA:-0.22}"
+if [[ "${PROBE_CONTRACT}" == 1 ]]; then
+  GATE_PSNR="${GATE_PSNR:-24.5}"
+  GATE_LPIPS="${GATE_LPIPS:-0.12}"
+else
+  GATE_PSNR="${GATE_PSNR:-23.9}"
+  GATE_LPIPS="${GATE_LPIPS:-0.13}"
+fi
+GATE_GEO_MOTION_COSINE="${GATE_GEO_MOTION_COSINE:-0.95}"
 # -----------------------------------------------------------------------------
 
 [[ "${PHASE}" == "codec" || "${PHASE}" == "joint" \
@@ -88,10 +97,13 @@ LATENT_NOISE_EVAL_SIGMA="${LATENT_NOISE_EVAL_SIGMA:-0.22}"
   echo "PHASE must be codec, joint, or decoder_robust, got ${PHASE}" >&2; exit 2;
 }
 if [[ "${PROBE_CONTRACT}" == 1 ]]; then
-  [[ "${TEMPORAL_FACTOR}" -eq 1 && "${LATENT_DIM}" -eq 192 && \
-     "${SEQ_LEN}" -eq 9 ]] || {
-    echo "Factor-1 probe contract is t1/c192/seq9." >&2; exit 2;
+  [[ "${TEMPORAL_FACTOR}" -eq 1 && "${SEQ_LEN}" -eq 9 ]] || {
+    echo "Factor-1 probe contract requires t1/seq9." >&2; exit 2;
   }
+  if [[ "${MATRIX_CONTRACT}" != 1 && "${LATENT_DIM}" -ne 192 ]]; then
+    echo "The baseline factor-1 probe is c192; set MATRIX_CONTRACT=1 for an isolated channel matrix arm." >&2
+    exit 2
+  fi
 else
   [[ "${TEMPORAL_FACTOR}" -eq 2 && "${LATENT_DIM}" -eq 192 && \
      "${SEQ_LEN}" -eq 9 ]] || {
@@ -231,9 +243,9 @@ run_torchrun "${PROJECT}/train_causal_dual_tokenizer.py" \
   --frames_chunk_size "${FRAMES_CHUNK_SIZE:-0}" \
   --min_steps "${MIN_STEPS}" --early_stop_patience "${EARLY_STOP_PATIENCE}" \
   --early_stop_min_delta "${EARLY_STOP_MIN_DELTA:-0.001}" \
-  --gate_psnr "${GATE_PSNR:-23.9}" --gate_lpips "${GATE_LPIPS:-0.13}" \
+  --gate_psnr "${GATE_PSNR}" --gate_lpips "${GATE_LPIPS}" \
   --gate_boundary_ratio "${GATE_BOUNDARY_RATIO:-1.10}" \
-  --gate_geo_motion_cosine "${GATE_GEO_MOTION_COSINE:-0.95}" \
+  --gate_geo_motion_cosine "${GATE_GEO_MOTION_COSINE}" \
   --lambda_geo_motion_cosine "${GEO_MOTION_COSINE_LAMBDA}" \
   --log_every "${LOG_EVERY}" --eval_every "${EVAL_EVERY}" \
   --save_every "${SAVE_EVERY}" --dtype bf16 --output_dir "${OUTPUT_DIR}" \

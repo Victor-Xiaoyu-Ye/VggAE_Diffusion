@@ -120,6 +120,8 @@ class CausalTemporalDownsample(nn.Module):
         if x.dim() != 5:
             raise ValueError(f"expected [B,C,T,H,W], got {tuple(x.shape)}")
         self.encoded_length(x.shape[2])
+        if self.factor == 1:
+            return self.blocks(x)
         anchor = self.anchor(x[:, :, 0]).unsqueeze(2)
         tail = self.blocks(x[:, :, 1:])
         tail = self.fold(tail)

@@ -11,9 +11,11 @@ from utils.device import get_device_name
 
 
 class EMA:
-    def __init__(self, model, decay=0.9999, dtype=None):
+    def __init__(self, model, decay=0.9999, dtype=None, warmup=False):
         self.decay = decay
         self.dtype = dtype
+        self.warmup = bool(warmup)
+        self.num_updates = 0
         self.shadow = {}
         for k, v in model.state_dict().items():
             if v.is_floating_point():
@@ -21,16 +23,40 @@ class EMA:
                 if dtype is not None:
                     shadow = shadow.to(dtype=dtype)
                 self.shadow[k] = shadow
+    def effective_decay(self):
+        if not self.warmup:
+            return self.decay
+        # Avoid an EMA dominated by random initialization on short runs while
+        # converging smoothly to the configured long-horizon decay.
+        return min(self.decay, (1.0 + self.num_updates) / (10.0 + self.num_updates))
     def update(self, model):
+        self.num_updates += 1
+        decay = self.effective_decay()
         for k, v in model.state_dict().items():
             if k in self.shadow:
                 self.shadow[k] = self.shadow[k].to(v.device)
                 value = v.to(dtype=self.shadow[k].dtype)
-                self.shadow[k].mul_(self.decay).add_(value, alpha=1 - self.decay)
+                self.shadow[k].mul_(decay).add_(value, alpha=1 - decay)
     def state_dict(self):
+        # Keep the public state as a plain model-compatible mapping: standalone
+        # samplers load checkpoint["ema"] directly into the model.
         return self.shadow
     def load_state_dict(self, state_dict):
         self.shadow = state_dict
+    def metadata(self):
+        return {"num_updates": self.num_updates, "warmup": self.warmup,
+                "decay": self.decay}
+    def load_metadata(self, metadata):
+        if not metadata:
+            return
+        saved_decay = float(metadata.get("decay", self.decay))
+        saved_warmup = bool(metadata.get("warmup", self.warmup))
+        if saved_decay != self.decay or saved_warmup != self.warmup:
+            raise ValueError(
+                "EMA configuration mismatch: "
+                f"decay/warmup={saved_decay}/{saved_warmup} != "
+                f"{self.decay}/{self.warmup}")
+        self.num_updates = int(metadata.get("num_updates", 0))
     def copy_to(self, model):
         parameters = dict(model.named_parameters())
         for name, value in self.shadow.items():

@@ -226,32 +226,71 @@ trainers (13, 16) and their shell wrappers accept `TEMPORAL_FACTOR=1` /
 `FUTURE_CHUNKS=8` with the same contract enforcement as t2/ctx1/fut4.
 
 ```bash
-# Build the t1 cache (after codec+joint pass gates)
+# Re-run/finish tokenizer stages, then publish the explicit gate.
+STAGES=codec,joint,gate bash scripts/scale/17_probe_r7_factor1.sh
+
+# Stop here unless gate succeeds. Only then build a new cache.
 STAGES=cache_train,cache_eval,cache_merge bash scripts/scale/17_probe_r7_factor1.sh
 
-# Train the R7 diffusion (13) on the t1 cache
-TEMPORAL_FACTOR=1 FUTURE_CHUNKS=8 MODE=train bash scripts/scale/13_train_causal_video_diffusion.sh
+# A corrected stage-13 run requires the accepted joint checkpoint plus its
+# separately staged decoder_robust best. FUTURE_CHUNKS is factor-derived.
+TEMPORAL_FACTOR=1 MODE=train bash scripts/scale/13_train_causal_video_diffusion.sh
 
-# Sample from the t1 checkpoint
-TEMPORAL_FACTOR=1 FUTURE_CHUNKS=8 MODE=sample bash scripts/scale/13_train_causal_video_diffusion.sh
-
-# Train the Wan 1.3B diffusion (16) on the t1 cache
-TEMPORAL_FACTOR=1 FUTURE_CHUNKS=8 MODE=train R7_NAMESPACE=r7_t1_c192_probe_v1 \
+# Corrected Wan is a fresh timefix-v3 run, never a resume of the crashed arm.
+TEMPORAL_FACTOR=1 MODE=train R7_NAMESPACE=<accepted-t1-namespace> \
   bash scripts/scale/16_train_wan_t2v_diffusion.sh
-
-# Extend t1 diffusion (6k -> 12k)
-TEMPORAL_FACTOR=1 MODE=train EXTEND=1 bash scripts/scale/extend_r7_diffusion_12k.sh
 ```
 
-The t1 latent contract uses 9 RGB frames -> 9 latent frames (anchor + 8 future),
-with [position, channel] stats shape `[8, 192]`. The diffusion architecture
-(model_dim=1152, 10S/6T, 16 heads) is identical; only the sequence length in
-the DiT / Wan adapter changes (`seq_len=8`). All quality guards (motion ratio,
-motion cosine, expanded geo motion) are computed against the last two future
-chunks (chunks 7/8 instead of t2's 3/4). The Wan adapter's `--horizon_weights`
-defaults to 8 entries for t1.
 
-## Teacher bridge (18/19) for t1
+
+The t1 latent contract uses 9 RGB frames -> 9 latent frames (anchor + 8 future),
+with [position, channel] stats shape `[8, D]`. The baseline D is 192; matrix
+arms use their explicit channel sum. The generator wrappers remain restricted
+to an accepted c192 representation until a wider generator contract is added.
+All late-horizon guards target future chunks 7/8.
+
+### Factor-1 representation matrix
+
+The measured geo96|tex96/c192 arm missed the geometry gate. Probe channel
+allocation before rebuilding another cache, one arm per submission:
+
+```bash
+ARM=geo112_tex80 bash scripts/scale/21_probe_r7_t1_representation_matrix.sh
+ARM=geo128_tex64 bash scripts/scale/21_probe_r7_t1_representation_matrix.sh
+```
+
+Each arm has an isolated namespace and runs codec -> joint -> gate only. A failed
+arm never builds a cache. Total width stays c192, so a passing allocation can use
+the existing generator architecture while its representation signature and
+channel split remain exact.
+
+The t1 cache (or any production cache) is now fail-closed: stage 17 runs an
+explicit gate, and stages 12/13/16 independently verify the gate marker's
+thresholds, temporal factor, checkpoint SHA256, and causality contract. For
+factor 1 there is no temporal-fold boundary, so the boundary ratio is recorded
+as not applicable and is excluded from the gate; PSNR, LPIPS, and geometry
+motion remain mandatory. The measured `r7_t1_c192_probe_v1` result did **not**
+pass (joint stopped at 9.8K; best observed geometry-motion cosine was about
+0.867 < 0.95), so its existing cache/checkpoints are diagnostic only. Corrected
+factor-1 tokenizer runs default to the isolated `r7_t1_c192_probe_v2` namespace.
+
+The old `r7_diffusion_t1_c192_ctx1_fut8_v1` run reached 6K but should not be
+extended: late-horizon motion/expanded geometry collapsed. Stage 13 now starts
+fresh x0-prediction runs under `*_x0_v1` namespaces and requires the robust
+decoder for decoded-RGB selection. The x0 sampler rejects legacy velocity
+checkpoints rather than silently interpreting their outputs with the new
+integrator. Factor-aware wrappers derive future chunks automatically.
+
+Wan's corrected objective is schema v3 under `*_timefix_v3` namespaces. It keeps
+horizon weights as tensors, maps flow time to Wan native noise time as
+`(1-t)*1000`, computes motion terms in raw R7 latent space, pads UMT5 context to
+the checkpoint's fixed text length, refuses an all-missing text sidecar, and
+never promotes a guard-failing evaluation. The previously documented launch
+crashed before step 1 on `list.to`; no corrected long Wan run exists yet.
+Overlap rollout/generated-context options are intentionally disabled until a
+real native-grid bridge contract is implemented; nonzero options now fail
+rather than being silently ignored.
+
 
 The diagnostic R7->Wan-native-patch bridge is representation-agnostic (it reads
 the R7 checkpoint config and the teacher shards), but the default OBS prefixes

@@ -1,7 +1,7 @@
 #!/bin/bash
 # R7 reconstruction -> diffusion chain. Every invocation is run by all nodes.
 # Examples:
-#   STAGES=codec,joint,gate,cache,diffusion,sample bash scripts/scale/14_r7_recon_then_diffusion.sh
+#   STAGES=codec,joint,gate,cache,decoder_robust,diffusion,sample bash scripts/scale/14_r7_recon_then_diffusion.sh
 #   STAGES=gate,cache,diffusion bash scripts/scale/14_r7_recon_then_diffusion.sh
 #   STAGES=decoder_robust,text_embed,wan_diffusion,wan_sample \
 #     ALLOW_DIAGNOSTIC_DIFFUSION=1 bash scripts/scale/14_r7_recon_then_diffusion.sh
@@ -12,7 +12,7 @@ source "${SCRIPT_DIR}/../spatialvid_config.sh"
 source "${SCRIPT_DIR}/../lib/spatialvid.sh"
 source "${SCRIPT_DIR}/../lib/modelarts.sh"
 
-STAGES="${STAGES:-codec,joint,gate,cache,diffusion,sample}"
+STAGES="${STAGES:-codec,joint,gate,cache,decoder_robust,diffusion,sample}"
 TEMPORAL_FACTOR="${TEMPORAL_FACTOR:-2}"
 LATENT_DIM="${LATENT_DIM:-192}"
 R7_NAMESPACE="${R7_NAMESPACE:-r7_t${TEMPORAL_FACTOR}_c${LATENT_DIM}_v3}"
@@ -30,15 +30,20 @@ GATE_METRICS="${JOINT_DIR}/metrics.jsonl"
 GATE_MARKER="${JOINT_DIR}/gate_passed.json"
 GATE_MARKER_URL="${JOINT_REMOTE}/gate_passed.json"
 GATE_MARKER_MIRROR_URL="${JOINT_MIRROR}/gate_passed.json"
-GATE_PSNR="${GATE_PSNR:-23.9}"
-GATE_LPIPS="${GATE_LPIPS:-0.13}"
+if [[ "${TEMPORAL_FACTOR}" -eq 1 ]]; then
+  GATE_PSNR="${GATE_PSNR:-24.5}"
+  GATE_LPIPS="${GATE_LPIPS:-0.12}"
+else
+  GATE_PSNR="${GATE_PSNR:-23.9}"
+  GATE_LPIPS="${GATE_LPIPS:-0.13}"
+fi
 GATE_BOUNDARY_RATIO="${GATE_BOUNDARY_RATIO:-1.10}"
 GATE_GEO_MOTION_COSINE="${GATE_GEO_MOTION_COSINE:-0.95}"
 BARRIER_PORT="${BARRIER_PORT:-29690}"
 CACHE_NUM_PARTITIONS="${CACHE_NUM_PARTITIONS:-1}"
 ALLOW_DIAGNOSTIC_DIFFUSION="${ALLOW_DIAGNOSTIC_DIFFUSION:-0}"
 DIAGNOSTIC_MIN_GEO_MOTION_COSINE="${DIAGNOSTIC_MIN_GEO_MOTION_COSINE:-0.82}"
-DIAGNOSTIC_DIFFUSION_NAMESPACE="${DIAGNOSTIC_DIFFUSION_NAMESPACE:-r7_diffusion_t2_c192_ctx1_fut4_v3_diag}"
+DIAGNOSTIC_DIFFUSION_NAMESPACE="${DIAGNOSTIC_DIFFUSION_NAMESPACE:-r7_diffusion_t${TEMPORAL_FACTOR}_c${LATENT_DIM}_ctx1_fut$(( (9 - 1) / TEMPORAL_FACTOR ))_x0_v1_diag}"
 
 configure_modelarts_distributed
 require_scale_cluster
@@ -66,7 +71,7 @@ verify_gate_marker() {
     "R7 passed-gate marker" "${GATE_MARKER_MIRROR_URL}"
   "${PYTHON_BIN}" - "${GATE_MARKER}" "${R7_BEST}" \
       "${GATE_PSNR}" "${GATE_LPIPS}" "${GATE_BOUNDARY_RATIO}" \
-      "${GATE_GEO_MOTION_COSINE}" <<'PY'
+      "${GATE_GEO_MOTION_COSINE}" "${TEMPORAL_FACTOR}" <<'PY'
 import hashlib, json, sys
 with open(sys.argv[1], encoding="utf-8") as stream:
     marker = json.load(stream)
@@ -75,6 +80,9 @@ expected_limits = tuple(map(float, sys.argv[3:7]))
 assert tuple(marker.get("limits", ())) == expected_limits, (
     "gate thresholds changed; rerun STAGES=gate", marker.get("limits"),
     expected_limits)
+assert int(marker.get("temporal_factor", -1)) == int(sys.argv[7]), (
+    "gate marker temporal factor changed; rerun STAGES=gate",
+    marker.get("temporal_factor"), sys.argv[7])
 digest = hashlib.sha256()
 with open(sys.argv[2], "rb") as stream:
     for block in iter(lambda: stream.read(8 * 1024 * 1024), b""):
@@ -96,22 +104,25 @@ verify_diagnostic_checkpoint() {
   "${PYTHON_BIN}" "${PROJECT}/probe_r7_causality.py" \
     --factors "${TEMPORAL_FACTOR}" --checkpoint "${R7_BEST}"
   "${PYTHON_BIN}" - "${R7_BEST}" "${GATE_PSNR}" "${GATE_LPIPS}" \
-      "${GATE_BOUNDARY_RATIO}" "${DIAGNOSTIC_MIN_GEO_MOTION_COSINE}" <<'PY'
+      "${GATE_BOUNDARY_RATIO}" "${DIAGNOSTIC_MIN_GEO_MOTION_COSINE}" \
+      "${TEMPORAL_FACTOR}" <<'PY'
 import sys, torch
 path = sys.argv[1]
 psnr, lpips, boundary, geo = map(float, sys.argv[2:6])
+factor = int(sys.argv[6])
 artifact = torch.load(path, map_location="cpu", weights_only=False)
 best = artifact.get("best_state", {})
 row = best.get("metrics") or {}
-required = ("eval/psnr", "eval/lpips", "eval/boundary_ratio",
-            "eval/geo_motion_cosine")
+required = ["eval/psnr", "eval/lpips", "eval/geo_motion_cosine"]
+if factor > 1:
+    required.append("eval/boundary_ratio")
 missing = [key for key in required if key not in row]
 if missing:
     raise SystemExit(f"diagnostic checkpoint metrics missing: {missing}")
 checks = {
     "psnr": row["eval/psnr"] >= psnr,
     "lpips": row["eval/lpips"] <= lpips,
-    "boundary": row["eval/boundary_ratio"] <= boundary,
+    "boundary": factor == 1 or row["eval/boundary_ratio"] <= boundary,
     "diagnostic_geo_motion": row["eval/geo_motion_cosine"] >= geo,
 }
 print("diagnostic checkpoint checks:", checks, row)
@@ -168,10 +179,12 @@ if want gate; then
     # last metrics row. Prefer it; fall back to the row at best_state.step.
     "${PYTHON_BIN}" - "${R7_BEST}" "${GATE_METRICS}" "${GATE_MARKER}" \
         "${GATE_PSNR}" "${GATE_LPIPS}" "${GATE_BOUNDARY_RATIO}" \
-        "${GATE_GEO_MOTION_COSINE}" <<'PY'
+        "${GATE_GEO_MOTION_COSINE}" "${TEMPORAL_FACTOR}" "${LATENT_DIM}" <<'PY'
 import hashlib, json, sys, torch
 ckpt, metrics_path, marker = sys.argv[1:4]
 limits = tuple(map(float, sys.argv[4:8]))
+factor = int(sys.argv[8])
+latent_dim = int(sys.argv[9])
 artifact = torch.load(ckpt, map_location="cpu", weights_only=False)
 best = artifact.get("best_state", {})
 row = best.get("metrics") or {}
@@ -185,8 +198,9 @@ if not row and step is not None:
                     row = candidate
     except FileNotFoundError:
         pass
-required = ("eval/psnr", "eval/lpips", "eval/boundary_ratio",
-            "eval/geo_motion_cosine")
+required = ["eval/psnr", "eval/lpips", "eval/geo_motion_cosine"]
+if factor > 1:
+    required.append("eval/boundary_ratio")
 missing = [key for key in required if key not in row]
 if missing:
     print(f"quality gate metrics missing for checkpoint_best: {missing}", file=sys.stderr)
@@ -194,7 +208,7 @@ if missing:
 checks = {
     "psnr": row["eval/psnr"] >= limits[0],
     "lpips": row["eval/lpips"] <= limits[1],
-    "boundary": row["eval/boundary_ratio"] <= limits[2],
+    "boundary": factor == 1 or row["eval/boundary_ratio"] <= limits[2],
     "geo_motion": row["eval/geo_motion_cosine"] >= limits[3],
 }
 digest = hashlib.sha256()
@@ -203,6 +217,7 @@ with open(ckpt, "rb") as stream:
         digest.update(block)
 payload = {"checkpoint_sha256": digest.hexdigest(), "step": step,
            "metrics": row, "causality_probe": True, "checks": checks,
+           "temporal_factor": factor, "latent_dim": latent_dim,
            "limits": list(limits), "passed": all(checks.values())}
 with open(marker, "w", encoding="utf-8") as stream:
     json.dump(payload, stream, indent=2, sort_keys=True)
@@ -243,20 +258,76 @@ if want cache; then
   # a barrier separates durable partition publication before the next launch.
   for ((partition_id=0; partition_id<CACHE_NUM_PARTITIONS; partition_id++)); do
     echo "=== R7 train cache partition ${partition_id}/${CACHE_NUM_PARTITIONS} ==="
-    MODE=train R7_NAMESPACE="${R7_NAMESPACE}" R7_CKPT="${R7_BEST}" \
-      R7_CKPT_URL="${R7_BEST_URL}" R7_CKPT_MIRROR_URL="${R7_BEST_MIRROR_URL}" \
-      CACHE_PARTITION_ID="${partition_id}" \
-      CACHE_NUM_PARTITIONS="${CACHE_NUM_PARTITIONS}" \
-      bash "${SCRIPT_DIR}/12_cache_causal_latents.sh"
+    if [[ "${ALLOW_DIAGNOSTIC_DIFFUSION}" == 1 ]]; then
+      ALLOW_DIAGNOSTIC_CACHE=1 R7_CACHE_VERSION="${R7_NAMESPACE}_seq9_frame_channel_v1_diag" \
+      MODE=train TEMPORAL_FACTOR="${TEMPORAL_FACTOR}" \
+        FUTURE_CHUNKS="$(( (9 - 1) / TEMPORAL_FACTOR ))" PROBE_CONTRACT="$([[ "${TEMPORAL_FACTOR}" -eq 1 ]] && printf 1 || printf 0)" \
+        R7_NAMESPACE="${R7_NAMESPACE}" R7_CKPT="${R7_BEST}" \
+        R7_CKPT_URL="${R7_BEST_URL}" R7_CKPT_MIRROR_URL="${R7_BEST_MIRROR_URL}" \
+        CACHE_PARTITION_ID="${partition_id}" \
+        CACHE_NUM_PARTITIONS="${CACHE_NUM_PARTITIONS}" \
+        bash "${SCRIPT_DIR}/12_cache_causal_latents.sh"
+    else
+      MODE=train TEMPORAL_FACTOR="${TEMPORAL_FACTOR}" \
+        FUTURE_CHUNKS="$(( (9 - 1) / TEMPORAL_FACTOR ))" PROBE_CONTRACT="$([[ "${TEMPORAL_FACTOR}" -eq 1 ]] && printf 1 || printf 0)" \
+        R7_NAMESPACE="${R7_NAMESPACE}" R7_CKPT="${R7_BEST}" \
+        R7_CKPT_URL="${R7_BEST_URL}" R7_CKPT_MIRROR_URL="${R7_BEST_MIRROR_URL}" \
+        CACHE_PARTITION_ID="${partition_id}" \
+        CACHE_NUM_PARTITIONS="${CACHE_NUM_PARTITIONS}" \
+        bash "${SCRIPT_DIR}/12_cache_causal_latents.sh"
+    fi
     barrier
   done
-  MODE=eval R7_NAMESPACE="${R7_NAMESPACE}" R7_CKPT="${R7_BEST}" \
-    R7_CKPT_URL="${R7_BEST_URL}" R7_CKPT_MIRROR_URL="${R7_BEST_MIRROR_URL}" \
-    bash "${SCRIPT_DIR}/12_cache_causal_latents.sh"
+  if [[ "${ALLOW_DIAGNOSTIC_DIFFUSION}" == 1 ]]; then
+    ALLOW_DIAGNOSTIC_CACHE=1 R7_CACHE_VERSION="${R7_NAMESPACE}_seq9_frame_channel_v1_diag" \
+      MODE=eval TEMPORAL_FACTOR="${TEMPORAL_FACTOR}" \
+      PROBE_CONTRACT="$([[ "${TEMPORAL_FACTOR}" -eq 1 ]] && printf 1 || printf 0)" \
+      R7_NAMESPACE="${R7_NAMESPACE}" R7_CKPT="${R7_BEST}" \
+      R7_CKPT_URL="${R7_BEST_URL}" R7_CKPT_MIRROR_URL="${R7_BEST_MIRROR_URL}" \
+      bash "${SCRIPT_DIR}/12_cache_causal_latents.sh"
+    barrier
+    ALLOW_DIAGNOSTIC_CACHE=1 R7_CACHE_VERSION="${R7_NAMESPACE}_seq9_frame_channel_v1_diag" \
+      MODE=merge TEMPORAL_FACTOR="${TEMPORAL_FACTOR}" \
+      PROBE_CONTRACT="$([[ "${TEMPORAL_FACTOR}" -eq 1 ]] && printf 1 || printf 0)" \
+      R7_NAMESPACE="${R7_NAMESPACE}" \
+      CACHE_NUM_PARTITIONS="${CACHE_NUM_PARTITIONS}" \
+      bash "${SCRIPT_DIR}/12_cache_causal_latents.sh"
+  else
+    MODE=eval TEMPORAL_FACTOR="${TEMPORAL_FACTOR}" \
+      PROBE_CONTRACT="$([[ "${TEMPORAL_FACTOR}" -eq 1 ]] && printf 1 || printf 0)" \
+      R7_NAMESPACE="${R7_NAMESPACE}" R7_CKPT="${R7_BEST}" \
+      R7_CKPT_URL="${R7_BEST_URL}" R7_CKPT_MIRROR_URL="${R7_BEST_MIRROR_URL}" \
+      bash "${SCRIPT_DIR}/12_cache_causal_latents.sh"
+    barrier
+    MODE=merge TEMPORAL_FACTOR="${TEMPORAL_FACTOR}" \
+      PROBE_CONTRACT="$([[ "${TEMPORAL_FACTOR}" -eq 1 ]] && printf 1 || printf 0)" \
+      R7_NAMESPACE="${R7_NAMESPACE}" \
+      CACHE_NUM_PARTITIONS="${CACHE_NUM_PARTITIONS}" \
+      bash "${SCRIPT_DIR}/12_cache_causal_latents.sh"
+  fi
   barrier
-  MODE=merge R7_NAMESPACE="${R7_NAMESPACE}" \
-    CACHE_NUM_PARTITIONS="${CACHE_NUM_PARTITIONS}" \
-    bash "${SCRIPT_DIR}/12_cache_causal_latents.sh"
+fi
+
+if want decoder_robust; then
+  # Decoder-only noise-robustness finetune must precede every generator that
+  # selects checkpoints in decoded RGB space.
+  if [[ "${ALLOW_DIAGNOSTIC_DIFFUSION}" == 1 ]]; then
+    verify_diagnostic_checkpoint
+  else
+    verify_gate_marker
+  fi
+  echo "=== R7 decoder_robust (joint-best init, decoder-only) ==="
+  PHASE=decoder_robust TEMPORAL_FACTOR="${TEMPORAL_FACTOR}" \
+    GEO_LATENT_DIM="${GEO_LATENT_DIM:-96}" TEX_LATENT_DIM="${TEX_LATENT_DIM:-96}" \
+    PROBE_CONTRACT="$([[ "${TEMPORAL_FACTOR}" -eq 1 ]] && printf 1 || printf 0)" \
+    R7_NAMESPACE="${R7_NAMESPACE}" \
+    bash "${SCRIPT_DIR}/11_train_causal_tokenizer.sh"
+  barrier
+  stage_r7_checkpoint \
+    "${DECODER_ROBUST_BEST}" \
+    "${DECODER_ROBUST_REMOTE}/checkpoint_best.pt" \
+    "${DECODER_ROBUST_MIRROR}/checkpoint_best.pt" \
+    "published decoder_robust-best checkpoint"
   barrier
 fi
 
@@ -264,14 +335,19 @@ if want diffusion; then
   if [[ "${ALLOW_DIAGNOSTIC_DIFFUSION}" == 1 ]]; then
     verify_diagnostic_checkpoint
     echo "=== R7 diagnostic diffusion (not acceptance-promoted) ==="
-    MODE=train R7_NAMESPACE="${R7_NAMESPACE}" R7_CKPT="${R7_BEST}" \
+    MODE=train TEMPORAL_FACTOR="${TEMPORAL_FACTOR}" \
+      FUTURE_CHUNKS="$(( (9 - 1) / TEMPORAL_FACTOR ))" PROBE_CONTRACT="$([[ "${TEMPORAL_FACTOR}" -eq 1 ]] && printf 1 || printf 0)" \
+      R7_NAMESPACE="${R7_NAMESPACE}" R7_CKPT="${R7_BEST}" \
       R7_CKPT_URL="${R7_BEST_URL}" R7_CKPT_MIRROR_URL="${R7_BEST_MIRROR_URL}" \
+      ALLOW_DIAGNOSTIC_DIFFUSION=1 \
       DIFFUSION_NAMESPACE="${DIAGNOSTIC_DIFFUSION_NAMESPACE}" \
       bash "${SCRIPT_DIR}/13_train_causal_video_diffusion.sh"
   else
     verify_gate_marker
     echo "=== R7 production diffusion ==="
-    MODE=train R7_NAMESPACE="${R7_NAMESPACE}" R7_CKPT="${R7_BEST}" \
+    MODE=train TEMPORAL_FACTOR="${TEMPORAL_FACTOR}" \
+      FUTURE_CHUNKS="$(( (9 - 1) / TEMPORAL_FACTOR ))" PROBE_CONTRACT="$([[ "${TEMPORAL_FACTOR}" -eq 1 ]] && printf 1 || printf 0)" \
+      R7_NAMESPACE="${R7_NAMESPACE}" R7_CKPT="${R7_BEST}" \
       R7_CKPT_URL="${R7_BEST_URL}" R7_CKPT_MIRROR_URL="${R7_BEST_MIRROR_URL}" \
       bash "${SCRIPT_DIR}/13_train_causal_video_diffusion.sh"
   fi
@@ -282,38 +358,22 @@ if want sample; then
   if [[ "${ALLOW_DIAGNOSTIC_DIFFUSION}" == 1 ]]; then
     verify_diagnostic_checkpoint
     echo "=== R7 diagnostic best-EMA sample ==="
-    MODE=sample R7_NAMESPACE="${R7_NAMESPACE}" R7_CKPT="${R7_BEST}" \
+    MODE=sample TEMPORAL_FACTOR="${TEMPORAL_FACTOR}" \
+      FUTURE_CHUNKS="$(( (9 - 1) / TEMPORAL_FACTOR ))" PROBE_CONTRACT="$([[ "${TEMPORAL_FACTOR}" -eq 1 ]] && printf 1 || printf 0)" \
+      R7_NAMESPACE="${R7_NAMESPACE}" R7_CKPT="${R7_BEST}" \
       R7_CKPT_URL="${R7_BEST_URL}" R7_CKPT_MIRROR_URL="${R7_BEST_MIRROR_URL}" \
+      ALLOW_DIAGNOSTIC_DIFFUSION=1 \
       DIFFUSION_NAMESPACE="${DIAGNOSTIC_DIFFUSION_NAMESPACE}" \
       bash "${SCRIPT_DIR}/13_train_causal_video_diffusion.sh"
   else
     verify_gate_marker
     echo "=== R7 best-EMA sample ==="
-    MODE=sample R7_NAMESPACE="${R7_NAMESPACE}" R7_CKPT="${R7_BEST}" \
+    MODE=sample TEMPORAL_FACTOR="${TEMPORAL_FACTOR}" \
+      FUTURE_CHUNKS="$(( (9 - 1) / TEMPORAL_FACTOR ))" PROBE_CONTRACT="$([[ "${TEMPORAL_FACTOR}" -eq 1 ]] && printf 1 || printf 0)" \
+      R7_NAMESPACE="${R7_NAMESPACE}" R7_CKPT="${R7_BEST}" \
       R7_CKPT_URL="${R7_BEST_URL}" R7_CKPT_MIRROR_URL="${R7_BEST_MIRROR_URL}" \
       bash "${SCRIPT_DIR}/13_train_causal_video_diffusion.sh"
   fi
-  barrier
-fi
-
-if want decoder_robust; then
-  # Decoder-only noise-robustness finetune from the accepted joint best.
-  # The chain requires the same checkpoint qualification as the downstream
-  # consumer: production gate marker, or the explicit diagnostic bypass.
-  if [[ "${ALLOW_DIAGNOSTIC_DIFFUSION}" == 1 ]]; then
-    verify_diagnostic_checkpoint
-  else
-    verify_gate_marker
-  fi
-  echo "=== R7 decoder_robust (joint-best init, decoder-only) ==="
-  PHASE=decoder_robust R7_NAMESPACE="${R7_NAMESPACE}" \
-    bash "${SCRIPT_DIR}/11_train_causal_tokenizer.sh"
-  barrier
-  stage_r7_checkpoint \
-    "${DECODER_ROBUST_BEST}" \
-    "${DECODER_ROBUST_REMOTE}/checkpoint_best.pt" \
-    "${DECODER_ROBUST_MIRROR}/checkpoint_best.pt" \
-    "published decoder_robust-best checkpoint"
   barrier
 fi
 
@@ -337,10 +397,23 @@ if want wan_diffusion; then
     "${DECODER_ROBUST_MIRROR}/checkpoint_best.pt" \
     "decoder_robust checkpoint"
   echo "=== R7 Wan2.1-T2V-1.3B full-finetune diffusion ==="
-  MODE=train R7_NAMESPACE="${R7_NAMESPACE}" R7_CKPT="${R7_BEST}" \
-    R7_CKPT_URL="${R7_BEST_URL}" R7_CKPT_MIRROR_URL="${R7_BEST_MIRROR_URL}" \
-    DECODER_CKPT="${DECODER_ROBUST_BEST}" \
-    bash "${SCRIPT_DIR}/16_train_wan_t2v_diffusion.sh"
+  if [[ "${ALLOW_DIAGNOSTIC_DIFFUSION}" == 1 ]]; then
+    DIFFUSION_NAMESPACE="${WAN_DIAGNOSTIC_DIFFUSION_NAMESPACE:-r7_wan13b_t${TEMPORAL_FACTOR}_diag_timefix_v3}" \
+    MODE=train TEMPORAL_FACTOR="${TEMPORAL_FACTOR}" \
+      FUTURE_CHUNKS="$(( (9 - 1) / TEMPORAL_FACTOR ))" \
+      ALLOW_DIAGNOSTIC_DIFFUSION=1 \
+      R7_NAMESPACE="${R7_NAMESPACE}" R7_CKPT="${R7_BEST}" \
+      R7_CKPT_URL="${R7_BEST_URL}" R7_CKPT_MIRROR_URL="${R7_BEST_MIRROR_URL}" \
+      DECODER_CKPT="${DECODER_ROBUST_BEST}" \
+      bash "${SCRIPT_DIR}/16_train_wan_t2v_diffusion.sh"
+  else
+    MODE=train TEMPORAL_FACTOR="${TEMPORAL_FACTOR}" \
+      FUTURE_CHUNKS="$(( (9 - 1) / TEMPORAL_FACTOR ))" \
+      R7_NAMESPACE="${R7_NAMESPACE}" R7_CKPT="${R7_BEST}" \
+      R7_CKPT_URL="${R7_BEST_URL}" R7_CKPT_MIRROR_URL="${R7_BEST_MIRROR_URL}" \
+      DECODER_CKPT="${DECODER_ROBUST_BEST}" \
+      bash "${SCRIPT_DIR}/16_train_wan_t2v_diffusion.sh"
+  fi
   barrier
 fi
 
@@ -356,10 +429,23 @@ if want wan_sample; then
     "${DECODER_ROBUST_MIRROR}/checkpoint_best.pt" \
     "decoder_robust checkpoint"
   echo "=== R7 Wan T2V best-EMA sample ==="
-  MODE=sample R7_NAMESPACE="${R7_NAMESPACE}" R7_CKPT="${R7_BEST}" \
-    R7_CKPT_URL="${R7_BEST_URL}" R7_CKPT_MIRROR_URL="${R7_BEST_MIRROR_URL}" \
-    DECODER_CKPT="${DECODER_ROBUST_BEST}" \
-    bash "${SCRIPT_DIR}/16_train_wan_t2v_diffusion.sh"
+  if [[ "${ALLOW_DIAGNOSTIC_DIFFUSION}" == 1 ]]; then
+    DIFFUSION_NAMESPACE="${WAN_DIAGNOSTIC_DIFFUSION_NAMESPACE:-r7_wan13b_t${TEMPORAL_FACTOR}_diag_timefix_v3}" \
+    MODE=sample TEMPORAL_FACTOR="${TEMPORAL_FACTOR}" \
+      FUTURE_CHUNKS="$(( (9 - 1) / TEMPORAL_FACTOR ))" \
+      ALLOW_DIAGNOSTIC_DIFFUSION=1 \
+      R7_NAMESPACE="${R7_NAMESPACE}" R7_CKPT="${R7_BEST}" \
+      R7_CKPT_URL="${R7_BEST_URL}" R7_CKPT_MIRROR_URL="${R7_BEST_MIRROR_URL}" \
+      DECODER_CKPT="${DECODER_ROBUST_BEST}" \
+      bash "${SCRIPT_DIR}/16_train_wan_t2v_diffusion.sh"
+  else
+    MODE=sample TEMPORAL_FACTOR="${TEMPORAL_FACTOR}" \
+      FUTURE_CHUNKS="$(( (9 - 1) / TEMPORAL_FACTOR ))" \
+      R7_NAMESPACE="${R7_NAMESPACE}" R7_CKPT="${R7_BEST}" \
+      R7_CKPT_URL="${R7_BEST_URL}" R7_CKPT_MIRROR_URL="${R7_BEST_MIRROR_URL}" \
+      DECODER_CKPT="${DECODER_ROBUST_BEST}" \
+      bash "${SCRIPT_DIR}/16_train_wan_t2v_diffusion.sh"
+  fi
   barrier
 fi
 

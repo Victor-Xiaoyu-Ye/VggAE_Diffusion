@@ -30,6 +30,19 @@ R7_CACHE_OBS_ROOT="${R7_CACHE_OBS_ROOT:-${PERSISTENT_OBS_ROOT}/cache_latents/${C
 R7_CKPT="${R7_CKPT:-${SCALE_ROOT}/${R7_NAMESPACE}/${R7_ACCEPTED_PHASE}/checkpoint_best.pt}"
 R7_CKPT_URL="${R7_CKPT_URL:-${SCALE_REMOTE_ROOT}/${R7_NAMESPACE}/${R7_ACCEPTED_PHASE}/checkpoint_best.pt}"
 R7_CKPT_MIRROR_URL="${R7_CKPT_MIRROR_URL:-${SCALE_MIRROR_ROOT}/${R7_NAMESPACE}/${R7_ACCEPTED_PHASE}/checkpoint_best.pt}"
+GATE_MARKER="${R7_GATE_MARKER:-${SCALE_ROOT}/${R7_NAMESPACE}/joint/gate_passed.json}"
+GATE_MARKER_URL="${R7_GATE_MARKER_URL:-${SCALE_REMOTE_ROOT}/${R7_NAMESPACE}/joint/gate_passed.json}"
+GATE_MARKER_MIRROR_URL="${R7_GATE_MARKER_MIRROR_URL:-${SCALE_MIRROR_ROOT}/${R7_NAMESPACE}/joint/gate_passed.json}"
+ALLOW_DIAGNOSTIC_CACHE="${ALLOW_DIAGNOSTIC_CACHE:-0}"
+if [[ "${TEMPORAL_FACTOR}" -eq 1 ]]; then
+  GATE_PSNR="${GATE_PSNR:-24.5}"
+  GATE_LPIPS="${GATE_LPIPS:-0.12}"
+else
+  GATE_PSNR="${GATE_PSNR:-23.9}"
+  GATE_LPIPS="${GATE_LPIPS:-0.13}"
+fi
+GATE_BOUNDARY_RATIO="${GATE_BOUNDARY_RATIO:-1.10}"
+GATE_GEO_MOTION_COSINE="${GATE_GEO_MOTION_COSINE:-0.95}"
 DUAL_AE_CKPT="${DUAL_AE_CKPT:-${VGGAE_REF_ROOT}/checkpoints/e5_dual_stream_r5.pt}"
 DUAL_AE_CKPT_URL="${DUAL_AE_CKPT_URL:-}"
 DUAL_AE_CKPT_MIRROR_URL="${DUAL_AE_CKPT_MIRROR_URL:-}"
@@ -69,6 +82,22 @@ require_scale_cluster
 require_output_url
 ensure_spatialvid_subset_splits
 
+if [[ "${ALLOW_DIAGNOSTIC_CACHE}" != 1 ]]; then
+  if [[ "${NODE_RANK}" -ne 0 ]]; then rm -f "${R7_CKPT}"; fi
+  ensure_local_checkpoint "${R7_CKPT}" "${R7_CKPT_URL}" \
+    "accepted R7 checkpoint" "${R7_CKPT_MIRROR_URL}"
+  rm -f "${GATE_MARKER}"
+  ensure_local_checkpoint "${GATE_MARKER}" "${GATE_MARKER_URL}" \
+    "R7 passed-gate marker" "${GATE_MARKER_MIRROR_URL}"
+  verify_r7_gate_marker "${GATE_MARKER}" "${R7_CKPT}" \
+    "${GATE_PSNR}" "${GATE_LPIPS}" "${GATE_BOUNDARY_RATIO}" \
+    "${GATE_GEO_MOTION_COSINE}" "${TEMPORAL_FACTOR}"
+elif [[ "${R7_NAMESPACE}" != *diag* && "${CACHE_VERSION}" != *diag* && \
+        "${R7_NAMESPACE}" != *probe* && "${CACHE_VERSION}" != *probe* ]]; then
+  echo "ALLOW_DIAGNOSTIC_CACHE=1 requires diagnostic R7/cache namespaces." >&2
+  exit 2
+fi
+
 if [[ "${MODE}" == "merge" ]]; then
   # merge_latent_cache works directly against durable OBS cache roots.
   [[ "${NODE_RANK}" -eq 0 ]] || exit 0
@@ -88,9 +117,11 @@ if [[ "${MODE}" == "merge" ]]; then
 fi
 
 # The checkpoint is node-local after staging; every node performs this step.
-if [[ "${NODE_RANK}" -ne 0 ]]; then rm -f "${R7_CKPT}"; fi
-ensure_local_checkpoint "${R7_CKPT}" "${R7_CKPT_URL}" \
-  "accepted R7 checkpoint" "${R7_CKPT_MIRROR_URL}"
+if [[ "${ALLOW_DIAGNOSTIC_CACHE}" == 1 ]]; then
+  if [[ "${NODE_RANK}" -ne 0 ]]; then rm -f "${R7_CKPT}"; fi
+  ensure_local_checkpoint "${R7_CKPT}" "${R7_CKPT_URL}" \
+    "diagnostic R7 checkpoint" "${R7_CKPT_MIRROR_URL}"
+fi
 if [[ -n "${DUAL_AE_CKPT_URL}" || -n "${DUAL_AE_CKPT_MIRROR_URL}" ]]; then
   if [[ "${NODE_RANK}" -ne 0 ]]; then rm -f "${DUAL_AE_CKPT}"; fi
   ensure_local_checkpoint "${DUAL_AE_CKPT}" "${DUAL_AE_CKPT_URL}" \

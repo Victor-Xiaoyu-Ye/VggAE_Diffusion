@@ -42,7 +42,7 @@ CONTEXT_CHUNKS = 1
 FUTURE_CHUNKS = 4
 LATENT_DIM = 192
 TEMPORAL_FACTOR = 2
-VMSE_BUCKETS = (0.1, 0.3, 0.5, 0.7, 0.9)
+X0_MSE_BUCKETS = (0.1, 0.3, 0.5, 0.7, 0.9)
 STRICT_MODEL_ARGS = ("latent_dim", "latent_grid", "model_dim", "spatial_depth",
                      "temporal_depth", "num_heads", "time_scale",
                      "time_shift_alpha", "normalization_mode",
@@ -50,7 +50,7 @@ STRICT_MODEL_ARGS = ("latent_dim", "latent_grid", "model_dim", "spatial_depth",
 STRICT_TRAIN_ARGS = ("lambda_motion", "lambda_accel", "lambda_geo_motion",
                      "aux_warmup_steps", "aux_ramp_steps", "aux_t_min",
                      "batch_size", "accum_steps", "lr", "wd", "warmup_steps",
-                     "ema_decay", "max_grad_norm", "dtype",
+                     "ema_decay", "ema_warmup", "max_grad_norm", "dtype",
                      "require_rgb_lpips")
 ARCHITECTURE_CONTRACT = {
     "class": "CompactLatentDiT",
@@ -59,7 +59,7 @@ ARCHITECTURE_CONTRACT = {
     "block_schedule": "interleaved",
     "text_cond": False,
 }
-OBJECTIVE_SCHEMA = "r7-fixed-window-shifted-ot-cfm-v1"
+OBJECTIVE_SCHEMA = "r7-fixed-window-x0-v1"
 
 
 def parse_args(argv=None):
@@ -72,6 +72,8 @@ def parse_args(argv=None):
     p.add_argument("--resume", default="")
     p.add_argument("--r7_ckpt", default="",
                    help="strict R7 tokenizer/decoder load for geo aux and RGB eval")
+    p.add_argument("--decoder_ckpt", default="",
+                   help="decoder_robust checkpoint overriding decoder.* for RGB eval")
     p.add_argument("--latent_dim", type=int, default=LATENT_DIM)
     p.add_argument("--latent_grid", type=int, default=18)
     p.add_argument("--context_chunks", type=int, default=CONTEXT_CHUNKS)
@@ -98,6 +100,8 @@ def parse_args(argv=None):
                    help="required peak LR when extending a completed run")
     p.add_argument("--extension_warmup_steps", type=int, default=200)
     p.add_argument("--ema_decay", type=float, default=0.999)
+    p.add_argument("--ema_warmup", action=argparse.BooleanOptionalAction,
+                   default=True)
     p.add_argument("--max_grad_norm", type=float, default=1.0)
     p.add_argument("--dtype", choices=("fp16", "bf16", "fp32"), default="bf16")
     p.add_argument("--lambda_motion", type=float, default=0.10)
@@ -199,9 +203,12 @@ def validate_stats(stats, label, args=None):
         raise ValueError(f"{label}: expected t1/t2 with seq_len=9, got "
                          f"temporal_factor={factor}, seq_len={seq_len}")
     expected_future = (seq_len - 1) // factor  # t2 -> 4, t1 -> 8
+    expected_split = [int(config.get("geo_latent_dim", 0)),
+                      int(config.get("tex_latent_dim", 0))]
     if (int(config.get("latent_grid", -1)) != 18
             or layout.get("anchor_chunks") != [1, expected_future]
-            or layout.get("channel_split") != [96, 96]):
+            or sum(expected_split) != 192
+            or layout.get("channel_split") != expected_split):
         raise ValueError(f"{label}: invalid R7 grid/chunk/channel layout")
     if args is not None:
         if int(args.context_chunks) != 1:
@@ -284,7 +291,7 @@ def architecture_contract(args):
 def objective_contract(args):
     return {
         "schema": OBJECTIVE_SCHEMA,
-        "prediction": "velocity",
+        "prediction": "x0",
         "path": "x_t=(1-t)*noise+t*absolute_target",
         "time_shift_alpha": float(args.time_shift_alpha),
         "normalization_mode": args.normalization_mode,
@@ -325,17 +332,21 @@ def validate_batch(batch, args):
     return cond, target
 
 
+def weighted_x0_loss(prediction, target):
+    error = (prediction.float() - target.float()).square().mean((0, 2, 3))
+    return error.mean(), error
+
+
 def flow_forward(model, x1, cond):
     x0 = torch.randn_like(x1)
     t = shift_time(torch.rand(x1.shape[0], device=x1.device),
                    flow_forward.time_shift_alpha).to(x1.dtype)
     te = t.view(-1, 1, 1, 1)
     xt = (1 - te) * x0 + te * x1
-    target_v = x1 - x0
-    pred_v = model(xt, t, cond=cond)
-    return F.mse_loss(pred_v.float(), target_v.float()), {
-        "t": t, "x1_pred": xt + (1 - te) * pred_v, "v_pred": pred_v,
-        "v_target": target_v}
+    x1_pred = model(xt, t, cond=cond)
+    loss, horizon_mse = weighted_x0_loss(x1_pred, x1)
+    return loss, {"t": t, "x1_pred": x1_pred,
+                  "x0_mse_horizon": horizon_mse}
 flow_forward.time_shift_alpha = 1.0
 
 
@@ -408,6 +419,25 @@ def load_r7_stack(path, device, need_decoder=True):
     return config, tokenizer, decoder
 
 
+def load_robust_decoder(decoder_ckpt, stats_representation, decoder):
+    """Strictly override decoder weights without changing cache identity."""
+    from utils.r7_representation import (
+        load_checkpoint, load_prefixed_strict, model_state, validate_contract)
+    artifact = load_checkpoint(decoder_ckpt)
+    contract = artifact.get("representation_contract")
+    if not isinstance(contract, dict):
+        raise ValueError("--decoder_ckpt must contain representation_contract")
+    validate_contract(stats_representation, contract)
+    phase = str((artifact.get("args") or {}).get("phase", ""))
+    if phase != "decoder_robust":
+        raise ValueError(
+            f"--decoder_ckpt must come from PHASE=decoder_robust, got "
+            f"{phase or 'unknown'!r}")
+    matched = load_prefixed_strict(decoder, model_state(artifact), "decoder.")
+    print(f"robust decoder override: {matched} decoder.* tensors from "
+          f"{os.path.basename(decoder_ckpt)}")
+
+
 def auxiliary_losses(pred_norm, target_raw, cond_raw, target_stats, mode,
                      t, args, tokenizer=None):
     pred_raw = inverse_fp32(pred_norm, target_stats, mode)
@@ -460,13 +490,15 @@ def sample_shifted(model, cond, shape, steps, alpha, noise=None,
                           dtype=torch.float32)
     shifted = shift_time(grid, alpha)
     for i in range(steps):
-        t = torch.full((shape[0],), float(shifted[i]), device=cond.device,
+        t_val = float(shifted[i])
+        t = torch.full((shape[0],), t_val, device=cond.device,
                        dtype=model_dtype)
         with torch.autocast(
                 device_type=device_type, dtype=compute_dtype,
                 enabled=compute_dtype != torch.float32):
-            velocity = model(z.to(model_dtype), t, cond=cond).float()
-        z = z + velocity * (shifted[i + 1] - shifted[i])
+            x1_pred = model(z.to(model_dtype), t, cond=cond).float()
+        velocity = (x1_pred - z) / max(1.0 - t_val, 1e-6)
+        z = z + velocity * (float(shifted[i + 1]) - t_val)
     return z
 
 
@@ -662,7 +694,8 @@ def gather_rng(use_ddp, world_size, device):
 def checkpoint_payload(core, ema, optimizer, scheduler, scaler, step, args, stats,
                        signature, rng_by_rank, best, world_size):
     return {"checkpoint_version": 4, "model": core.state_dict(),
-            "ema": ema.state_dict(), "optimizer": optimizer.state_dict(),
+            "ema": ema.state_dict(), "ema_metadata": ema.metadata(),
+            "optimizer": optimizer.state_dict(),
             "scheduler": scheduler.state_dict(), "scaler": scaler.state_dict(),
             "global_step": step,
             "world_size": world_size,
@@ -762,7 +795,8 @@ def main(argv=None):
     compute_dtype = resolve_dtype(args.dtype)
     model_dtype = torch.float32
     use_scaler = compute_dtype == torch.float16
-    ema = EMA(core, args.ema_decay, dtype=torch.float32).to(device)
+    ema = EMA(core, args.ema_decay, dtype=torch.float32,
+              warmup=args.ema_warmup).to(device)
     optimizer = build_optimizer(core, args.lr, args.wd)
     scheduler = build_scheduler(optimizer, args.warmup_steps, args.max_steps)
     scaler = create_grad_scaler(enabled=use_scaler)
@@ -772,7 +806,8 @@ def main(argv=None):
         checkpoint = load_torch_artifact(args.resume)
         strict_resume(checkpoint, args, stats, signature, world_size)
         core.load_state_dict(checkpoint["model"], strict=True)
-        ema.load_state_dict(checkpoint["ema"]); ema.to(device)
+        ema.load_state_dict(checkpoint["ema"])
+        ema.load_metadata(checkpoint.get("ema_metadata")); ema.to(device)
         optimizer.load_state_dict(checkpoint["optimizer"])
         if "scaler" in checkpoint: scaler.load_state_dict(checkpoint["scaler"])
         step = int(checkpoint["global_step"]); best = checkpoint.get("best", best)
@@ -814,6 +849,8 @@ def main(argv=None):
             raise
         except Exception as exc:
             print(f"[WARN] R7 RGB decode unavailable: {exc}"); decode_enabled = False
+    if args.decoder_ckpt and decoder is not None and main_process:
+        load_robust_decoder(args.decoder_ckpt, stats["representation"], decoder)
     lpips_model = None
     if main_process and decode_enabled and decoder is not None:
         try:
@@ -851,16 +888,17 @@ def main(argv=None):
             generator = torch.Generator(device="cpu"); generator.manual_seed(args.seed + 1009*index)
             noise = torch.randn(target.shape, generator=generator).to(device, model_dtype)
             row = {}
-            for bucket in VMSE_BUCKETS:
+            for bucket in X0_MSE_BUCKETS:
                 t = torch.full((target.shape[0],), bucket, device=device, dtype=model_dtype)
                 te = t.view(-1, 1, 1, 1)
                 with torch.autocast(
                         device_type=device_type, dtype=compute_dtype,
                         enabled=compute_dtype != torch.float32):
-                    v = core((1-te)*noise + te*target, t, cond=cond)
-                row[f"eval/velocity_mse_t{bucket:.1f}"] = F.mse_loss(
-                    v.float(), (target-noise).float()).item()
-            row["eval/velocity_mse"] = _mean([row[k] for k in row])
+                    x1_pred = core((1-te)*noise + te*target, t, cond=cond)
+                row[f"eval/x0_mse_t{bucket:.1f}"] = F.mse_loss(
+                    x1_pred.float(), target.float()).item()
+            row["eval/x0_mse"] = _mean([
+                row[f"eval/x0_mse_t{bucket:.1f}"] for bucket in X0_MSE_BUCKETS])
             generated = sample_shifted(
                 core, cond, target.shape, args.sample_steps,
                 args.time_shift_alpha, noise, device_type, compute_dtype)

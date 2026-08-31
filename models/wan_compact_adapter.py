@@ -78,7 +78,8 @@ class WanCompactAdapter(nn.Module):
                  i0_condition=False, train_text_adapter=False,
                  train_qkv=True, train_qkv_last_n=0, train_ffn_last_n=0,
                  num_pseudo_text=0, full_finetune=False, anchor_frame=False,
-                 anchor_memory=False, allow_other_wan=False):
+                 anchor_memory=False, reverse_flow_time=False,
+                 allow_other_wan=False):
         super().__init__()
 
         # Load pretrained Wan backbone. Do not hard-code the 1.3B dimensions:
@@ -116,6 +117,7 @@ class WanCompactAdapter(nn.Module):
         self.full_finetune = bool(full_finetune)
         self.anchor_frame = bool(anchor_frame)
         self.anchor_memory = bool(anchor_memory)
+        self.reverse_flow_time = bool(reverse_flow_time)
         if self.anchor_frame and self.i0_condition:
             raise ValueError(
                 "anchor_frame replaces i0_condition; enable only one")
@@ -346,13 +348,13 @@ class WanCompactAdapter(nn.Module):
         """
         B, S, N, D = z.shape
 
-        # ---- 1. Concat time at input (convert to model dtype for fp32 backbone) ----
+        # ---- 1. Concat native Wan noise time at input ----
         model_dtype = next(self.input_proj.parameters()).dtype
+        native_noise_t = 1.0 - t if self.reverse_flow_time else t
         if self.anchor_frame:
-            # Clean anchor prepended as frame 0. Its concat-time channel is
-            # t=1 (data), so the trunk can distinguish the observed frame from
-            # the noisy futures; adaLN keeps the per-sample noisy t, matching
-            # the dual-conditioning design.
+            # Clean anchor uses Wan's data endpoint. In corrected R7 runs,
+            # native timestep zero corresponds to clean data. Legacy adapters
+            # preserve their old flow-time convention for checkpoint replay.
             if cond is None:
                 raise ValueError("anchor_frame WanCompactAdapter requires cond")
             if cond.dim() != 4 or cond.shape[0] != B \
@@ -362,15 +364,17 @@ class WanCompactAdapter(nn.Module):
                     f"got {tuple(cond.shape)}")
             full = torch.cat([cond.to(dtype=z.dtype), z], dim=1)
             S_total = S + 1
-            t_anchor = self._concat_time_embed(torch.ones_like(t))
-            t_future = self._concat_time_embed(t)
+            anchor_flow_t = (torch.zeros_like(t) if self.reverse_flow_time
+                             else torch.ones_like(t))
+            t_anchor = self._concat_time_embed(anchor_flow_t)
+            t_future = self._concat_time_embed(native_noise_t)
             t_concat = torch.stack(
                 [t_anchor] + [t_future] * S, dim=1)  # [B, S_total, time_dim]
             t_concat = t_concat.unsqueeze(2).expand(B, S_total, N, -1)
             x = torch.cat([full.to(dtype=model_dtype), t_concat], dim=-1)
         else:
             S_total = S
-            t_concat = self._concat_time_embed(t)  # [B, time_concat_dim], float32
+            t_concat = self._concat_time_embed(native_noise_t)
             t_concat = t_concat.unsqueeze(1).unsqueeze(1).expand(B, S, N, -1)
             x = torch.cat([z.to(dtype=model_dtype), t_concat], dim=-1)
         x = self.input_proj(x)  # [B, S_total, N, wan_dim]
@@ -386,8 +390,8 @@ class WanCompactAdapter(nn.Module):
             x = x + i0_context.expand(B, S, N, self.wan_dim)
         x = x.reshape(B, S_total * N, self.wan_dim)  # [B, S_total*N, wan_dim]
 
-        # ---- 2. Wan time embedding (adaLN) ----
-        t_wan = (t * 1000).to(device=z.device)
+        # ---- 2. Wan native noise-time embedding (adaLN) ----
+        t_wan = (native_noise_t * 1000).to(device=z.device)
         e = self._time_embed(t_wan)  # [B, 6, wan_dim]
 
         # ---- 3. Grid setup for 3D RoPE ----
@@ -409,7 +413,7 @@ class WanCompactAdapter(nn.Module):
                 raise ValueError(
                     f"Expected text dim 768 (legacy CLIP) or "
                     f"{self.wan.text_dim} (native UMT5), got {text_emb.shape[-1]}")
-            context_lens = torch.full((B,), context.shape[1], device=x.device, dtype=torch.long)
+            context_lens = None
         elif self.num_pseudo_text > 0:
             # Learned null prompt: keep cross-attention RUNNING (as in all of
             # Wan's pretraining) instead of skipping the layer.

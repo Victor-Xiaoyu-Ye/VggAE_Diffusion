@@ -177,7 +177,35 @@ T2V-1.3B 不自带 I2V image cross-attention。当前只把 clean anchor 拼进 
 - 不复用不同 temporal factor/channel split 的 cache/stat；
 - 不把 AE target 当作原始 RGB ground truth。
 
-## 静态验证
+
+## 2026-08-31 t1 audit stop/go update
+
+The measured t1 c192 arm is not promotable. Codec completed 6K; joint stopped at
+9.8K. Reconstruction reached approximately PSNR 24.64 / LPIPS 0.108, but
+geometry-motion cosine plateaued at approximately 0.867, below the 0.95 hard
+gate. The former factor-1 boundary ratio (~4e10) was a metric bug caused by an
+empty within-chunk set; factor 1 has no temporal-fold boundary and now records
+that check as not applicable. This correction does not relax the geometry gate.
+Do not extend the old 6K diffusion or reuse its namespace.
+
+Before any new cache/generator, run independent representation probes with new
+namespaces: geo112|tex80 and geo128|tex64 at fixed c192, plus a factor-1
+framewise-only control. Promote the smallest arm passing 24.5/0.12/0.95. If none
+pass, proceed to an explicit base/motion representation rather than adding
+generator steps.
+
+The Wan launch in the current evidence made no optimizer update: it failed on
+the first loss call because horizon weights were a Python list. Corrected Wan
+runs also reverse flow time into native Wan noise time, use raw-space motion
+losses/fixed-width text context, and use new `timefix_v3` namespaces. A 2-step
+NPU/HCCL/OBS smoke is mandatory before a long run.
+
+The existing teacher bridge remains diagnostic only: it aligns R7 to adaptively
+pooled native patch hidden states, has no inverse R7 head, and is not consumed by
+stage 16. Cache markers now carry factor/shapes/signatures, but the next bridge
+milestone is a held-out streaming probe against a linear/moment baseline. Only
+positive held-out evidence justifies a native-grid bidirectional bridge and
+then a real overlap-rollout curriculum.
 
 ```bash
 python -m py_compile utils/video_preview.py \

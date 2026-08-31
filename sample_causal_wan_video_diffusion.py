@@ -20,15 +20,14 @@ import torch
 from sample_causal_video_diffusion import (
     load_anchor, load_manifest_anchor, save_rgb_outputs)
 from train_causal_video_diffusion import (
-    checked_decode_chunk_size, exact_equal, inverse_fp32, load_torch_artifact,
-    normalize_fp32, stats_tensors, validate_r7_artifact_representation,
-    validate_stats)
+    checked_decode_chunk_size, exact_equal, inverse_fp32, load_robust_decoder,
+    load_torch_artifact, normalize_fp32, stats_tensors,
+    validate_r7_artifact_representation, validate_stats)
 from train_causal_wan_video_diffusion import (
-    TextEmbeddingBank, load_robust_decoder, sample_x0_shifted,
-    wan_config_snapshot)
+    TextEmbeddingBank, sample_x0_shifted, wan_config_snapshot)
 from models.wan_compact_adapter import WanCompactAdapter
 from utils.device import (configure_backend_compatibility, get_device,
-                          get_device_name, manual_seed_all)
+                          get_device_name, manual_seed_all, resolve_dtype)
 
 
 def parse_args(argv=None):
@@ -142,7 +141,9 @@ def main(argv=None):
         args.wan_ckpt_dir, latent_dim=int(config["latent_dim"]),
         latent_grid=grid, seq_len=future_chunks,
         full_finetune=True, anchor_frame=True,
-        anchor_memory=bool(architecture.get("anchor_memory", False))).to(
+        anchor_memory=bool(architecture.get("anchor_memory", False)),
+        reverse_flow_time=bool(
+            architecture.get("reverse_flow_time", False))).to(
         device=device, dtype=torch.float32)
     saved_wan_config = checkpoint.get("wan_config")
     if saved_wan_config and dict(saved_wan_config) != wan_config_snapshot(model):
@@ -155,7 +156,18 @@ def main(argv=None):
     text_bank = TextEmbeddingBank(args.text_embedding_dir)
     if args.text_embedding_file:
         raw = load_torch_artifact(args.text_embedding_file)
-        text_emb = torch.as_tensor(raw).float().unsqueeze(0).to(device)
+        raw = torch.as_tensor(raw).float()
+        if raw.ndim != 2 or raw.shape[1] != 4096:
+            raise ValueError(
+                "--text_embedding_file must contain [L,4096] UMT5 embeddings")
+        if raw.shape[0] > text_bank.text_len:
+            raise ValueError(
+                f"text embedding length {raw.shape[0]} exceeds "
+                f"text_len={text_bank.text_len}")
+        text_emb = torch.zeros(
+            1, text_bank.text_len, raw.shape[1], dtype=torch.float32)
+        text_emb[0, :raw.shape[0]] = raw
+        text_emb = text_emb.to(device)
         prompt_source = args.text_embedding_file
     else:
         video_id = args.prompt_video_id or anchor_video_id
@@ -169,11 +181,12 @@ def main(argv=None):
     shape = (cond.shape[0], future_chunks, grid*grid, latent_dim)
     noise = torch.randn(shape, generator=cpu_generator).to(
         device=device, dtype=torch.float32)
+    compute_dtype = resolve_dtype(args.dtype)
     with torch.inference_mode():
         sampled_norm = sample_x0_shifted(
             model, cond, shape, args.sample_steps,
             float(config.get("time_shift_alpha", 1.0)), noise, text_emb,
-            uncond_emb, args.cfg_scale, device_type)
+            uncond_emb, args.cfg_scale, device_type, compute_dtype)
         future = inverse_fp32(sampled_norm, st["target"], mode)
 
     output = {"schema": "r7-wan-diffusion-sample-v1",

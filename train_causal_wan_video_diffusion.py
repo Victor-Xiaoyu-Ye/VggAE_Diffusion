@@ -31,17 +31,15 @@ from torch.utils.tensorboard import SummaryWriter
 
 from data.latent_shard_dataset import LatentShardDataset, latent_collate_fn
 from data.loader_utils import multiprocessing_loader_kwargs
-from models.r7_overlap_rollout import (overlapping_windows,
-                                       scheduled_context_probability)
 from models.wan_compact_adapter import WanCompactAdapter
 from train_causal_video_diffusion import (
     CONTEXT_CHUNKS, FUTURE_CHUNKS, LATENT_DIM, assert_same_representation,
-    auxiliary_losses, aux_scale, build_extension_scheduler,
-    checked_decode_chunk_size, composite_score, decode_rgb_metrics, ema_weights,
-    exact_equal, expanded_geo_motion_metrics, gather_rng, latent_metrics,
-    load_eval_batches, load_r7_stack, load_torch_artifact, _mean,
-    normalize_fp32, set_seed, shift_time, stats_tensors,
-    validate_batch, validate_r7_artifact_representation, validate_stats)
+    auxiliary_losses, aux_scale, checked_decode_chunk_size, composite_score,
+    decode_rgb_metrics, ema_weights, exact_equal, expanded_geo_motion_metrics,
+    gather_rng, inverse_fp32, latent_metrics, load_eval_batches, load_r7_stack,
+    load_robust_decoder, load_torch_artifact, _mean, normalize_fp32, set_seed,
+    shift_time, stats_tensors, validate_batch,
+    validate_r7_artifact_representation, validate_stats)
 from utils.device import (configure_backend_compatibility, create_grad_scaler,
                           get_device, get_device_name, resolve_dtype)
 from utils.distributed import is_main_process, setup_ddp
@@ -60,9 +58,13 @@ STRICT_TRAIN_ARGS = ("lambda_motion", "lambda_accel", "lambda_geo_motion",
                      "scheduled_context_max", "aux_warmup_steps", "aux_ramp_steps",
                      "aux_t_min", "batch_size", "accum_steps", "adapter_lr",
                      "wan_lr", "wd", "warmup_steps", "wan_freeze_steps",
-                     "ema_decay", "max_grad_norm", "dtype", "require_rgb_lpips",
-                     "text_drop_prob")
-OBJECTIVE_SCHEMA = "r7-wan13b-i2v-anchor-memory-x0-v2"
+                     "ema_decay", "ema_warmup", "max_grad_norm", "dtype", "require_rgb_lpips",
+                     "text_drop_prob", "cfg_scale", "sample_steps",
+                     "eval_clips", "seed", "enforce_quality_guards",
+                     "guard_motion_ratio_min", "guard_motion_ratio_max",
+                     "guard_motion_cosine_chunk3", "guard_motion_cosine_chunk4",
+                     "guard_expanded_geo_cosine")
+OBJECTIVE_SCHEMA = "r7-wan13b-i2v-anchor-memory-x0-v3"
 DIAGNOSTIC_QUALITY_DEFAULTS = {
     "guard_motion_ratio_min": 0.55,
     "guard_motion_ratio_max": 1.50,
@@ -126,7 +128,7 @@ def parse_args(argv=None):
     p.add_argument("--lambda_geo_motion", type=float, default=0.05)
     p.add_argument("--lambda_motion_cosine", type=float, default=0.10)
     p.add_argument("--lambda_motion_magnitude", type=float, default=0.05)
-    p.add_argument("--horizon_weights", default="1,1.5,2,3",
+    p.add_argument("--horizon_weights", default=None,
                    help="comma-separated per-future x0/motion weights")
     p.add_argument("--aux_warmup_steps", type=int, default=1000)
     p.add_argument("--aux_ramp_steps", type=int, default=1000)
@@ -146,13 +148,15 @@ def parse_args(argv=None):
     p.add_argument("--guard_motion_cosine_chunk3", type=float, default=0.45)
     p.add_argument("--guard_motion_cosine_chunk4", type=float, default=0.35)
     p.add_argument("--guard_expanded_geo_cosine", type=float, default=0.10)
-    p.add_argument("--enforce_quality_guards", action="store_true",
+    p.add_argument("--enforce_quality_guards", action=argparse.BooleanOptionalAction,
+                   default=True,
                    help="exclude guard-failing evals from checkpoint_best")
-    p.add_argument("--rollout_window", type=int, default=2)
-    p.add_argument("--rollout_overlap", type=int, default=1)
-    p.add_argument("--scheduled_context_start", type=int, default=4000)
-    p.add_argument("--scheduled_context_ramp", type=int, default=4000)
-    p.add_argument("--scheduled_context_max", type=float, default=0.25)
+    p.add_argument("--rollout_window", type=int, default=0,
+                   help="reserved; nonzero rollout curriculum is not implemented")
+    p.add_argument("--rollout_overlap", type=int, default=0)
+    p.add_argument("--scheduled_context_start", type=int, default=0)
+    p.add_argument("--scheduled_context_ramp", type=int, default=0)
+    p.add_argument("--scheduled_context_max", type=float, default=0.0)
     p.add_argument("--decode_chunk_size", type=int, default=0)
     p.add_argument("--require_rgb_lpips", action="store_true")
     p.add_argument("--log_every", type=int, default=50)
@@ -160,6 +164,9 @@ def parse_args(argv=None):
     p.add_argument("--save_every", type=int, default=500)
     p.add_argument("--early_stop_min_steps", type=int, default=10000)
     p.add_argument("--patience", type=int, default=8)
+    p.add_argument("--keep_periodic_checkpoints", type=int, default=2)
+    p.add_argument("--ema_warmup", action=argparse.BooleanOptionalAction,
+                   default=True)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--local_rank", type=int, default=0)
     return p.parse_args(argv)
@@ -221,7 +228,7 @@ class TextEmbeddingBank:
         return tensor.float()
 
     def batch(self, video_ids, device, drop_mask=None):
-        """[B, L_max, 4096] zero-padded batch (Wan pads context with zeros)."""
+        """Return Wan-native fixed-width [B,text_len,4096] context."""
         chosen = []
         for index, video_id in enumerate(video_ids):
             if drop_mask is not None and bool(drop_mask[index]):
@@ -229,7 +236,11 @@ class TextEmbeddingBank:
             else:
                 chosen.append(self.lookup(video_id))
         longest = max(tensor.shape[0] for tensor in chosen)
-        batch = torch.zeros(len(chosen), longest, chosen[0].shape[-1],
+        if longest > self.text_len:
+            raise ValueError(
+                f"text embedding length {longest} exceeds sidecar text_len "
+                f"{self.text_len}")
+        batch = torch.zeros(len(chosen), self.text_len, chosen[0].shape[-1],
                             dtype=torch.float32)
         for index, tensor in enumerate(chosen):
             batch[index, :tensor.shape[0]] = tensor
@@ -282,6 +293,7 @@ def wan_config_snapshot(model):
 def architecture_contract(args, wan_config):
     return {"class": "WanCompactAdapter", "full_finetune": True,
             "anchor_frame": True, "anchor_memory": True,
+            "reverse_flow_time": True,
             "i0_condition": False,
             "latent_dim": int(args.latent_dim),
             "latent_grid": int(args.latent_grid),
@@ -293,11 +305,23 @@ def architecture_contract(args, wan_config):
             "wan_config": dict(wan_config)}
 
 
+def rollout_contract(args):
+    if (args.rollout_window != 0 or args.rollout_overlap != 0
+            or args.scheduled_context_start != 0
+            or args.scheduled_context_ramp != 0
+            or args.scheduled_context_max != 0):
+        raise ValueError(
+            "overlap rollout/generated-context training is not implemented; "
+            "leave rollout_window/overlap/scheduled_context_max at zero")
+    return {"implemented": False}
+
+
 def objective_contract(args):
     return {
         "schema": OBJECTIVE_SCHEMA,
         "prediction": "x0",
         "path": "x_t=(1-t)*noise+t*absolute_target",
+        "wan_timestep": "(1-flow_t)*1000",
         "time_shift_alpha": float(args.time_shift_alpha),
         "normalization_mode": args.normalization_mode,
         "lambda_motion": float(args.lambda_motion),
@@ -305,21 +329,18 @@ def objective_contract(args):
         "lambda_geo_motion": float(args.lambda_geo_motion),
         "lambda_motion_cosine": float(args.lambda_motion_cosine),
         "lambda_motion_magnitude": float(args.lambda_motion_magnitude),
-        "horizon_weights": [float(value) for value in args.horizon_weight_values],
+        "horizon_weights": [float(value) for value in
+                            torch.as_tensor(args.horizon_weight_values).tolist()],
         "anchor_memory": True,
-        "rollout_windows": overlapping_windows(
-            args.future_chunks, args.rollout_window, args.rollout_overlap),
-        "scheduled_context": {
-            "start": int(args.scheduled_context_start),
-            "ramp": int(args.scheduled_context_ramp),
-            "maximum": float(args.scheduled_context_max),
-        },
+        "rollout": rollout_contract(args),
         "aux_warmup_steps": int(args.aux_warmup_steps),
         "aux_ramp_steps": int(args.aux_ramp_steps),
         "aux_t_min": float(args.aux_t_min),
         "batch_size": int(args.batch_size),
         "accum_steps": int(args.accum_steps),
         "text_drop_prob": float(args.text_drop_prob),
+        "cfg_scale": float(args.cfg_scale),
+        "sample_steps": int(args.sample_steps),
         "optimizer": {
             "name": "AdamW", "adapter_lr": float(args.adapter_lr),
             "wan_lr": float(args.wan_lr), "weight_decay": float(args.wd),
@@ -334,7 +355,7 @@ def build_model(args):
         args.wan_ckpt_dir, latent_dim=args.latent_dim,
         latent_grid=args.latent_grid, seq_len=args.future_chunks,
         full_finetune=True, anchor_frame=True,
-        anchor_memory=True)
+        anchor_memory=True, reverse_flow_time=True)
 
 
 def build_wan_optimizer(model, args):
@@ -358,6 +379,34 @@ def build_wan_optimizer(model, args):
     return torch.optim.AdamW(param_groups, betas=(0.9, 0.95), eps=1e-8)
 
 
+def build_wan_extension_scheduler(optimizer, current_lrs, adapter_peak, trunk_peak,
+                                  warmup, remaining):
+    if adapter_peak <= 0 or trunk_peak <= 0 or remaining <= 0:
+        raise ValueError("Wan extension requires positive peak LRs and steps")
+    peak_lrs = [trunk_peak if group.get("name") == "wan" else adapter_peak
+                for group in optimizer.param_groups]
+    start_factors = [max(min(current / peak, 1.0), 1e-4)
+                     for current, peak in zip(current_lrs, peak_lrs)]
+    for group, peak in zip(optimizer.param_groups, peak_lrs):
+        group["lr"] = peak
+        group["initial_lr"] = peak
+    warmup = min(warmup, max(remaining - 1, 0))
+    schedulers = []
+    milestones = []
+    if warmup:
+        schedulers.append(torch.optim.lr_scheduler.LambdaLR(
+            optimizer,
+            lr_lambda=[lambda step, start=start: start + (1.0 - start) *
+                       min(step / max(warmup, 1), 1.0)
+                       for start in start_factors]))
+        milestones.append(warmup)
+    schedulers.append(torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=max(remaining - warmup, 1), eta_min=1e-6))
+    return (schedulers[0] if len(schedulers) == 1 else
+            torch.optim.lr_scheduler.SequentialLR(
+                optimizer, schedulers, milestones=milestones))
+
+
 def parse_horizon_weights(value, count):
     try:
         weights = [float(item.strip()) for item in str(value).split(",")]
@@ -373,13 +422,17 @@ def parse_horizon_weights(value, count):
 
 def weighted_x0_loss(prediction, target, weights):
     error = (prediction.float() - target.float()).square().mean((0, 2, 3))
-    return (error * weights.to(error.device)).mean(), error
+    weights = torch.as_tensor(
+        weights, device=error.device, dtype=error.dtype)
+    return (error * weights).mean(), error
 
 
-def motion_direction_magnitude_losses(prediction, target, cond, weights, t,
+def motion_direction_magnitude_losses(prediction, target_raw, cond_raw,
+                                      target_stats, mode, weights, t,
                                       threshold):
-    pred = torch.cat((cond.float(), prediction.float()), 1)
-    truth = torch.cat((cond.float(), target.float()), 1)
+    prediction_raw = inverse_fp32(prediction, target_stats, mode)
+    pred = torch.cat((cond_raw.float(), prediction_raw.float()), 1)
+    truth = torch.cat((cond_raw.float(), target_raw.float()), 1)
     pred_delta = pred[:, 1:] - pred[:, :-1]
     truth_delta = truth[:, 1:] - truth[:, :-1]
     pred_flat = pred_delta.flatten(2)
@@ -387,7 +440,8 @@ def motion_direction_magnitude_losses(prediction, target, cond, weights, t,
     cosine = F.cosine_similarity(pred_flat, truth_flat, dim=2)
     magnitude = pred_flat.norm(dim=2) / truth_flat.norm(dim=2).clamp_min(1e-8)
     active = (t.float() >= threshold).float().unsqueeze(1)
-    horizon = weights.to(active.device).unsqueeze(0)
+    horizon = torch.as_tensor(
+        weights, device=active.device, dtype=active.dtype).unsqueeze(0)
     denominator = (active * horizon).sum().clamp_min(1.0)
     cosine_loss = ((1.0 - cosine) * active * horizon).sum() / denominator
     magnitude_loss = (magnitude.clamp_min(1e-8).log().abs()
@@ -439,32 +493,6 @@ def sample_x0_shifted(model, cond, shape, steps, alpha, noise, text_emb,
     return z
 
 
-def load_robust_decoder(decoder_ckpt, stats_representation, decoder):
-    """Override only decoder.* weights from a decoder_robust checkpoint.
-
-    The cache binds signatures.r7 to the accepted joint checkpoint bytes, so a
-    retrained decoder cannot be passed as --r7_ckpt; it rides a separate flag
-    and must share the exact representation config/layout and frozen-source
-    signatures with the cache.
-    """
-    from utils.r7_representation import (
-        load_checkpoint, model_state, validate_contract)
-    artifact = load_checkpoint(decoder_ckpt)
-    contract = artifact.get("representation_contract")
-    if not isinstance(contract, dict):
-        raise ValueError("--decoder_ckpt must contain representation_contract")
-    validate_contract(stats_representation, contract)
-    phase = str((artifact.get("args") or {}).get("phase", ""))
-    if phase != "decoder_robust":
-        raise ValueError(
-            f"--decoder_ckpt must come from PHASE=decoder_robust, got "
-            f"{phase or 'unknown'!r}")
-    from utils.r7_representation import load_prefixed_strict
-    matched = load_prefixed_strict(decoder, model_state(artifact), "decoder.")
-    print(f"robust decoder override: {matched} decoder.* tensors from "
-          f"{os.path.basename(decoder_ckpt)}")
-
-
 def strict_resume(checkpoint, args, stats, signature, world_size, wan_config):
     saved = checkpoint.get("args", {})
     saved_max = int(saved.get("max_steps", 1 << 60))
@@ -507,7 +535,8 @@ def checkpoint_payload(core, ema, optimizer, scheduler, scaler, step, args,
                        stats, signature, rng_by_rank, best, world_size,
                        wan_config):
     return {"checkpoint_version": 4, "model": core.state_dict(),
-            "ema": ema.state_dict(), "optimizer": optimizer.state_dict(),
+            "ema": ema.state_dict(), "ema_metadata": ema.metadata(),
+            "optimizer": optimizer.state_dict(),
             "scheduler": scheduler.state_dict(), "scaler": scaler.state_dict(),
             "global_step": step, "world_size": world_size,
             "rng_by_rank": rng_by_rank, "args": {
@@ -524,8 +553,12 @@ def checkpoint_payload(core, ema, optimizer, scheduler, scaler, step, args,
 
 def main(argv=None):
     args = parse_args(argv)
+    if args.horizon_weights is None:
+        defaults = ([1, 1.5, 2, 3] if args.future_chunks == 4
+                    else [1, 1.5, 2, 3, 4, 5, 6, 7])
+        args.horizon_weights = ",".join(str(value) for value in defaults)
     args.horizon_weight_values = parse_horizon_weights(
-        args.horizon_weights, args.future_chunks).tolist()
+        args.horizon_weights, args.future_chunks)
     # Preserve a canonical textual form in checkpoints so strict resume compares
     # CLI values, while objective_contract stores the normalized numeric vector.
     args.horizon_weights = ",".join(
@@ -548,24 +581,13 @@ def main(argv=None):
                   args.early_stop_min_steps):
         if value < 1:
             raise ValueError("step/count arguments must be positive")
+    if args.keep_periodic_checkpoints < 1:
+        raise ValueError("--keep_periodic_checkpoints must be positive")
     if args.warmup_steps >= args.max_steps:
         raise ValueError("warmup must be < max_steps")
     if not 0.0 <= args.text_drop_prob < 1.0:
         raise ValueError("--text_drop_prob must be in [0, 1)")
-    if not (0 <= args.rollout_overlap < args.rollout_window
-            <= args.future_chunks):
-        raise ValueError("rollout must satisfy 0 <= overlap < window <= futures")
-    if not 0 <= args.scheduled_context_max <= 1:
-        raise ValueError("--scheduled_context_max must be in [0,1]")
-    if args.scheduled_context_start < 0 or args.scheduled_context_ramp < 0:
-        raise ValueError("scheduled-context step settings must be nonnegative")
-    # Validate and freeze the rollout schedule into the objective contract. The
-    # first production v2 arm still denoises the full fixed window; these short
-    # windows define the follow-up generated-context curriculum and evaluation.
-    rollout_schedule = overlapping_windows(
-        args.future_chunks, args.rollout_window, args.rollout_overlap)
-    if not rollout_schedule:
-        raise ValueError("rollout schedule is empty")
+    rollout_contract(args)
     if any(v < 0 for v in (args.lambda_motion, args.lambda_accel,
                             args.lambda_geo_motion, args.lambda_motion_cosine,
                             args.lambda_motion_magnitude, args.extension_lr)):
@@ -604,6 +626,14 @@ def main(argv=None):
         drop_last=True, **multiprocessing_loader_kwargs(args.num_workers))
     eval_batches = load_eval_batches(args.eval_manifest, args.eval_clips, args) \
         if main_process else None
+    if main_process:
+        eval_ids = [batch.get("video_id", [""])[0] for batch in eval_batches]
+        resolved = sum(video_id in text_bank.embeddings for video_id in eval_ids)
+        print(f"eval text prompts: {resolved}/{len(eval_ids)} resolved")
+        if resolved == 0:
+            raise RuntimeError(
+                "no eval video_id resolves in the text sidecar; text "
+                "conditioning and CFG would be silent no-ops")
 
     core = build_model(args).to(device=device, dtype=torch.float32)
     wan_config = wan_config_snapshot(core)
@@ -612,33 +642,35 @@ def main(argv=None):
     compute_dtype = resolve_dtype(args.dtype)
     model_dtype = torch.float32
     use_scaler = compute_dtype == torch.float16
-    ema = EMA(core, args.ema_decay, dtype=torch.float32).to(device)
+    ema = EMA(core, args.ema_decay, dtype=torch.float32,
+              warmup=args.ema_warmup).to(device)
     optimizer = build_wan_optimizer(core, args)
     scheduler = build_scheduler(optimizer, args.warmup_steps, args.max_steps)
     scaler = create_grad_scaler(enabled=use_scaler)
     step = 0; best = {"score": float("inf"), "step": 0, "bad_evals": 0,
                       "source": "none", "guarded": True}
+    pending_rng_states = None
     if args.resume:
         checkpoint = load_torch_artifact(args.resume)
         strict_resume(checkpoint, args, stats, signature, world_size, wan_config)
         core.load_state_dict(checkpoint["model"], strict=True)
-        ema.load_state_dict(checkpoint["ema"]); ema.to(device)
+        ema.load_state_dict(checkpoint["ema"])
+        ema.load_metadata(checkpoint.get("ema_metadata")); ema.to(device)
         optimizer.load_state_dict(checkpoint["optimizer"])
         if "scaler" in checkpoint: scaler.load_state_dict(checkpoint["scaler"])
         step = int(checkpoint["global_step"]); best = checkpoint.get("best", best)
         saved_max = int(checkpoint["args"]["max_steps"])
         if args.max_steps != saved_max:
-            scheduler = build_extension_scheduler(
-                optimizer, [g["lr"] for g in optimizer.param_groups],
-                args.extension_lr, args.extension_warmup_steps,
-                args.max_steps - step)
+            current_lrs = [float(group["lr"]) for group in optimizer.param_groups]
+            adapter_peak = float(args.extension_lr)
+            trunk_peak = adapter_peak * float(args.wan_lr) / max(
+                float(args.adapter_lr), 1e-12)
+            scheduler = build_wan_extension_scheduler(
+                optimizer, current_lrs, adapter_peak, trunk_peak,
+                args.extension_warmup_steps, args.max_steps - step)
         else:
             scheduler.load_state_dict(checkpoint["scheduler"])
-        states = checkpoint.get("rng_by_rank") or []
-        if rank < len(states) and states[rank] is not None:
-            restore_rng_state(states[rank])
-        else:
-            set_seed(args.seed + rank + step * 1009)
+        pending_rng_states = checkpoint.get("rng_by_rank") or []
 
     tokenizer = decoder = r7_config = None
     rgb_decode_chunk_size = None
@@ -802,13 +834,15 @@ def main(argv=None):
                        "eval/decode_available": decode_enabled,
                        "eval/cfg_scale": args.cfg_scale,
                        "eval/text_bank_hits": text_bank.hits,
-                       "eval/text_bank_misses": text_bank.misses})
+                       "eval/text_bank_misses": text_bank.misses,
+                       "eval/text_hit_rate": text_bank.hits / max(
+                           text_bank.hits + text_bank.misses, 1)})
         score, source, legacy_guarded = composite_score(result)
         guards, missing = wan_quality_guards(result, args)
         guarded = legacy_guarded or (
             args.enforce_quality_guards and not all(guards.values()))
         if guarded:
-            score = 1e9
+            score = float("inf")
         for name, passed in guards.items():
             result[f"eval/guard_{name}"] = bool(passed)
         result.update({"eval/composite": score, "eval/composite_source": source,
@@ -834,6 +868,11 @@ def main(argv=None):
                 args.output_dir, f"checkpoint_step{step:07d}.pt"))
             atomic_torch_save(payload, os.path.join(args.output_dir,
                                                     "checkpoint_latest.pt"))
+            periodic = sorted(
+                name for name in os.listdir(args.output_dir)
+                if name.startswith("checkpoint_step") and name.endswith(".pt"))
+            for stale in periodic[:-args.keep_periodic_checkpoints]:
+                os.remove(os.path.join(args.output_dir, stale))
         elif kind == "best":
             atomic_torch_save(payload, os.path.join(args.output_dir,
                                                     "checkpoint_best.pt"))
@@ -847,10 +886,16 @@ def main(argv=None):
         print(f"Wan T2V full-finetune: world={world_size} "
               f"text_bank={len(text_bank.embeddings)} captions "
               f"max_steps={args.max_steps}")
-    iterator = iter(loader); optimizer.zero_grad(set_to_none=True)
+    iterator = iter(loader)
+    if pending_rng_states is not None:
+        if rank < len(pending_rng_states) and pending_rng_states[rank] is not None:
+            restore_rng_state(pending_rng_states[rank])
+        else:
+            set_seed(args.seed + rank + step * 1009)
+    optimizer.zero_grad(set_to_none=True)
     stop = False; throughput_meter = ThroughputMeter()
-    drop_generator = torch.Generator()
-    drop_generator.manual_seed(args.seed * 7919 + rank + step)
+    # CFG dropout uses the checkpointed/restored global CPU RNG. A private
+    # generator previously restarted at resume and changed the trajectory.
     while step < args.max_steps and not stop:
         totals = torch.zeros(6, device=device)
         for micro in range(args.accum_steps):
@@ -864,7 +909,7 @@ def main(argv=None):
             target = normalize_fp32(target_raw, st["target"],
                                     args.normalization_mode).to(model_dtype)
             video_ids = batch.get("video_id", [""] * target.shape[0])
-            drop_mask = (torch.rand(len(video_ids), generator=drop_generator)
+            drop_mask = (torch.rand(len(video_ids))
                          < args.text_drop_prob).tolist()
             text_emb = text_bank.batch(video_ids, device, drop_mask)
             sync = model.no_sync() if use_ddp and micro < args.accum_steps-1 \
@@ -890,7 +935,8 @@ def main(argv=None):
                               or args.lambda_motion_magnitude):
                     motion_cos, motion_mag, _, _ = \
                         motion_direction_magnitude_losses(
-                            out["x1_pred"], target, cond,
+                            out["x1_pred"], target_raw, cond_raw,
+                            st["target"], args.normalization_mode,
                             args.horizon_weight_values, out["t"],
                             args.aux_t_min)
                 total = flow_loss + scale * (
@@ -931,11 +977,9 @@ def main(argv=None):
                    "train/geo_motion_loss": totals[3].item(),
                    "train/motion_cosine_loss": totals[4].item(),
                    "train/motion_magnitude_loss": totals[5].item(),
-                   "train/scheduled_context_probability":
-                       scheduled_context_probability(
-                           step, args.scheduled_context_start,
-                           args.scheduled_context_ramp,
-                           args.scheduled_context_max),
+                   "train/scheduled_context_probability": 0.0,
+                   "train/text_hit_rate": text_bank.hits / max(
+                       text_bank.hits + text_bank.misses, 1),
                    "train/grad_norm": float(grad),
                    "train/lr": optimizer.param_groups[0]["lr"],
                    "DI_throughput": throughput}
@@ -956,7 +1000,8 @@ def main(argv=None):
                     with ema_weights(core, ema):
                         eval_row = evaluate()
                     score = eval_row["eval/composite"]
-                    improved = np.isfinite(score) and score < best["score"]
+                    improved = (not eval_row["eval/composite_guarded"]
+                                and np.isfinite(score) and score < best["score"])
                     if improved:
                         best.update(score=score, step=step, bad_evals=0,
                                     source=eval_row["eval/composite_source"],

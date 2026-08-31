@@ -21,6 +21,7 @@ from streamvggt.models.streamvggt import StreamVGGT
 from utils.device import (configure_backend_compatibility, get_device,
                           get_device_name, resolve_dtype)
 from utils.encoder_loader import load_encoder_checkpoint
+from utils.file_signature import sampled_file_signature
 from utils.moxing_io import copy_file, is_remote_path, join_remote
 from utils.r7_representation import (encode_dual, load_checkpoint,
                                      load_r7_modules)
@@ -128,6 +129,7 @@ def main():
         collate_fn=collate_fn, **multiprocessing_loader_kwargs(args.num_workers))
 
     shard, shard_id, total = {}, 0, 0
+    first_shapes = None
     with torch.inference_mode():
         for batch in tqdm(loader, desc="Wan teacher cache"):
             frames = batch["frames"].to(device).float()
@@ -141,6 +143,12 @@ def main():
             r7 = r7.reshape(
                 1, r7_config.latent_seq_len,
                 r7_config.latent_grid ** 2, r7_config.latent_dim)
+            if first_shapes is None:
+                first_shapes = {
+                    "r7": list(r7.shape[1:]),
+                    "wan_latent": list(latent.shape),
+                    "wan_patch_hidden": list(hidden.shape[1:]),
+                }
             key = str(batch["video_id"][0])
             shard[key] = {
                 "r7": r7[0].to(device="cpu", dtype=torch.float16),
@@ -165,6 +173,11 @@ def main():
         "clip_duration_seconds": args.clip_duration_seconds,
         "wan_model_type": wan_model_type,
         "r7_config": dict(checkpoint["representation_contract"]["config"]),
+        "tensor_shapes": first_shapes,
+        "signatures": {
+            "r7": sampled_file_signature(args.r7_ckpt),
+            "wan_vae": sampled_file_signature(args.wan_vae_ckpt),
+        },
     }, args.output_dir, "_SUCCESS.pt")
     print(f"cached {total} Wan teacher samples in {shard_id} shards")
 

@@ -238,11 +238,9 @@ def validate_requested_config(args, config):
         raise RuntimeError(
             "R7 latent sequence contract is inconsistent: "
             f"T={config.latent_seq_len}, expected={expected_latent_frames}")
-    if (config.latent_grid != 18
-            or config.geo_latent_dim != 96
-            or config.tex_latent_dim != 96):
+    if config.latent_grid != 18 or config.latent_dim != 192:
         raise RuntimeError(
-            "R7 durable cache requires grid=18 and channel split 96|96, got "
+            "R7 durable cache requires grid=18 and total latent width 192, got "
             f"grid={config.latent_grid}, split="
             f"{config.geo_latent_dim}|{config.tex_latent_dim}")
 

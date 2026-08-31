@@ -18,7 +18,7 @@ MODE="${MODE:-train}"                         # train | sample
 TEMPORAL_FACTOR="${TEMPORAL_FACTOR:-2}"
 LATENT_DIM="${LATENT_DIM:-192}"
 CONTEXT_CHUNKS="${CONTEXT_CHUNKS:-1}"
-FUTURE_CHUNKS="${FUTURE_CHUNKS:-4}"
+FUTURE_CHUNKS="${FUTURE_CHUNKS:-$(( (9 - 1) / TEMPORAL_FACTOR ))}"
 R7_NAMESPACE="${R7_NAMESPACE:-r7_t${TEMPORAL_FACTOR}_c${LATENT_DIM}_v3}"
 R7_CACHE_VERSION="${R7_CACHE_VERSION:-${R7_NAMESPACE}_seq9_frame_channel_v1}"
 R7_CACHE_OBS_ROOT="${R7_CACHE_OBS_ROOT:-${PERSISTENT_OBS_ROOT}/cache_latents/${R7_CACHE_VERSION}}"
@@ -29,13 +29,29 @@ EVAL_STATS="${R7_EVAL_STATS:-${R7_CACHE_OBS_ROOT}/eval/stats.pt}"
 R7_CKPT="${R7_CKPT:-${SCALE_ROOT}/${R7_NAMESPACE}/joint/checkpoint_best.pt}"
 R7_CKPT_URL="${R7_CKPT_URL:-${SCALE_REMOTE_ROOT}/${R7_NAMESPACE}/joint/checkpoint_best.pt}"
 R7_CKPT_MIRROR_URL="${R7_CKPT_MIRROR_URL:-${SCALE_MIRROR_ROOT}/${R7_NAMESPACE}/joint/checkpoint_best.pt}"
+DECODER_CKPT="${DECODER_CKPT:-${SCALE_ROOT}/${R7_NAMESPACE}/decoder_robust/checkpoint_best.pt}"
+DECODER_CKPT_URL="${DECODER_CKPT_URL:-${SCALE_REMOTE_ROOT}/${R7_NAMESPACE}/decoder_robust/checkpoint_best.pt}"
+DECODER_CKPT_MIRROR_URL="${DECODER_CKPT_MIRROR_URL:-${SCALE_MIRROR_ROOT}/${R7_NAMESPACE}/decoder_robust/checkpoint_best.pt}"
+
+ALLOW_DIAGNOSTIC_DIFFUSION="${ALLOW_DIAGNOSTIC_DIFFUSION:-0}"
+GATE_MARKER="${R7_GATE_MARKER:-${SCALE_ROOT}/${R7_NAMESPACE}/joint/gate_passed.json}"
+GATE_MARKER_URL="${R7_GATE_MARKER_URL:-${SCALE_REMOTE_ROOT}/${R7_NAMESPACE}/joint/gate_passed.json}"
+GATE_MARKER_MIRROR_URL="${R7_GATE_MARKER_MIRROR_URL:-${SCALE_MIRROR_ROOT}/${R7_NAMESPACE}/joint/gate_passed.json}"
+if [[ "${TEMPORAL_FACTOR}" -eq 1 ]]; then
+  GATE_PSNR="${GATE_PSNR:-24.5}"; GATE_LPIPS="${GATE_LPIPS:-0.12}"
+else
+  GATE_PSNR="${GATE_PSNR:-23.9}"; GATE_LPIPS="${GATE_LPIPS:-0.13}"
+fi
+GATE_BOUNDARY_RATIO="${GATE_BOUNDARY_RATIO:-1.10}"
+GATE_GEO_MOTION_COSINE="${GATE_GEO_MOTION_COSINE:-0.95}"
 
 DIFFUSION_NAMESPACE="${DIFFUSION_NAMESPACE:-}"
 if [[ -z "${DIFFUSION_NAMESPACE}" ]]; then
+  suffix="$([[ "${ALLOW_DIAGNOSTIC_DIFFUSION}" == 1 ]] && printf _diag || printf '')"
   if [[ "${TEMPORAL_FACTOR}" -eq 1 ]]; then
-    DIFFUSION_NAMESPACE="r7_diffusion_t1_c192_ctx1_fut8_v1"
+    DIFFUSION_NAMESPACE="r7_diffusion_t1_c192_ctx1_fut8_x0_v1${suffix}"
   else
-    DIFFUSION_NAMESPACE="r7_diffusion_t2_c192_ctx1_fut4_v2"
+    DIFFUSION_NAMESPACE="r7_diffusion_t2_c192_ctx1_fut4_x0_v1${suffix}"
   fi
 fi
 OUTPUT_DIR="${SCALE_ROOT}/${DIFFUSION_NAMESPACE}"
@@ -83,6 +99,20 @@ mkdir -p "${OUTPUT_DIR}" "${LOCAL_CACHE_ROOT}/resume" \
 if [[ "${NODE_RANK}" -ne 0 ]]; then rm -f "${R7_CKPT}"; fi
 ensure_local_checkpoint "${R7_CKPT}" "${R7_CKPT_URL}" \
   "accepted R7 checkpoint" "${R7_CKPT_MIRROR_URL}"
+if [[ "${ALLOW_DIAGNOSTIC_DIFFUSION}" != 1 ]]; then
+  rm -f "${GATE_MARKER}"
+  ensure_local_checkpoint "${GATE_MARKER}" "${GATE_MARKER_URL}" \
+    "R7 passed-gate marker" "${GATE_MARKER_MIRROR_URL}"
+  verify_r7_gate_marker "${GATE_MARKER}" "${R7_CKPT}" \
+    "${GATE_PSNR}" "${GATE_LPIPS}" "${GATE_BOUNDARY_RATIO}" \
+    "${GATE_GEO_MOTION_COSINE}" "${TEMPORAL_FACTOR}"
+elif [[ "${DIFFUSION_NAMESPACE}" != *diag* ]]; then
+  echo "Diagnostic diffusion requires a namespace containing 'diag'." >&2
+  exit 2
+fi
+# A robust decoder is mandatory for meaningful RGB checkpoint selection.
+ensure_local_checkpoint "${DECODER_CKPT}" "${DECODER_CKPT_URL}" \
+  "decoder_robust checkpoint" "${DECODER_CKPT_MIRROR_URL}"
 
 stage_cache_input() {
   local source=$1 local_name=$2
@@ -124,14 +154,16 @@ if [[ "${MODE}" == "sample" ]]; then
   mkdir -p "${SAMPLE_DIR}"
   start_output_sync "${OUTPUT_DIR}" "${REMOTE_OUTPUT_DIR}"
   trap 'stop_output_sync "${OUTPUT_DIR}" "${REMOTE_OUTPUT_DIR}"' EXIT
+  SAMPLE_EXTRA_ARGS=(--decoder_ckpt "${DECODER_CKPT}")
   if [[ "${NODE_RANK}" -eq 0 ]]; then
     "${PYTHON_BIN}" "${PROJECT}/sample_causal_video_diffusion.py" \
       --checkpoint "${LOCAL_SAMPLE_CKPT}" --manifest "${LOCAL_EVAL_MANIFEST}" \
       --sample_index "${SAMPLE_INDEX:-0}" \
       --stats "${LOCAL_TRAIN_STATS}" --r7_ckpt "${R7_CKPT}" \
       --output "${SAMPLE_OUTPUT:-${SAMPLE_DIR}/best_ema.pt}" \
-      --sample_steps "${SAMPLE_STEPS:-30}" --weights ema \
-      --decode_chunk_size "${DECODE_CHUNK_SIZE:-0}" --dtype bf16
+      --sample_steps "${SAMPLE_STEPS:-30}" --weights "${SAMPLE_WEIGHTS:-ema}" \
+      --decode_chunk_size "${DECODE_CHUNK_SIZE:-0}" --dtype bf16 \
+      "${SAMPLE_EXTRA_ARGS[@]}"
   fi
   exit 0
 fi
@@ -170,6 +202,7 @@ if [[ -n "${RESUME}" && ! -s "${OUTPUT_DIR}/metrics.jsonl" ]]; then
   done
 fi
 EXTRA_ARGS=(); [[ -n "${RESUME}" ]] && EXTRA_ARGS+=(--resume "${RESUME}")
+EXTRA_ARGS+=(--decoder_ckpt "${DECODER_CKPT}")
 start_output_sync "${OUTPUT_DIR}" "${REMOTE_OUTPUT_DIR}"
 trap 'stop_output_sync "${OUTPUT_DIR}" "${REMOTE_OUTPUT_DIR}"' EXIT
 run_torchrun "${PROJECT}/train_causal_video_diffusion.py" \
@@ -186,7 +219,7 @@ run_torchrun "${PROJECT}/train_causal_video_diffusion.py" \
   --max_steps "${MAX_STEPS}" --lr "${LEARNING_RATE}" --wd "${WEIGHT_DECAY:-1e-2}" \
   --warmup_steps "${WARMUP_STEPS}" --extension_lr "${EXTENSION_LR}" \
   --extension_warmup_steps "${EXTENSION_WARMUP_STEPS}" \
-  --ema_decay "${EMA_DECAY:-0.9999}" \
+  --ema_decay "${EMA_DECAY:-0.999}" --ema_warmup \
   --lambda_motion "${LAMBDA_MOTION:-0.10}" --lambda_accel "${LAMBDA_ACCEL:-0.05}" \
   --lambda_geo_motion "${LAMBDA_GEO_MOTION:-0.05}" \
   --aux_warmup_steps "${AUX_WARMUP_STEPS:-1000}" \
