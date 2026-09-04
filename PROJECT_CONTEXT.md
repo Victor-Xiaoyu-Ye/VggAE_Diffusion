@@ -230,6 +230,22 @@ cluster) or `scripts/10k/` (local A100). See `scripts/h200/README.md`.
 
 - **R7 T1 AUDIT + FAIL-CLOSED CORRECTION (2026-08-31):** local metric artifacts show the t1 codec completed 6K, joint stopped at 9.8K, decoder_robust completed 4K, and the from-scratch t1 diffusion completed its initial 6K. The t1 representation did not pass: best observed joint PSNR/LPIPS were about 24.64/0.108, but geometry-motion cosine plateaued near 0.867 < 0.95. Factor-1's prior boundary metric was mathematically invalid (all transitions classified as boundaries, empty within set, ratio ~4e10); factor=1 now records boundary as not-applicable and excludes it from gate/composite, without weakening the geometry gate. The old t1 diffusion was numerically improving but generation failed (step-6K motion ratio ~3.47, chunk-8 motion cosine ~0.017, expanded-geometry cosine ~0.011); it must not be extended in place. The native trainer now uses a fresh x0 objective namespace and can strictly load decoder_robust weights via a separate decoder override. Wan had made zero optimizer steps: the current launch crashed on the first forward because horizon weights were converted to a list before `.to()`. That crash, Wan native-time reversal, raw-space motion losses, fixed-width text conditioning, guarded-best selection, sampler dtype, EMA warmup, and checkpoint retention are corrected under new objective/namespaces. Production cache/diffusion wrappers now require a checkpoint-bound gate marker; diagnostic bypasses require diagnostic/probe namespaces. The current teacher bridge remains a pooled, one-way diagnostic not connected to production Wan; teacher markers now record factor/shapes/signatures and stage 20 forwards t1 namespaces, but a held-out streaming bridge probe/native-grid inverse head remain future work. No long run has been relaunched after these code changes.**
 
+- **VGGT/R7 SINGLE-TARGET QUICK PROBE (2026-09-04, code):** the completed
+  `r7_t1_c192_geo112_tex80_probe_v1/joint` arm retains RGB reconstruction
+  (best near step 11K, PSNR about 24.62 / LPIPS about 0.108) and improves
+  geometry-motion cosine to about 0.892, but remains below the long-video 0.95
+  gate. It is now a frozen reconstruction base for an isolated target-frame
+  diagnostic, not a cache/diffusion promotion. `probe_vggt_manifold.py` measures
+  raw VGGT, compressor-projected, and R7 statistics plus anchor-prefixed,
+  equal-scale Euclidean/tangent/geodesic decoder sensitivity.
+  `train_single_target_probe.py` first requires deterministic frame-0 ->
+  frame-1 overfit and then scales 1/16/256 clips before allowing a one-frame x0
+  flow arm. Every eval separates raw RGB, R7 AE target, and copy-anchor. The
+  ModelArts entry points are `scripts/scale/22_probe_vggt_generation.sh` and
+  `scripts/scale/smoke_vggt_generation.sh`. These runs never write a gate marker;
+  held-out copy-anchor improvement and later VGGT geometry re-encoding are
+  required before any generative claim. NPU runtime remains unverified.**
+
 - Active large-scale dataset: SpatialVID-HQ on OBS.
 - Active local 10K dataset path:
   `/public2/LiZhen/yexiaoyu/dataset/spatial-vid-hq-oft` (A100 box).

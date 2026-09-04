@@ -313,3 +313,81 @@ bash scripts/scale/19_train_wan_teacher_bridge.sh
 is also the t1 latent dim (geo96|tex96); the temporal/spatial shapes are derived
 from the teacher tensors, so no t1-specific code change is required. The bridge
 is diagnostic only: production inference never loads the Wan VAE.
+
+## VGGT manifold + single-target quick validation
+
+The completed `r7_t1_c192_geo112_tex80_probe_v1/joint` run retains the existing
+RGB ceiling (best near step 11K: PSNR about 24.62 / LPIPS about 0.108) while
+raising geometry-motion cosine to about 0.892. It is not eligible for the
+long-video gate, but is frozen as the reconstruction base for a separate,
+non-production single-target experiment. Do not build a cache or resume the
+8-future diffusion from this experiment.
+
+Run the fail-closed quick ladder. It executes deterministic/flow two-step
+smokes, the 64-clip manifold diagnostic, exact one-pair overfit, and only after
+the overfit gate a 16-pair held-out arm. It never auto-launches 256 samples:
+
+```bash
+R7_NAMESPACE=r7_t1_c192_geo112_tex80_probe_v1 \
+bash scripts/scale/23_run_vggt_quick_ladder.sh
+```
+
+For the mandatory smoke alone:
+
+```bash
+R7_NAMESPACE=r7_t1_c192_geo112_tex80_probe_v1 \
+bash scripts/scale/smoke_vggt_generation.sh
+```
+
+Then collect the no-training manifold diagnostic on 64 fixed eval clips:
+
+```bash
+MODE=manifold \
+OUTPUT_NAME=r7_vggt_manifold_geo112_tex80_v1 \
+R7_NAMESPACE=r7_t1_c192_geo112_tex80_probe_v1 \
+bash scripts/scale/22_probe_vggt_generation.sh
+```
+
+The script reports raw VGGT level statistics, statistics after the frozen
+compressor's LayerNorm+projection, R7 geo/texture/full statistics, and
+anchor-prefixed decoder sensitivity for Euclidean, tangent, linear,
+norm-matched-linear, and geodesic perturbations. A small post-LayerNorm norm CV
+alone is not evidence of a useful manifold; LayerNorm forces it by construction.
+Riemannian flow is justified only if equal-scale tangent/geodesic perturbations
+preserve decode quality materially better than Euclidean/norm-matched controls.
+
+Single-target quick-probe v1 supports only frame `0 -> 1`. Farther targets
+require an explicit generated/intermediate-prefix contract and are rejected
+rather than being silently decoded as the second frame. Training proceeds only
+as a gated ladder:
+
+```bash
+# Exact one-pair overfit. This evaluates the same pair by design.
+MODE=train GEN_MODE=deterministic MAX_SAMPLES=1 EVAL_SAMPLES=1 \
+MAX_STEPS=500 TARGET_INDEX=1 \
+OUTPUT_NAME=r7_single_target_det_k1_n1_v1 \
+bash scripts/scale/22_probe_vggt_generation.sh
+
+# Only after exact overfit succeeds: held-out 16-pair arm.
+MODE=train GEN_MODE=deterministic MAX_SAMPLES=16 EVAL_SAMPLES=16 \
+MAX_STEPS=1000 TARGET_INDEX=1 \
+OUTPUT_NAME=r7_single_target_det_k1_n16_v1 \
+bash scripts/scale/22_probe_vggt_generation.sh
+
+# Only after the 16-pair arm is healthy: 256 train / 64 held-out.
+MODE=train GEN_MODE=deterministic MAX_SAMPLES=256 EVAL_SAMPLES=64 \
+MAX_STEPS=2000 TARGET_INDEX=1 LAMBDA_RGB=0 LAMBDA_LPIPS=0 \
+OUTPUT_NAME=r7_single_target_det_k1_n256_v1 \
+bash scripts/scale/22_probe_vggt_generation.sh
+```
+
+The deterministic arm is a learnability control, not a generative result. The
+2-step flow invocation in the smoke checks runtime only; a meaningful flow
+training arm is allowed only after deterministic one-pair overfit succeeds.
+Every eval compares generated RGB with raw target, R7 AE target, and a decoded
+copy-anchor baseline. One-pair success proves only implementation overfit;
+held-out generation must beat copy-anchor without latent norm or motion collapse
+before generated-prefix `k=4`/`k=8`, generated-token decoder finetuning, or a
+Riemannian model is considered. These quick probes never write
+`gate_passed.json` and do not promote
+a representation or generator.

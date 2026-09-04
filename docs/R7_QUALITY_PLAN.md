@@ -216,3 +216,37 @@ git diff --check
 ```
 
 以上检查不证明 NPU/HCCL/MoXing/OBS 正确。每个新 arm 仍必须先跑 Wan load、text sidecar、decoder decode、PNG/MP4 publication、resume smoke。
+
+## 2026-09-04 quick single-target decision probe
+
+The completed geo112|tex80 joint arm reached the RGB gate but plateaued around
+geometry-motion cosine 0.892. Further channel-allocation sweeps are no longer the
+active first step. A separate quick probe now asks a narrower question: can a
+frozen StreamVGGT/R7 representation generate one plausible target frame before
+we pay for an 8-frame rollout?
+
+The implementation is `probe_vggt_manifold.py`,
+`train_single_target_probe.py`, and
+`scripts/scale/22_probe_vggt_generation.sh`. It has two independent stages:
+
+1. no-training VGGT/R7 statistics and equal-scale decoder perturbations;
+2. frame-0 -> frame-1 single-target deterministic learnability, followed only
+   when successful by Euclidean x0 flow and 1/16/256 sample scaling. Quick-probe
+   v1 rejects farther target indices until generated/intermediate causal prefixes
+   have an explicit contract.
+
+All decoded candidates include the same clean anchor prefix so causal temporal
+blocks are not evaluated against artificial zero context. Raw RGB, R7 AE target,
+and copy-anchor are separate baselines. The 1-sample arm evaluates its training
+pair and proves only overfit; 16/256 arms use the fixed eval split and are the
+first generalization evidence. The deterministic arm must work before any flow
+conclusion is accepted. Manifold statistics alone do not promote Riemannian
+flow: it requires a decode-quality advantage over both Euclidean and
+norm-matched linear controls.
+
+This branch does not alter production codec/generation gates, does not build a
+cache, and does not write `gate_passed.json`. Its MVP success condition is a
+held-out target-frame result that beats copy-anchor in raw-RGB LPIPS/PSNR while
+maintaining finite outputs, a non-collapsed latent norm, and meaningful
+anchor-target motion. Geometry re-encoding and multi-seed testing remain
+mandatory before calling the result geometry-grounded generation.
