@@ -224,8 +224,10 @@ def main(argv=None):
         raise RuntimeError("single-target probe requires an accelerator")
     device = get_device(0)
     compute_dtype = resolve_dtype(args.dtype)
+    print("[quick-probe] loading frozen R7/StreamVGGT stack", flush=True)
     frozen = FrozenR7(
         args.encoder_ckpt, args.r7_ckpt, device, compute_dtype)
+    print("[quick-probe] frozen stack loaded", flush=True)
     if not 0 < args.target_index < frozen.config.latent_seq_len:
         raise ValueError(
             f"target_index must be in [1,{frozen.config.latent_seq_len - 1}]")
@@ -241,6 +243,8 @@ def main(argv=None):
                   num_tokens=num_tokens, hidden_dim=args.hidden_dim,
                   depth=args.depth,
                   max_target_index=frozen.config.latent_seq_len - 1)
+    print(f"[quick-probe] materializing train samples={args.max_samples}",
+          flush=True)
     train_items = materialize(
         train_loader, frozen, args.target_index, keep_rgb=True,
         keep_full_latent=args.max_samples == 1)
@@ -250,6 +254,8 @@ def main(argv=None):
         eval_loader, frozen, args.target_index, keep_rgb=True,
         keep_full_latent=True))
     del train_loader, eval_loader
+    print(f"[quick-probe] materialized train={len(train_items)} "
+          f"eval={len(eval_items)}", flush=True)
     # The quick generator is judged in R7 latent/RGB space. Release the much
     # larger frozen encoder stack before optimization; geometry re-encoding is
     # an offline follow-up after this MVP passes held-out copy-anchor baselines.
@@ -258,6 +264,9 @@ def main(argv=None):
 
     model = (SingleTargetGenerator(**common) if args.mode == "deterministic"
              else SingleTargetFlowGenerator(**common)).to(device)
+    print(f"[quick-probe] model ready mode={args.mode} "
+          f"parameters={sum(p.numel() for p in model.parameters())}",
+          flush=True)
     optimizer = build_optimizer(model, args.lr, args.wd)
     os.makedirs(os.path.join(args.output_dir, "samples"), exist_ok=True)
     metrics_path = os.path.join(args.output_dir, "metrics.jsonl")
@@ -383,6 +392,7 @@ def main(argv=None):
         grad = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
         step += 1
+        print(f"[quick-probe] completed train step={step}", flush=True)
         if step % args.log_every == 0 or step == 1:
             append_metrics(metrics_path, {
                 "step": step, "train/loss": float(loss.detach()),

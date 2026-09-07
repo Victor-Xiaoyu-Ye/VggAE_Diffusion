@@ -325,7 +325,11 @@ non-production single-target experiment. Do not build a cache or resume the
 
 Run the fail-closed quick ladder. It executes deterministic/flow two-step
 smokes, the 64-clip manifold diagnostic, exact one-pair overfit, and only after
-the overfit gate a 16-pair held-out arm. It never auto-launches 256 samples:
+the overfit gate a 16-pair held-out arm. It never auto-launches 256 samples. Although every compute stage runs only on
+node 0, the ladder itself is launched on all ModelArts nodes and inserts a
+distributed barrier after every stage; decision gates execute only on node 0.
+This prevents idle nodes from racing ahead and looking for metrics before node 0
+has produced them.
 
 ```bash
 R7_NAMESPACE=r7_t1_c192_geo112_tex80_probe_v1 \

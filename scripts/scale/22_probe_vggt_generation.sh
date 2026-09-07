@@ -44,6 +44,7 @@ ensure_local_checkpoint "${R7_CKPT}" "${R7_CKPT_URL}" \
 
 start_output_sync "${OUTPUT_DIR}" "${REMOTE_OUTPUT_DIR}"
 trap 'stop_output_sync "${OUTPUT_DIR}" "${REMOTE_OUTPUT_DIR}"' EXIT
+mkdir -p "$(dirname "${STAGE_LOG_FILE}")"
 
 if [[ "${MODE}" == "manifold" ]]; then
   PYTHONPATH="${PROJECT}" "${PYTHON_BIN}" \
@@ -53,7 +54,8 @@ if [[ "${MODE}" == "manifold" ]]; then
     --output_dir "${OUTPUT_DIR}" --samples "${SAMPLES:-64}" \
     --preview_samples "${PREVIEW_SAMPLES:-4}" \
     --target_index "${TARGET_INDEX}" --num_workers "${NUM_WORKERS:-2}" \
-    --dtype "${DTYPE:-bf16}"
+    --dtype "${DTYPE:-bf16}" 2>&1 | tee -a "${STAGE_LOG_FILE}"
+  STATUS=${PIPESTATUS[0]}
 else
   EXTRA_ARGS=()
   [[ "${EVAL_LPIPS:-1}" == 1 ]] && EXTRA_ARGS+=(--eval_lpips)
@@ -74,7 +76,13 @@ else
     --sample_steps "${SAMPLE_STEPS:-20}" \
     --eval_every "${EVAL_EVERY:-50}" --log_every "${LOG_EVERY:-10}" \
     --num_workers "${NUM_WORKERS:-2}" --dtype "${DTYPE:-bf16}" \
-    "${EXTRA_ARGS[@]}"
+    "${EXTRA_ARGS[@]}" 2>&1 | tee -a "${STAGE_LOG_FILE}"
+  STATUS=${PIPESTATUS[0]}
+fi
+
+if [[ "${STATUS:-1}" -ne 0 ]]; then
+  echo "VGGT quick probe failed with status ${STATUS}; see ${STAGE_LOG_FILE}" >&2
+  exit "${STATUS}"
 fi
 
 printf 'VGGT quick probe complete: %s -> %s\n' "${MODE}" "${OUTPUT_DIR}"
