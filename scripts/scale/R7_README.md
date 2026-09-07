@@ -350,8 +350,10 @@ bash scripts/scale/22_probe_vggt_generation.sh
 
 The script reports raw VGGT level statistics, statistics after the frozen
 compressor's LayerNorm+projection, R7 geo/texture/full statistics, and
-anchor-prefixed decoder sensitivity for Euclidean, tangent, linear,
-norm-matched-linear, and geodesic perturbations. A small post-LayerNorm norm CV
+full-sequence decoder sensitivity for Euclidean, tangent, linear,
+norm-matched-linear, and geodesic perturbations. Each candidate is repeated over
+all future slots behind the clean anchor and only frame 1 is scored, preserving
+the trained temporal-attention length without using true future latents. A small post-LayerNorm norm CV
 alone is not evidence of a useful manifold; LayerNorm forces it by construction.
 Riemannian flow is justified only if equal-scale tangent/geodesic perturbations
 preserve decode quality materially better than Euclidean/norm-matched controls.
@@ -384,8 +386,10 @@ bash scripts/scale/22_probe_vggt_generation.sh
 The deterministic arm is a learnability control, not a generative result. The
 2-step flow invocation in the smoke checks runtime only; a meaningful flow
 training arm is allowed only after deterministic one-pair overfit succeeds.
-Every eval compares generated RGB with raw target, R7 AE target, and a decoded
-copy-anchor baseline. One-pair success proves only implementation overfit;
+Every eval compares generated RGB with raw target, repeated-suffix R7 AE target,
+decoded copy-anchor, and a read-only oracle full-nine-frame AE reconstruction.
+The oracle is never input to the generator; its gap quantifies how much the
+single-target deployment contract itself costs. One-pair success proves only implementation overfit;
 held-out generation must beat copy-anchor without latent norm or motion collapse
 before generated-prefix `k=4`/`k=8`, generated-token decoder finetuning, or a
 Riemannian model is considered. These quick probes never write

@@ -40,6 +40,8 @@ def main(argv=None):
     expected_split = "train-overfit" if args.stage == "overfit" else "held-out"
     checks = {
         "split": row.get("eval/split") == expected_split,
+        "decode_contract": row.get("eval/decode_contract")
+            == "anchor-plus-repeated-target-full-sequence",
         "finite_latent_mse": math.isfinite(float(row["eval/latent_mse"])),
         "latent_mse": float(row["eval/latent_mse"]) <= args.max_latent_mse,
         "motion_cosine": float(row["eval/motion_cosine"]) >= args.min_motion_cosine,

@@ -235,9 +235,11 @@ The implementation is `probe_vggt_manifold.py`,
    v1 rejects farther target indices until generated/intermediate causal prefixes
    have an explicit contract.
 
-All decoded candidates include the same clean anchor prefix so causal temporal
-blocks are not evaluated against artificial zero context. Raw RGB, R7 AE target,
-and copy-anchor are separate baselines. The 1-sample arm evaluates its training
+All decoded candidates use one deployable full-sequence contract: one clean
+anchor followed by the candidate target repeated across all future slots; only
+frame 1 is scored. This preserves the RGB decoder's trained nine-frame temporal
+attention length without leaking any true future. Raw RGB, repeated-suffix R7 AE
+target, and repeated-suffix copy-anchor are separate baselines. The 1-sample arm evaluates its training
 pair and proves only overfit; 16/256 arms use the fixed eval split and are the
 first generalization evidence. The deterministic arm must work before any flow
 conclusion is accepted. Manifold statistics alone do not promote Riemannian

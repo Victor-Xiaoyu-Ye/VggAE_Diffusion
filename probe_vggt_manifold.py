@@ -121,10 +121,6 @@ def main(argv=None):
             args.encoder_ckpt, expected_encoder, "StreamVGGT checkpoint")
     if config.temporal_factor != 1 or config.latent_seq_len != args.seq_len:
         raise ValueError("quick probe requires a factor-1 frame-aligned R7 checkpoint")
-    if config.decoder_temporal_blocks != 0:
-        raise ValueError(
-            "manifold v1 requires a framewise RGB decoder; temporal decoder "
-            "attention needs the full latent prefix for a fair decode")
     encoder = StreamVGGT(
         img_size=config.target_size, patch_size=14, embed_dim=1024)
     load_encoder_checkpoint(encoder, args.encoder_ckpt, verbose=True)
@@ -219,12 +215,15 @@ def main(argv=None):
             decoded = {}
             grid = config.latent_grid
             for name, value in candidates.items():
-                # Decode each candidate with the same clean anchor prefix. This
-                # preserves the causal tokenizer/decoder context while changing
-                # only the target token under test.
-                sequence = torch.stack((anchor.float(), value), dim=1)
+                # Preserve the trained full-sequence temporal-attention contract
+                # without leaking future targets: repeat the one candidate across
+                # all future slots, then score only frame 1. Every arm uses the
+                # same suffix-fill rule.
+                future = value[:, None].expand(
+                    1, config.latent_seq_len - 1, *value.shape[1:])
+                sequence = torch.cat((anchor[:, None].float(), future), dim=1)
                 sequence = sequence.reshape(
-                    1, 2, grid, grid, config.latent_dim)
+                    1, config.latent_seq_len, grid, grid, config.latent_dim)
                 geo_out, tex_out = tokenizer.decode(sequence)
                 decoded[name] = decoder(
                     geo_out, tex_out)[:, 1:2, ..., :3].float().clamp(0, 1)
@@ -303,6 +302,7 @@ def main(argv=None):
         "interpretation_limits": [
             "VGGT levels are statistics-only; no raw-VGGT RGB head is tested.",
             "Euclidean/tangent/geodesic decode comparisons operate in R7 space.",
+            "One candidate is repeated across all future slots before full-sequence decode.",
             "LayerNorm fixed-radius behavior alone is not manifold evidence.",
         ],
     }

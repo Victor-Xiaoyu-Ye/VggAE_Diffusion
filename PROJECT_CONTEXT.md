@@ -236,8 +236,8 @@ cluster) or `scripts/10k/` (local A100). See `scripts/h200/README.md`.
   geometry-motion cosine to about 0.892, but remains below the long-video 0.95
   gate. It is now a frozen reconstruction base for an isolated target-frame
   diagnostic, not a cache/diffusion promotion. `probe_vggt_manifold.py` measures
-  raw VGGT, compressor-projected, and R7 statistics plus anchor-prefixed,
-  equal-scale Euclidean/tangent/geodesic decoder sensitivity.
+  raw VGGT, compressor-projected, and R7 statistics plus full-sequence,
+  repeated-candidate equal-scale Euclidean/tangent/geodesic decoder sensitivity.
   `train_single_target_probe.py` first requires deterministic frame-0 ->
   frame-1 overfit and then scales 1/16/256 clips before allowing a one-frame x0
   flow arm. Every eval separates raw RGB, R7 AE target, and copy-anchor. The

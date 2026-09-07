@@ -96,11 +96,6 @@ class FrozenR7:
         if config.temporal_factor != 1 or config.latent_seq_len != config.seq_len:
             raise ValueError(
                 "single-target quick probe requires a frame-aligned factor-1 R7")
-        if config.decoder_temporal_blocks != 0:
-            raise ValueError(
-                "single-target v1 requires a framewise RGB decoder; temporal "
-                "decoder attention would make a two-frame decode differ from "
-                "the full-sequence reconstruction contract")
         encoder = StreamVGGT(
             img_size=config.target_size, patch_size=14, embed_dim=1024)
         load_encoder_checkpoint(encoder, encoder_ckpt, verbose=True)
@@ -129,16 +124,39 @@ class FrozenR7:
             frames.shape[0], self.config.latent_seq_len,
             self.config.latent_grid ** 2, self.config.latent_dim)
 
+    def decode_full(self, latent):
+        """Decode a complete frame-aligned latent sequence."""
+        if latent.ndim != 4 or latent.shape[1:] != (
+                self.config.latent_seq_len,
+                self.config.latent_grid ** 2,
+                self.config.latent_dim):
+            raise ValueError("full latent has an invalid [B,T,N,D] shape")
+        b = latent.shape[0]
+        sequence = latent.reshape(
+            b, self.config.latent_seq_len, self.config.latent_grid,
+            self.config.latent_grid, self.config.latent_dim)
+        geo, tex = self.tokenizer.decode(sequence)
+        return self.decoder(geo, tex)[..., :3].float().clamp(0, 1)
+
     def decode(self, anchor, target):
-        """Decode target with its clean anchor as the causal prefix."""
+        """Decode frame 1 under the single-target full-sequence contract.
+
+        The frozen RGB decoder was trained with nine-frame temporal attention.
+        At deployment only one target is available, so fill every future slot
+        with that same candidate. This preserves the trained sequence length,
+        leaks no ground-truth future, and applies one identical context contract
+        to clean target, generated target, and copy-anchor baselines.
+        """
         if anchor.shape != target.shape or target.ndim != 3:
             raise ValueError("anchor/target must share [B,N,D] shape")
         b, _, d = target.shape
         grid = self.config.latent_grid
-        sequence = torch.stack((anchor, target), dim=1).reshape(
-            b, 2, grid, grid, d)
+        future = target[:, None].expand(
+            b, self.config.latent_seq_len - 1, *target.shape[1:])
+        sequence = torch.cat((anchor[:, None], future), dim=1).reshape(
+            b, self.config.latent_seq_len, grid, grid, d)
         # Optional RGB losses backpropagate through these frozen modules into the
-        # generator. The anchor prefix prevents zero-context temporal decoding.
+        # generator while every R7 parameter remains frozen.
         geo, tex = self.tokenizer.decode(sequence)
         return self.decoder(geo, tex)[:, 1:2, ..., :3].float().clamp(0, 1)
 
@@ -157,7 +175,7 @@ def build_loader(csv, video_root, config, samples, batch_size, workers,
 
 
 @torch.no_grad()
-def materialize(loader, frozen, target_index, keep_rgb):
+def materialize(loader, frozen, target_index, keep_rgb, keep_full_latent=False):
     """Encode each selected clip once; training never reruns StreamVGGT."""
     result = []
     for batch in loader:
@@ -169,6 +187,8 @@ def materialize(loader, frozen, target_index, keep_rgb):
                 "target": latent[index, target_index].float().cpu(),
                 "video_id": batch["video_id"][index],
             }
+            if keep_full_latent:
+                item["full_latent"] = latent[index].float().cpu()
             if keep_rgb:
                 item["anchor_rgb"] = frames[index, 0].float().clamp(0, 1) \
                     .mul(255).round().to(device="cpu", dtype=torch.uint8)
@@ -222,11 +242,13 @@ def main(argv=None):
                   depth=args.depth,
                   max_target_index=frozen.config.latent_seq_len - 1)
     train_items = materialize(
-        train_loader, frozen, args.target_index, keep_rgb=True)
+        train_loader, frozen, args.target_index, keep_rgb=True,
+        keep_full_latent=args.max_samples == 1)
     # One-pair validation must test exact overfit. Larger arms use the held-out
     # eval split and therefore measure generalization rather than memorization.
     eval_items = (train_items if args.max_samples == 1 else materialize(
-        eval_loader, frozen, args.target_index, keep_rgb=True))
+        eval_loader, frozen, args.target_index, keep_rgb=True,
+        keep_full_latent=True))
     del train_loader, eval_loader
     # The quick generator is judged in R7 latent/RGB space. Release the much
     # larger frozen encoder stack before optimization; geometry re-encoding is
@@ -263,11 +285,14 @@ def main(argv=None):
             copy_rgb = frozen.decode(anchor, anchor)
             target_rgb = frozen.decode(anchor, target)
             generated_rgb = frozen.decode(anchor, generated)
+            full_latent = item["full_latent"][None].to(device)
+            oracle_full_rgb = frozen.decode_full(full_latent)[:, 1:2]
             raw_target = item["raw_target"].permute(1, 2, 0)[None, None] \
                 .to(device=device, dtype=torch.float32).div(255)
             anchor_rgb = item["anchor_rgb"].permute(1, 2, 0)[None, None] \
                 .to(device=device, dtype=torch.float32).div(255)
             row = {
+                "decode_contract": "anchor-plus-repeated-target-full-sequence",
                 "latent_mse": float(F.mse_loss(generated.float(), target.float())),
                 "latent_norm_ratio": float(generated.float().norm() /
                                            target.float().norm().clamp_min(1e-8)),
@@ -275,6 +300,10 @@ def main(argv=None):
                 "copy_psnr_raw": psnr(copy_rgb, raw_target),
                 "generated_psnr_raw": psnr(generated_rgb, raw_target),
                 "ae_psnr_raw": psnr(target_rgb, raw_target),
+                "oracle_full_ae_psnr_raw": psnr(oracle_full_rgb, raw_target),
+                "single_target_decode_psnr_gap": (
+                    psnr(target_rgb, raw_target)
+                    - psnr(oracle_full_rgb, raw_target)),
                 "generated_psnr_ae": psnr(generated_rgb, target_rgb),
             }
             if lpips_model is not None:
@@ -284,13 +313,17 @@ def main(argv=None):
                     lpips_model, copy_rgb, raw_target, 1, 256))
                 row["ae_lpips_raw"] = float(lpips_chunked(
                     lpips_model, target_rgb, raw_target, 1, 256))
+                row["oracle_full_ae_lpips_raw"] = float(lpips_chunked(
+                    lpips_model, oracle_full_rgb, raw_target, 1, 256))
             rows.append(row)
             if index < 4:
                 save_video_preview(
                     os.path.join(args.output_dir, "samples"),
                     f"step{step:07d}_eval{index:02d}",
                     {"ANCHOR": anchor_rgb[0], "RAW_TARGET": raw_target[0],
-                     "AE_TARGET": target_rgb[0], "COPY_ANCHOR": copy_rgb[0],
+                     "AE_TARGET": target_rgb[0],
+                     "ORACLE_FULL_AE": oracle_full_rgb[0],
+                     "COPY_ANCHOR": copy_rgb[0],
                      "GENERATED": generated_rgb[0]}, fps=1,
                     metadata={"step": step, "mode": args.mode,
                               "target_index": args.target_index,
@@ -298,11 +331,17 @@ def main(argv=None):
                     save_frames=index == 0, save_mp4=False)
         model.train()
         keys = set.intersection(*(set(row) for row in rows))
+        scalar_keys = [key for key in keys
+                       if isinstance(rows[0][key], (int, float, np.generic))]
         result = {f"eval/{key}": float(np.mean([row[key] for row in rows]))
-                  for key in keys}
-        result.update({"step": step, "eval/samples": len(rows),
-                       "eval/split": "train-overfit" if args.max_samples == 1
-                                     else "held-out"})
+                  for key in scalar_keys}
+        result.update({
+            "step": step,
+            "eval/samples": len(rows),
+            "eval/decode_contract": rows[0]["decode_contract"],
+            "eval/split": (
+                "train-overfit" if args.max_samples == 1 else "held-out"),
+        })
         return result
 
     while step < args.max_steps:
