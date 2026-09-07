@@ -1,5 +1,27 @@
 # R7 causal reconstruction and diffusion (10K)
 
+## Active diagnostic: frozen geometry-RAE flow recovery (2026-09-07)
+
+Start with `docs/R7_FLOW_RECOVERY_PLAN.md`, not the historical scale run below.
+The current geo112|tex80 single-pair deterministic probe reached the AE ceiling;
+actual single-frame flow has only had a 2-step smoke. New isolated code compares
+plain x0 against a boundary-preconditioned flow, with online/EMA, train-memory/
+held-out, and position-mean controls. This is video generation, not 4D scenes.
+
+```bash
+bash scripts/scale/smoke_r7_flow_probe.sh
+STAGE=n1 bash scripts/scale/25_run_r7_flow_probe.sh
+```
+
+Do not run both commands in one uncontrolled long chain: inspect the smoke
+first. `STAGE=n1` runs two head candidates, but never automatically starts n16,
+short-video expansion, or production caching. Larger probes require an explicit
+selected head, checkpoint-bound memory status, and a text sidecar (or explicit
+uncaptioned diagnostic). Existing R7 production gates below are unchanged.
+Actual GPU/NPU/OBS execution and generation quality are not validated locally.
+
+## Historical production candidate
+
 This is the production 10K path for the corrected R7 v3 candidate: temporal
 factor 2, `geo96|tex96`, nine RGB frames -> one anchor plus four future chunks.
 V3 uses framewise GroupNorm in temporal blocks and directly optimizes geometry

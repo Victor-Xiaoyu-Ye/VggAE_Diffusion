@@ -16,7 +16,42 @@ goals, architecture, training order, paths, or important decisions change.
   Multi-view Diffusion" because video has temporal motion + disocclusion,
   not viewpoint change of a static scene.
 
-## Current Phase: Reconstruction-First (H200)
+## Current Phase: Frozen-RAE Flow Recovery (2026-09-07)
+
+The active task is first-frame/text-conditioned **video generation in the R7
+geometry RAE space**, not 4D scene generation and not Wan-VAE geometry guidance.
+The next diagnostic freezes the completed t1 geo112|tex80 checkpoint and tests
+actual flow sampling before extending to 2/4/8 future frames. See
+`docs/R7_FLOW_RECOVERY_PLAN.md`. New code is not a measured generation result;
+accelerator/OBS smoke and quality experiments remain pending.
+
+Evidence from the user-supplied desktop experiment excerpts:
+- `r7_vggt_quick_geo112_tex80_v2/det_k1_n1` succeeds at deterministic one-pair
+  memory: step500 PSNR vs AE 35.11, RAW 21.756 versus AE 21.836. The n16 run is
+  deterministic held-out prediction; the only single-target flow is a 2-step
+  smoke. Do not label this a completed single-frame diffusion failure.
+- Saved old t2 samples expose a metric confound: a spatially constant future
+  made from training position/channel means reproduces raw motion cosine about
+  [.996,.921,.602,.241]. Near-perfect first-chunk cosine and raw latent
+  correlation/std do not establish video content or motion learning.
+- On four saved Wan samples, normalized std ratio shrinks from about .59 at
+  7K to .50 at 14K while raw std ratio remains near 1. This is within-tensor
+  variation, not a multi-seed conditional-diversity measurement.
+- Old Wan14K EMA x0 MSE at data-time .9 is .2913, versus the analytical
+  rescaled-input baseline's expected .01235. All noise buckets improve with
+  training, so a high-noise-only explanation is insufficient. Historical EMA
+  defaults (.9999 without warmup) remain a confound until online/EMA replay;
+  runtime overrides are not established by the excerpts.
+
+New isolated probe implementation: `train_r7_flow_probe.py`,
+`models/r7_flow_probe.py`, and `scripts/scale/25_run_r7_flow_probe.sh`.
+Old-Wan replay uses `evaluate_r7_wan_denoising.py` and stage 24 with an explicit
+checkpoint/cache/text contract; it never substitutes current time semantics.
+Plain-x0 and preconditioned heads are separate controlled arms; train-memory and
+held-out, online and EMA, raw and position-centered metrics remain separate.
+Existing codecs/caches/checkpoints and production gates are not changed.
+
+## Historical Phase: Reconstruction-First (H200)
 
 Generation experiments are paused. The compact latent currently reconstructs
 at ~20 PSNR with grid textures, which caps every downstream generator. We
