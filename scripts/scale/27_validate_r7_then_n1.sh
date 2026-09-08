@@ -10,7 +10,7 @@ require_output_url
 if [[ "${NODE_RANK}" -ne 0 ]]; then exit 0; fi
 export PYTHONUNBUFFERED=1
 PYTHONPATH="${PROJECT}" "${PYTHON_BIN}" "${PROJECT}/scripts/test_r7_sampler_contract.py"
-export FLOW_NAMESPACE="${FLOW_NAMESPACE:-r7_sampler_validation_n1_probe_v1}"
+export FLOW_NAMESPACE="${FLOW_NAMESPACE:-r7_sampler_validation_n1_probe_v2}"
 [[ "${FLOW_NAMESPACE}" =~ ^[a-zA-Z0-9_-]+$ && ( "${FLOW_NAMESPACE}" == *probe* || "${FLOW_NAMESPACE}" == *diag* ) ]] || {
   echo 'Use a plain, unique FLOW_NAMESPACE containing probe or diag.' >&2; exit 2;
 }
@@ -34,7 +34,6 @@ SPATIALVID_METADATA="${LOCAL_CACHE_ROOT}/metadata/SpatialVID_HQ_metadata_oft.csv
 SPATIALVID_SPLIT_DIR="${RUN_ROOT}/metadata/spatialvid_oft_seed${SPLIT_SEED}"
 SPATIALVID_TRAIN_10K_CSV="${SPATIALVID_SPLIT_DIR}/train_10k.csv"
 SPATIALVID_EVAL_CSV="${SPATIALVID_SPLIT_DIR}/eval.csv"
-ensure_spatialvid_subset_splits
 output="${SCALE_ROOT}/${FLOW_NAMESPACE}/contract"
 remote="${SCALE_REMOTE_ROOT}/${FLOW_NAMESPACE}/contract"
 mirror="${SCALE_MIRROR_ROOT}/${FLOW_NAMESPACE}/contract"
@@ -52,17 +51,33 @@ for root in sys.argv[1:]:
     if exists:
         raise SystemExit('Existing contract output; select a fresh FLOW_NAMESPACE: ' + root)
 PY
+ensure_spatialvid_subset_splits
 mkdir -p "${output}/logs"
 start_output_sync "${output}" "${remote}"
 trap 'stop_output_sync "${output}" "${remote}"' EXIT
+set +e
 PYTHONPATH="${PROJECT}" "${PYTHON_BIN}" -u "${PROJECT}/validate_r7_sampler_contract.py" \
   --eval_csv "${SPATIALVID_EVAL_CSV}" --video_root "${SPATIALVID_VIDEO_ROOT}" \
   --encoder_ckpt "${STREAMVGGT_CKPT}" --r7_ckpt "${R7_CKPT}" \
   --deterministic_ckpt "${DET_CKPT}" --output_dir "${output}" \
-  --dtype "${DTYPE:-bf16}" --num_workers "${NUM_WORKERS:-2}" \
+  --dtype "${DTYPE:-bf16}" --num_workers "${CONTRACT_NUM_WORKERS:-0}" \
   --sample_steps "${CONTRACT_SAMPLE_STEPS:-1,30,60}" \
   --sample_seeds "${SAMPLE_SEEDS:-42,43,44,45}" \
   2>&1 | tee -a "${output}/logs/validation.log"
+codes=("${PIPESTATUS[@]}")
+set -e
+PYTHONPATH="${PROJECT}" "${PYTHON_BIN}" - "${output}/contract_status.json" "${codes[0]}" "${codes[1]}" <<'PY'
+import json,pathlib,sys
+from utils.flow_run_status import atomic_json
+p=pathlib.Path(sys.argv[1])
+s=json.loads(p.read_text()) if p.exists() else {'schema':'r7-sampler-contract-v1'}
+s.update(validator_exit_code=int(sys.argv[2]),tee_exit_code=int(sys.argv[3]))
+if any(int(v) for v in sys.argv[2:]):
+    s.update(status='failed',passed=False,error=s.get('error','validator/tee exited nonzero; see exit codes and last phase'))
+atomic_json(p,s)
+PY
+if [[ "${codes[0]}" -ne 0 ]]; then exit "${codes[0]}"; fi
+if [[ "${codes[1]}" -ne 0 ]]; then exit "${codes[1]}"; fi
 # Publication must succeed before the next phase starts.
 "${PYTHON_BIN}" "${PROJECT}/scripts/moxing_transfer.py" "${output}" "${remote}" --directory
 "${PYTHON_BIN}" "${PROJECT}/scripts/moxing_transfer.py" "${output}" "${mirror}" --directory

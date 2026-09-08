@@ -9,7 +9,7 @@
 从仓库根目录运行：
 
 ```bash
-FLOW_NAMESPACE=r7_sampler_validation_n1_probe_v1 \
+FLOW_NAMESPACE=r7_sampler_validation_n1_probe_v2 \
   bash scripts/scale/27_validate_r7_then_n1.sh
 ```
 
@@ -31,6 +31,8 @@ RUN_N1=0 FLOW_NAMESPACE=r7_sampler_contract_only_probe_v1 \
 ```
 
 已有 namespace 会拒绝重跑，重新验证请换名字。27 是新任务入口；中断后的单个训练 arm 使用原有 25 和显式 RESUME 恢复，不向 27 传 RESUME，也不要把旧任务改成新的训练预算再恢复。
+
+v1 实机输出留下 `running/false`，日志最后到数据读取，没有完整失败原因。v2 保留旧数据并增加阶段记录（loading_codec / waiting_for_video / encoding_video / sampling 等）、SIGTERM/SIGINT 失败记录和 shell 退出码。默认 `CONTRACT_NUM_WORKERS=0`，仅影响单视频验证；26 的 worker 设置仍独立。整个作业被强制终止时 shell 也可能来不及落盘，不能由残留 running 判断进程还活着。目录冲突检查现在在视频枚举之前执行。
 
 ## 权重与输出
 

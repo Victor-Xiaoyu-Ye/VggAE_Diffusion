@@ -36,7 +36,7 @@ class DeterministicClean(torch.nn.Module):
 
 @torch.no_grad()
 def check_endpoint(model, anchor, reference, stats, decode, seeds, steps,
-                   dtype=torch.float32, alpha=1.):
+                   dtype=torch.float32, alpha=1., progress=None):
     """Compare real sampler endpoints and decoded RGB to the direct reference."""
     expected_raw = inverse(reference, stats)
     expected_rgb = decode(expected_raw)
@@ -46,6 +46,8 @@ def check_endpoint(model, anchor, reference, stats, decode, seeds, steps,
         noise = torch.randn(reference.shape, generator=torch.Generator('cpu')
                             .manual_seed(seed)).to(reference.device)
         for count in steps:
+            if progress:
+                progress(f'sampling:seed={seed}:steps={count}:grid={alpha}')
             sampled = sample_flow(model, anchor, noise, steps=count,
                                   dtype=dtype, grid_alpha=alpha)
             last_rgb = decode(inverse(sampled, stats))

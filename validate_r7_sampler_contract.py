@@ -3,6 +3,8 @@
 import argparse
 import hashlib
 import json
+import signal
+from datetime import datetime, timezone
 from pathlib import Path
 
 import torch
@@ -26,12 +28,12 @@ def parse_args():
     parser.add_argument('--dtype', choices=('fp32', 'bf16', 'fp16'), default='bf16')
     parser.add_argument('--sample_steps', default='1,30,60')
     parser.add_argument('--sample_seeds', default='42,43,44,45')
-    parser.add_argument('--num_workers', type=int, default=2)
+    parser.add_argument('--num_workers', type=int, default=0)
     return parser.parse_args()
 
 
 @torch.no_grad()
-def run(args):
+def run(args, progress=lambda phase: None):
     steps = [int(x) for x in args.sample_steps.split(',')]
     seeds = [int(x) for x in args.sample_seeds.split(',')]
     if not steps or min(steps) < 1 or len(set(seeds)) != len(seeds):
@@ -45,17 +47,27 @@ def run(args):
     configure_backend_compatibility(backend)
     manual_seed_all(42)
     device, dtype = get_device(0), resolve_dtype(args.dtype)
+    progress('loading_codec')
     frozen = FrozenR7(args.encoder_ckpt, args.r7_ckpt, device, dtype)
-    items = pack_samples(build_loader(args.eval_csv, args.video_root,
-        frozen.config, 1, 1, args.num_workers, False), frozen, 1)
+    progress('building_loader')
+    loader = build_loader(args.eval_csv, args.video_root,
+        frozen.config, 1, 1, args.num_workers, False)
+    def observed_loader():
+        progress('waiting_for_video')
+        for batch in loader:
+            progress('encoding_video')
+            yield batch
+            progress('encoded_video')
+    items = pack_samples(observed_loader(), frozen, 1)
     if len(items) != 1:
         raise ValueError('n1 requires exactly one materialized clip')
-    del frozen.encoder, frozen.compressor, frozen.tex_encoder
+    del frozen.encoder, frozen.compressor, frozen.tex_encoder, loader
     from utils.device import empty_cache
     empty_cache()
     c, y = stack(items, device)
     cs, ys = [to_device(fit_statistics(x), device) for x in (c, y)]
     cn, yn = normalize(c, cs), normalize(y, ys)
+    progress('loading_deterministic')
     payload = torch.load(args.deterministic_ckpt, map_location='cpu', weights_only=False)
     if (payload.get('schema') != 'r7-single-target-probe-v1'
             or payload.get('mode') != 'deterministic'
@@ -75,6 +87,7 @@ def run(args):
         return frozen.decode_full(complete_prefix(c, z, frozen.config.seq_len))[:, 1:2]
 
     raw = items[0]['raw_target'][None].to(device).float().div(255).permute(0, 1, 3, 4, 2)
+    progress('decoding_reference')
     ae, direct = decode(y), decode(det_raw)
     roundtrip_error = float((inverse(yn, ys)-y).abs().max())
     anchor_error = float((inverse(cn, cs)-c).abs().max())
@@ -100,12 +113,14 @@ def run(args):
         ('oracle', ConstantClean(yn), yn),
         ('deterministic', DeterministicClean(predictor, cs, ys), det_normalized)):
         for alpha in (1., 3.):
-            rows, rgb = check_endpoint(model, cn, target, ys, decode, seeds, steps, dtype, alpha)
+            rows, rgb = check_endpoint(model, cn, target, ys, decode, seeds, steps, dtype, alpha,
+                progress=lambda phase: progress(f'{label}:{phase}'))
             report['rows'].extend(dict(arm=label, **row) for row in rows)
             previews[f'{label}_grid{alpha:g}'] = rgb[0]
     report['passed'] = (all(row['passed'] for row in report['rows'])
                         and roundtrip_error <= 1e-4 and anchor_error <= 1e-4
                         and roundtrip_rgb_error <= 2e-3)
+    progress('saving_previews')
     save_video_preview(str(Path(args.output_dir)/'samples'), 'sampler_contract',
                        previews, save_mp4=False)
     return report
@@ -119,16 +134,26 @@ def main():
     # Refuse overwrite even for direct invocation; failed jobs need a fresh namespace.
     with status.open('x', encoding='utf-8') as handle:
         json.dump(dict(schema='r7-sampler-contract-v1', passed=False, status='running'), handle)
+    state = dict(schema='r7-sampler-contract-v1', passed=False, status='running')
+    def progress(phase):
+        state.update(phase=phase, updated_utc=datetime.now(timezone.utc).isoformat())
+        atomic_json(status, state)
+        print('[contract-progress] '+json.dumps(state), flush=True)
+    def interrupted(signum, frame):
+        raise RuntimeError(f'validation interrupted by signal {signum}')
+    signal.signal(signal.SIGTERM, interrupted)
+    signal.signal(signal.SIGINT, interrupted)
     try:
-        report = run(args)
+        progress('initializing')
+        report = run(args, progress)
         report['status'] = 'completed'
         atomic_json(status, report)
         print(json.dumps(report, indent=2), flush=True)
         if not report['passed']:
             raise SystemExit('Sampler endpoint contract failed; do not start training')
     except Exception as exc:
-        atomic_json(status, dict(schema='r7-sampler-contract-v1', passed=False,
-                                 status='failed', error=repr(exc)))
+        state.update(status='failed', error=repr(exc))
+        atomic_json(status, state)
         raise
 
 

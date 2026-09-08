@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """CPU tests for raw/normalized adapter and actual Euler endpoint identities."""
 import sys
+import json
+import tempfile
+from types import SimpleNamespace
+from unittest.mock import patch
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -50,7 +54,27 @@ def main():
         pass
     else:
         raise AssertionError('empty test matrix cannot pass')
+    events = []
+    check_endpoint(ConstantClean(yn), cn, yn, ys, decode, [42], [1, 7], progress=events.append)
+    assert len(events) == 2 and 'steps=7' in events[-1]
+    import validate_r7_sampler_contract as entry
+    with tempfile.TemporaryDirectory() as directory:
+        def fail(args, progress):
+            progress('waiting_for_video')
+            raise RuntimeError('simulated read failure')
+        with patch.object(entry, 'parse_args', return_value=SimpleNamespace(output_dir=directory)), \
+             patch.object(entry, 'run', side_effect=fail), patch.object(entry.signal, 'signal'):
+            try:
+                entry.main()
+            except RuntimeError:
+                pass
+            else:
+                raise AssertionError('read failure must propagate')
+        state = json.loads((Path(directory)/'contract_status.json').read_text())
+        assert state['phase'] == 'waiting_for_video' and state['status'] == 'failed'
+        assert state['passed'] is False and 'simulated read failure' in state['error']
     print('PASS: FP32/BF16 Euler grids, raw deterministic adapter, negative gates')
+    print('PASS: per-case progress and failure records retain last phase')
 
 
 if __name__ == '__main__':

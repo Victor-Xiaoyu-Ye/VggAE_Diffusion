@@ -5,6 +5,14 @@ goals, architecture, training order, paths, or important decisions change.
 
 ## Sampler Validation Implementation (2026-09-08)
 
+First cluster attempt evidence: downloaded v1 contract status remains running /
+passed=false; encoder matched 1210/1210 keys, logs end around dataset/OBS setup.
+No completed endpoint results or definitive OOM/exception evidence. A subsequent
+launch stopped on existing-output protection. Stage 27 now defaults to a fresh
+v2 namespace, checks collision before metadata enumeration, uses zero workers
+for the contract-only loader, and records phases/signals/process exit codes.
+The underlying cause of the first incomplete attempt remains unconfirmed.
+
 The user requested implementation and launch scripts for the validation phase.
 New entry: `scripts/scale/27_validate_r7_then_n1.sh`; see
 `docs/R7_SAMPLER_VALIDATION_RUNBOOK.md`. Node 0/device 0 only. It checks actual
