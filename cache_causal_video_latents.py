@@ -71,6 +71,8 @@ def parse_args():
     parser.add_argument("--store_i0_rgb", action="store_true")
     parser.add_argument("--store_rgb", action="store_true", help="Keep full raw clip for held-out RGB evaluation")
     parser.add_argument("--independent_anchor", action="store_true", help="Encode condition from the first frame alone")
+    parser.add_argument("--window_ae_norm", choices=('legacy','framewise'), default=None,
+                        help="Explicit historical codec semantics for versioned window caches")
     parser.add_argument(
         "--allow_legacy_checkpoint", action="store_true",
         help="Allow a contract-less R7 checkpoint; strict four-prefix load remains")
@@ -182,6 +184,10 @@ def build_cache_representation(args, checkpoint, config):
         raise RuntimeError(
             "R7 checkpoint contract lacks source_dual_ae signature; provide "
             "--dual_ae_ckpt")
+    if args.window_ae_norm:
+        from utils.window_codec import runtime_contract
+        if not args.independent_anchor: raise ValueError('window cache requires independent anchor')
+        representation['window_codec_runtime'] = runtime_contract(args.window_ae_norm)
     return representation
 
 
@@ -205,6 +211,7 @@ def cache_run_config(
         "store_i0_rgb": args.store_i0_rgb,
         **({"store_rgb": True} if args.store_rgb else {}),
         **({"independent_anchor": True} if args.independent_anchor else {}),
+        **({"window_ae_norm": args.window_ae_norm} if args.window_ae_norm else {}),
         "seq_len": args.seq_len,
         "target_size": args.target_size,
         "latent_grid": args.latent_grid,
@@ -305,6 +312,9 @@ def main():
         load_r7_modules(checkpoint)
     validate_requested_config(args, config)
     representation = build_cache_representation(args, checkpoint, config)
+    if args.window_ae_norm:
+        from utils.window_codec import configure_codec
+        configure_codec(tokenizer,args.window_ae_norm)
     del decoder
 
     encoder = StreamVGGT(

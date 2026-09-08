@@ -121,7 +121,7 @@ def comparable_config(config):
         "split", "csv", "max_videos", "check_files", "num_partitions",
         "index_num_shards", "video_root", "annotation_index",
         "clips_per_video", "seq_len", "target_size", "latent_grid",
-        "max_frame_span", "clip_duration_seconds", "store_i0_rgb", "store_rgb", "independent_anchor", "dtype",
+        "max_frame_span", "clip_duration_seconds", "store_i0_rgb", "store_rgb", "independent_anchor", "window_ae_norm", "dtype",
     )
     return {key: config.get(key) for key in durable_keys}
 

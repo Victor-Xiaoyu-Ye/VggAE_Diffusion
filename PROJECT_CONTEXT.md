@@ -5,6 +5,51 @@ goals, architecture, training order, paths, or important decisions change.
 
 ## Accepted AE Baselines and Diffusion Design (2026-09-08)
 
+Repair implemented after the cluster audit: utils/window_codec.py explicitly
+selects legacy cross-time or framewise normalization using the historical
+F.group_norm computation; cache metadata now includes window_codec_runtime,
+and trainer validates/matches it before loading codec. t2v2 defaults to legacy;
+other supported variants to framewise. New v2 cache/output namespaces prevent
+silent reuse of the degraded v1 representation. No old AE weight is overwritten.
+Stage30 invokes new31 for t2v2: reconstruct the same16 RAW clips from the old
+eval cache by re-encoding BOTH normalization modes, same encoder/AE signatures.
+Default selected legacy PSNR>=23.5 and improvement>=2dB must pass before cache
+generation. Then trainer checks new-cache AE replay>=23.5 before any update.
+Actual repaired-NPU reconstruction remains pending. These thresholds are declared
+experiment admission limits, not a claim to have recovered historical24.5 yet.
+
+Generation evaluation now uses a true RGB first-frame-repeat baseline. The old
+anchor-latent-repeat is labeled diagnostic only in AE baseline outputs. Raw motion
+and RGB-copy distances are recorded explicitly. Status updates refresh consumed
+batches and clear stale eval fields; launcher start archives the prior exit record
+and writes running/exit_code=null. Current repair has9 CPU tests passing including
+legacy norm equivalence, weight-shape ambiguity, runtime mismatch rejection,
+reconstruction gate failures, complete resume and double-write/read tests.
+
+CRITICAL cluster-result audit: downloaded r7_window_t2v2_x0_diag_v1 shows
+AE step11500 reconstruction only18.72765dB over16 held-out clips, with severe
+future-frame striping/discoloration also present in generated samples. Historical
+step11500 t2v2 logs report24.53646dB over32 clips (not identical evaluation sets).
+The earlier 2026-08-06 entry below already documented the cause risk: t2v2 was
+trained with cross-time GroupNorm; commit7f1ae43 changed it to FramewiseGroupNorm
+without changing state keys. Current load_r7_modules builds the latter, so strict
+load/signatures do not detect this semantic incompatibility. Stage30's t2v2
+default is NOT quality-validated and should not be continued as-is. Recommend
+pause/preserve and same-weight/same-video historical-vs-current encode/decode
+replay, then explicit normalization-version contracts and new cache/statistics.
+No need to retrain AE before this check. Joint future generation need not require
+future-prefix causality; independent first-frame availability is the condition.
+
+Actual48-NPU/BF16 execution/resume/periodic sampling are now evidenced. Main-node
+snapshot step2480, other nodes2580/2620 reflect asynchronous file snapshots.
+EMA RGB L1 vs AE improves .29403 at50 to .11825 at2000, but AE itself is degraded.
+Logged median update time .512s, DI5058.6tokens/s/NPU, rank0 peak11.08GiB.
+All6 publisher receipts synced; old launcher exit0 belongs to the50-step pause.
+The current "copy" comparator repeats anchor LATENTS, an invalid proxy for a
+static RGB video with t2's distinct anchor/future distributions. A real RGB
+first-frame-repeat baseline was better/tied in L1 vs RAW on4 saved2000-step clips.
+Neither motion ratio vs degraded AE nor beating latent-copy proves quality.
+
 Implementation update: new full-window trainer/model/flow and stages 28/29/30
 are implemented. Current runnable instructions: `docs/WINDOW_DIFFUSION_RUNBOOK.md`.
 The "not implemented" wording in the original design record below describes

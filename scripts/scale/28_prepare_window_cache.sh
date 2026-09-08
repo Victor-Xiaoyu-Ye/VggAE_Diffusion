@@ -13,7 +13,9 @@ esac
 # New namespace states this is the user's accepted historical-AE experiment,
 # not a claim that the old geometry gate passed. Never rewrite old gate files.
 export ALLOW_DIAGNOSTIC_CACHE=1
-export R7_CACHE_VERSION="${R7_CACHE_VERSION:-r7_window_${AE_VARIANT}_diag_v1}"
+if [[ "${AE_VARIANT}" == t2v2 ]]; then DEFAULT_NORM=legacy; else DEFAULT_NORM=framewise; fi
+export WINDOW_AE_NORM="${WINDOW_AE_NORM:-${DEFAULT_NORM}}"
+export R7_CACHE_VERSION="${R7_CACHE_VERSION:-r7_window_${AE_VARIANT}_${WINDOW_AE_NORM}_diag_v2}"
 export SAMPLES_PER_TAR="${SAMPLES_PER_TAR:-256}"
 export STORE_I0=1
 export INDEPENDENT_ANCHOR=1

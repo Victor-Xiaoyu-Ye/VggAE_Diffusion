@@ -15,6 +15,8 @@ from utils.window_flow import WindowFlow
 from utils.window_training import CaptionBank, validate_resume
 from train_r7_window_diffusion import run, parse_args
 from models.causal_dual_tokenizer import CausalDualTokenizerCore
+from utils.window_codec import configure_codec, validate_runtime, runtime_contract, reconstruction_gate
+from models.causal_temporal_codec import FramewiseGroupNorm
 
 
 class WindowTests(unittest.TestCase):
@@ -55,6 +57,39 @@ class WindowTests(unittest.TestCase):
                 torch.testing.assert_close(full[:,:1],single,atol=1e-6,rtol=1e-5)
                 self.assertEqual(codec.decode(full)[0].shape,(1,9,2,2,4))
                 self.assertEqual(codec.decode(single)[0].shape,(1,1,2,2,4))
+
+    def test_legacy_normalization_and_runtime_contract(self):
+        # Exactly the old nn.GroupNorm math, including shared temporal moments.
+        m=FramewiseGroupNorm(8)
+        x=torch.randn(2,8,4,3,3); x[:,:,2:]+=5
+        current=m(x)
+        m.temporal_norm='legacy'
+        historical=m(x)
+        expected=torch.nn.functional.group_norm(x,m.num_groups,m.weight,m.bias,m.eps)
+        torch.testing.assert_close(historical,expected,atol=0,rtol=0)
+        self.assertGreater(float((current-historical).detach().abs().max()),1.)
+        other=FramewiseGroupNorm(8);other.load_state_dict(m.state_dict(),strict=True)
+        self.assertEqual(other.temporal_norm,'framewise')  # Weights cannot certify the behavior!
+        self.assertEqual(validate_runtime({'window_codec_runtime':runtime_contract('legacy')}),'legacy')
+        with self.assertRaises(ValueError):validate_runtime({})
+        codec=CausalDualTokenizerCore(4,4,3,3,2,1).eval()
+        configure_codec(codec,'legacy')
+        with torch.no_grad():
+            for name,param in codec.named_parameters():
+                if 'conv2.weight' in name:param.normal_(std=.01)
+            geo,tex=torch.randn(1,9,2,2,4),torch.randn(1,9,2,2,4)
+            z=codec.encode(geo,tex)
+            torch.testing.assert_close(z[:,:1],codec.encode(geo[:,:1],tex[:,:1]))
+            self.assertEqual(codec.decode(z)[0].shape,(1,9,2,2,4))
+
+    def test_ae_gate_and_immutable_runtime(self):
+        self.assertFalse(reconstruction_gate([18.,19.],23.5)[1])
+        self.assertTrue(reconstruction_gate([24.,25.],23.5)[1])
+        for values in ([],[float('nan')],[float('inf')]):
+            with self.assertRaises(ValueError):reconstruction_gate(values,23.5)
+        legacy={'identity':{'runtime':runtime_contract('legacy')}}
+        saved={'schema':'r7-window-trainer-v1','contract':legacy}
+        with self.assertRaises(ValueError):validate_resume(saved,{'identity':{'runtime':runtime_contract('framewise')}})
 
     def test_full_window_condition_and_gradients(self):
         for factor in (1, 2):
@@ -112,7 +147,7 @@ class WindowTests(unittest.TestCase):
             torch.save(stats,p/'stats.pt')
             base=['--manifest',str(p/'train.txt'),'--eval_manifest',str(p/'eval.txt'),
                 '--stats',str(p/'stats.pt'),'--eval_stats',str(p/'stats.pt'),'--r7_ckpt','synthetic',
-                '--no_text','--cpu_test','--dtype','fp32','--width','24','--depth','1','--heads','3',
+                '--no_text','--cpu_test','--ae_norm','framewise','--dtype','fp32','--width','24','--depth','1','--heads','3',
                 '--max_steps','4','--warmup_steps','0','--eval_every','4','--save_every','2',
                 '--eval_clips','1','--preview_clips','1','--sample_steps','2','--sample_seeds','42',
                 '--shuffle_buffer','3','--log_every','1']

@@ -14,9 +14,11 @@ case "${AE_VARIANT}" in
   *) echo "Unknown AE_VARIANT=${AE_VARIANT}" >&2; exit 2 ;;
 esac
 PREDICTION="${PREDICTION:-x0}"
-WINDOW_NAMESPACE="${WINDOW_NAMESPACE:-r7_window_${AE_VARIANT}_${PREDICTION}_diag_v1}"
+if [[ "${AE_VARIANT}" == t2v2 ]]; then DEFAULT_NORM=legacy; else DEFAULT_NORM=framewise; fi
+WINDOW_AE_NORM="${WINDOW_AE_NORM:-${DEFAULT_NORM}}"
+WINDOW_NAMESPACE="${WINDOW_NAMESPACE:-r7_window_${AE_VARIANT}_${WINDOW_AE_NORM}_${PREDICTION}_diag_v2}"
 [[ "${WINDOW_NAMESPACE}" =~ ^[a-zA-Z0-9_-]+$ ]] || { echo 'Unsafe namespace' >&2; exit 2; }
-R7_CACHE_VERSION="${R7_CACHE_VERSION:-r7_window_${AE_VARIANT}_diag_v1}"
+R7_CACHE_VERSION="${R7_CACHE_VERSION:-r7_window_${AE_VARIANT}_${WINDOW_AE_NORM}_diag_v2}"
 CACHE_ROOT="${R7_CACHE_OBS_ROOT:-${PERSISTENT_OBS_ROOT}/cache_latents/${R7_CACHE_VERSION}}"
 LOCAL_OUT="${SCALE_ROOT}/${WINDOW_NAMESPACE}"
 CURRENT_OUT="${SCALE_REMOTE_ROOT}/${WINDOW_NAMESPACE}"
@@ -37,6 +39,16 @@ fi
 # No writes until the fresh-output check has succeeded on node zero.
 run_distributed_barrier
 mkdir -p "${LOCAL_OUT}/logs/npu"
+"${PYTHON_BIN}" - "${LOCAL_OUT}" <<'PY'
+import sys,time,shutil
+from pathlib import Path
+from scripts.window_run_io import atomic
+out=Path(sys.argv[1]);old=out/'launcher_exit.json'
+if old.exists():
+    archived=out/'launcher_history'/f'exit_{time.time_ns()}.json'
+    archived.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(old,archived)
+atomic(old,dict(status='running',exit_code=None,unix_time=time.time()))
+PY
 export STAGE_LOG_FILE="${LOCAL_OUT}/logs/train_node${NODE_RANK}.log"
 export ASCEND_PROCESS_LOG_PATH="${LOCAL_OUT}/logs/npu"
 IO="${PROJECT}/scripts/window_run_io.py"
@@ -59,7 +71,7 @@ finish() {
 import sys,time
 from pathlib import Path
 from scripts.window_run_io import atomic
-atomic(Path(sys.argv[1])/'launcher_exit.json',dict(exit_code=int(sys.argv[2]),unix_time=time.time()))
+atomic(Path(sys.argv[1])/'launcher_exit.json',dict(status='exited',exit_code=int(sys.argv[2]),unix_time=time.time()))
 PY
   if ! "${PYTHON_BIN}" "${IO}" publish --source "${LOCAL_OUT}" \
       --root "${SYNC_CURRENT}" --root "${SYNC_MIRROR}"; then
@@ -118,6 +130,7 @@ STAGE_LOG_FILE="" run_torchrun "${PROJECT}/train_r7_window_diffusion.py" \
   --eval_manifest "${EVAL_MANIFEST:-${CACHE_ROOT}/eval/manifest.txt}" \
   --eval_stats "${EVAL_STATS:-${CACHE_ROOT}/eval/stats.pt}" \
   --r7_ckpt "${R7_CKPT}" --output_dir "${LOCAL_OUT}" \
+  --ae_norm "${WINDOW_AE_NORM}" --min_ae_psnr "${MIN_AE_PSNR:-23.5}" \
   --prediction "${PREDICTION}" --time_shift "${TIME_SHIFT:-1}" --loss_floor "${LOSS_FLOOR:-0.05}" \
   --width "${WIDTH:-768}" --depth "${DEPTH:-12}" --heads "${HEADS:-12}" \
   --batch_size "${BATCH_SIZE:-1}" --accum_steps "${ACCUM_STEPS:-2}" \

@@ -5,6 +5,15 @@ rules, and safe next steps for future agents.
 
 ## Priority Update (2026-09-08)
 
+CRITICAL UPDATE AFTER CLUSTER RUN: v1 t2v2 AE replay is degraded (18.73dB).
+Historical t2v2 uses cross-time GroupNorm; current framewise norm silently loads
+the same state keys but does not reproduce the AE. The fix is explicit
+window_codec_runtime, legacy mode for t2v2, new v2 cache/output namespaces, and
+stage31 same-RAW re-encoding A/B audit before stage30 caches/trains. Read the
+top of docs/WINDOW_DIFFUSION_RUNBOOK.md. Old v1 checkpoints/caches must not be
+full-resumed into v2. Real repaired-AE quality remains to be verified on NPU;
+default audit and trainer PSNR gates stop degraded AE before training updates.
+
 Implementation now available: independent `train_r7_window_diffusion.py` with
 `models/r7_window_dit.py`, stages 28/29/30 and `docs/WINDOW_DIFFUSION_RUNBOOK.md`.
 This supersedes historical launch suggestions below. It trains the full future

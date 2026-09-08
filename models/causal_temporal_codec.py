@@ -20,10 +20,15 @@ class FramewiseGroupNorm(nn.GroupNorm):
 
     def __init__(self, channels):
         super().__init__(_gn_groups(channels), channels)
+        self.temporal_norm = 'framewise'
 
     def forward(self, x):
         if x.dim() != 5:
             raise ValueError(f"expected [B,C,T,H,W], got {tuple(x.shape)}")
+        if self.temporal_norm == 'legacy':
+            return F.group_norm(x, self.num_groups, self.weight, self.bias, self.eps)
+        if self.temporal_norm != 'framewise':
+            raise ValueError(f'unknown temporal normalization: {self.temporal_norm}')
         batch, channels, frames, height, width = x.shape
         x = x.permute(0, 2, 1, 3, 4).reshape(
             batch * frames, channels, height, width)

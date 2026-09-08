@@ -152,6 +152,7 @@ EXTRA_ARGS=()
 [[ "${STORE_I0}" == 1 ]] && EXTRA_ARGS+=(--store_i0_rgb)
 [[ "${STORE_RGB:-0}" == 1 ]] && EXTRA_ARGS+=(--store_rgb)
 [[ "${INDEPENDENT_ANCHOR:-0}" == 1 ]] && EXTRA_ARGS+=(--independent_anchor)
+[[ -n "${WINDOW_AE_NORM:-}" ]] && EXTRA_ARGS+=(--window_ae_norm "${WINDOW_AE_NORM}")
 run_torchrun "${PROJECT}/cache_causal_video_latents.py" \
   --csv "${CSV}" --video_root "${SPATIALVID_VIDEO_ROOT}" \
   --encoder_ckpt "${STREAMVGGT_CKPT}" --r7_ckpt "${R7_CKPT}" \

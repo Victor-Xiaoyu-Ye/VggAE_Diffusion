@@ -6,7 +6,9 @@ source "${SCRIPT_DIR}/../spatialvid_config.sh"
 source "${SCRIPT_DIR}/../lib/modelarts.sh"
 export AE_VARIANT="${AE_VARIANT:-t2v2}"
 export PREDICTION="${PREDICTION:-x0}"
-export WINDOW_NAMESPACE="${WINDOW_NAMESPACE:-r7_window_${AE_VARIANT}_${PREDICTION}_diag_v1}"
+if [[ "${AE_VARIANT}" == t2v2 ]]; then DEFAULT_NORM=legacy; else DEFAULT_NORM=framewise; fi
+export WINDOW_AE_NORM="${WINDOW_AE_NORM:-${DEFAULT_NORM}}"
+export WINDOW_NAMESPACE="${WINDOW_NAMESPACE:-r7_window_${AE_VARIANT}_${WINDOW_AE_NORM}_${PREDICTION}_diag_v2}"
 [[ "${WINDOW_NAMESPACE}" =~ ^[a-zA-Z0-9_-]+$ ]] || { echo 'Unsafe namespace' >&2; exit 2; }
 export MASTER_PORT="${MASTER_PORT:-29880}"
 configure_modelarts_distributed
@@ -18,6 +20,10 @@ if [[ "${RESUME:-0}" == 0 && "${NODE_RANK}" == 0 ]]; then
     --root "${SCALE_MIRROR_ROOT}/${WINDOW_NAMESPACE}"
 fi
 run_distributed_barrier
+if [[ "${AE_VARIANT}" == t2v2 && "${RESUME:-0}" == 0 ]]; then
+  bash "${SCRIPT_DIR}/31_audit_window_ae.sh"
+  run_distributed_barrier
+fi
 if [[ "${PREPARE_CACHE:-1}" == 1 && "${RESUME:-0}" == 0 ]]; then
   # One partition across the entire cluster; each rank writes disjoint tar shards.
   export CACHE_NUM_PARTITIONS=1 CACHE_PARTITION_ID=0

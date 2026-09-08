@@ -63,6 +63,8 @@ def parse_args(argv=None):
     p.add_argument('--resume', default='')
     p.add_argument('--stop_after_steps', type=int, default=0, help='planned pause; scheduler budget unchanged')
     p.add_argument('--cpu_test', action='store_true', help='synthetic tests only: cannot decode real AE')
+    p.add_argument('--ae_norm',choices=('legacy','framewise'),required=True)
+    p.add_argument('--min_ae_psnr',type=float,default=23.5)
     return p.parse_args(argv)
 
 
@@ -91,11 +93,15 @@ def run(args):
     dtype = {'bf16':torch.bfloat16, 'fp16':torch.float16, 'fp32':torch.float32}[args.dtype]
     random.seed(args.seed+rank); np.random.seed(args.seed+rank); torch.manual_seed(args.seed+rank)
     out = Path(args.output_dir); out.mkdir(parents=True, exist_ok=True)
+    consumed = 0
     status = dict(schema='r7-window-run-v1', status='running', step=0, expected_steps=args.max_steps,
                   rank=rank, world_size=world, requested_dtype=args.dtype, actual_dtype=str(dtype))
     status_path = out/f'run_status_rank{rank:03d}.json'
     def progress(phase, **values):
         status.update(phase=phase, updated_unix=time.time(), **values)
+        status['consumed_batches']=consumed
+        if phase != 'evaluating':
+            for key in ('weights','clip','sample_seed'):status.pop(key,None)
         atomic_json(status_path, status)
         if rank == 0:
             atomic_json(out/'run_status.json', status)
@@ -112,8 +118,14 @@ def run(args):
             cfg = stats['representation']['config']
         else:
             cfg = validate_statistics(stats); validate_statistics(evstats)
+            from utils.window_codec import validate_runtime
+            if validate_runtime(stats['representation']) != args.ae_norm:
+                raise ValueError('requested AE normalization differs from cache runtime')
+            validate_runtime(evstats['representation'])
             if not all(s.get('config', {}).get('independent_anchor') for s in (stats, evstats)):
                 raise ValueError('window baseline requires independently encoded first-frame conditions; use stage 28')
+            if not evstats.get('config',{}).get('store_rgb'):
+                raise ValueError('held-out RAW clips are required for the reconstruction quality gate')
         if digest(stats['representation']) != digest(evstats['representation']):
             raise ValueError('train/eval representations differ')
         train_shards, eval_shards = read_shard_manifest(args.manifest), read_shard_manifest(args.eval_manifest)
@@ -129,11 +141,14 @@ def run(args):
             if sampled_file_signature(args.r7_ckpt) != stats['representation']['signatures']['r7']:
                 raise ValueError('cache was produced by a different AE checkpoint')
             actual, _, _, tokenizer, decoder, _ = load_r7_modules(artifact)
+            from utils.window_codec import configure_codec
+            configure_codec(tokenizer,args.ae_norm)
             for module in (tokenizer, decoder):
                 module.to(device).eval().requires_grad_(False)
             if rank == 0:
                 print('[AE-baseline]', json.dumps({'step':artifact.get('global_step', artifact.get('step')),
-                    'signature':sampled_file_signature(args.r7_ckpt), 'factor':factor}), flush=True)
+                    'signature':sampled_file_signature(args.r7_ckpt), 'factor':factor,
+                    'temporal_norm':args.ae_norm}), flush=True)
             del artifact
         st = {k:{n:stats[k][n].to(device).float() for n in ('mean', 'std')} for k in ('cond', 'target')}
         bank = CaptionBank(args.text_dir) if args.text_dir else None
@@ -223,12 +238,14 @@ def run(args):
                 copied = decode(cr, cr.expand_as(yr))
                 row = dict(video_id=batch['video_id'][0],
                     mean_l1_vs_ae=float((mean[:,1:]-ae[:,1:]).abs().mean()),
-                    copy_l1_vs_ae=float((copied[:,1:]-ae[:,1:]).abs().mean()))
-                videos = dict(ae=ae[0], mean=mean[0], copy=copied[0])
+                    latent_copy_l1_vs_ae=float((copied[:,1:]-ae[:,1:]).abs().mean()))
+                videos = dict(ae=ae[0], mean=mean[0], latent_copy_diagnostic=copied[0])
                 if 'rgb' in batch:
                     raw=batch['rgb'].to(device).float().div(255).permute(0,1,3,4,2)
                     row['ae_psnr_full_vs_raw'] = float(-10*torch.log10((ae-raw).square().mean().clamp_min(1e-12)))
+                    row['rgb_copy_l1_vs_raw'] = float((raw[:,:1]-raw[:,1:]).abs().mean())
                     videos['raw']=raw[0]
+                    videos['rgb_copy']=raw[0,:1].expand_as(raw[0])
                 if 'anchor_relative_l2' in batch: row['anchor_relative_l2']=batch['anchor_relative_l2'][0]
                 rows.append(row)
                 if index < args.preview_clips:
@@ -238,12 +255,20 @@ def run(args):
             if ddp:
                 gathered=[None]*world; dist.all_gather_object(gathered,rows)
                 rows=[r for part in gathered for r in part]
+            result=dict(ae_signature=identity['representation'].get('signatures'), clips=rows,
+                        temporal_norm=args.ae_norm,min_ae_psnr=args.min_ae_psnr)
+            if rows and 'ae_psnr_full_vs_raw' in rows[0]:
+                result['mean_clip_ae_psnr_full_vs_raw']=float(np.mean([r['ae_psnr_full_vs_raw'] for r in rows]))
+            if args.cpu_test:
+                result['gate_passed']=True
+            else:
+                from utils.window_codec import reconstruction_gate
+                _,result['gate_passed']=reconstruction_gate([r['ae_psnr_full_vs_raw'] for r in rows],args.min_ae_psnr)
             if rank == 0:
-                result=dict(ae_signature=identity['representation'].get('signatures'), clips=rows)
-                if rows and 'ae_psnr_full_vs_raw' in rows[0]:
-                    result['mean_clip_ae_psnr_full_vs_raw']=float(np.mean([r['ae_psnr_full_vs_raw'] for r in rows]))
                 atomic_json(out/'ae_baseline.json',result)
                 print('[AE reconstruction baseline]',json.dumps(result),flush=True)
+            if not result['gate_passed']:
+                raise RuntimeError('AE replay PSNR below declared minimum; no diffusion updates performed')
 
         @torch.no_grad()
         def evaluate():
@@ -258,9 +283,10 @@ def run(args):
                         cr, yr = cr.to(device).float(), yr.to(device).float()
                         c, y = normalize(cr, st['cond']), normalize(yr, st['target'])
                         text, valid = bank.batch(batch['video_id'], device) if bank else (None, None)
-                        ae = decode(cr, yr); copy = decode(cr, cr.expand_as(yr))
+                        ae = decode(cr, yr)
                         raw = batch.get('rgb')
                         raw = raw.to(device).float().div(255).permute(0,1,3,4,2) if raw is not None else None
+                        copy = (raw if raw is not None else ae)[:,:1].expand_as(ae)
                         for seed in seeds:
                             progress('evaluating', step=step, weights=label, clip=index, sample_seed=seed)
                             noise = torch.randn(y.shape, generator=torch.Generator().manual_seed(seed+1009*index)).to(device)
@@ -269,12 +295,14 @@ def run(args):
                             row = dict(step=step, weights=label, video_id=batch['video_id'][0], seed=seed,
                                 latent_mse=float((generated-y).square().mean()),
                                 rgb_l1_vs_ae=float((gen[:, 1:]-ae[:, 1:]).abs().mean()),
-                                copy_l1_vs_ae=float((copy[:, 1:]-ae[:, 1:]).abs().mean()),
+                                rgb_copy_l1_vs_ae=float((copy[:, 1:]-ae[:, 1:]).abs().mean()),
                                 generated_motion=float(gen.diff(dim=1).abs().mean()),
                                 ae_motion=float(ae.diff(dim=1).abs().mean()))
                             if 'anchor_relative_l2' in batch:
                                 row['anchor_relative_l2'] = batch['anchor_relative_l2'][0]
                             if raw is not None:
+                                row['rgb_copy_l1_vs_raw'] = float((copy[:,1:]-raw[:,1:]).abs().mean())
+                                row['raw_motion'] = float(raw.diff(dim=1).abs().mean())
                                 row['rgb_l1_vs_raw'] = float((gen[:, 1:]-raw[:, 1:]).abs().mean())
                                 row['ae_l1_vs_raw'] = float((ae[:, 1:]-raw[:, 1:]).abs().mean())
                             for value in (.05, .25, .5, .75, .95):
@@ -286,7 +314,7 @@ def run(args):
                             append_metrics(out/f'eval_samples_rank{rank:03d}.jsonl', row); rows.append(row)
                             if index < args.preview_clips:
                                 from utils.video_preview import save_video_preview
-                                videos = dict(ae=ae[0], copy=copy[0], generated=gen[0])
+                                videos = dict(ae=ae[0], rgb_copy=copy[0], generated=gen[0])
                                 if raw is not None: videos['raw'] = raw[0]
                                 save_video_preview(str(preview_root), f'{label}_clip{index}_seed{seed}', videos,
                                     metadata=row, fps=8, save_mp4=not args.cpu_test)
