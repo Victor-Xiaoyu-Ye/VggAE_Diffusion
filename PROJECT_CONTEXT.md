@@ -3,6 +3,90 @@
 This document is the durable handoff for VggAE-Diffusion. Keep it current when
 goals, architecture, training order, paths, or important decisions change.
 
+## Sampler Validation Implementation (2026-09-08)
+
+The user requested implementation and launch scripts for the validation phase.
+New entry: `scripts/scale/27_validate_r7_then_n1.sh`; see
+`docs/R7_SAMPLER_VALIDATION_RUNBOOK.md`. Node 0/device 0 only. It checks actual
+oracle and historical deterministic x0 through sample_flow and the frozen RGB
+decoder, then launches the existing bounded stage 26 only on contract success.
+It never promotes n16 automatically. Outputs use a fresh probe namespace and
+preserve the existing OBS/mirror contracts. Individual training-arm resume still
+uses stage 25; stage 27 rejects RESUME.
+
+Deterministic adapter explicitly restores raw anchor statistics and preserves
+the legacy FP32 predictor interface before normalizing its output into target
+statistics. Sampler contract success is not random-noise generation success.
+Legacy deterministic checkpoints lack materialized sample hashes, so current
+identity is recorded without certifying byte-identical historical inputs.
+
+CPU FP32/BF16 sampler and adapter/negative-gate tests passed using an isolated
+local dependency directory. No real codec checkpoint, NPU or OBS validation has
+yet run. This supersedes the earlier statement that all CPU tensor tests were
+unavailable, but does not establish accelerator compatibility or model quality.
+Existing flow formula/static/CLI and CPU tensor/model-gradient/sampler/EMA/metric
+regressions also passed after installing isolated local test dependencies.
+
+## Research Position Update (2026-09-08)
+
+The user asks for a differentiated project beyond VideoRAE and V-RAE and points
+to `scripts/scale` as the historical launch entry points. See
+`docs/RESEARCH_POSITION_AND_TRAINING_2026-09-08.md`. Native I2V plus geometry is
+a quality baseline, not an established research contribution. Encoder swapping,
+feature alignment, future prediction, warping, and joint RGB/geometry generation
+already have close prior work; do not claim novelty from those labels alone.
+
+Proposed, not adopted or validated: investigate preservation of measurable
+cross-frame geometric relations through compression and denoising. First test
+geometry readability in raw GFM features, R7 latents, reconstructions and samples;
+only redesign temporal pooling if the evidence identifies compression damage.
+Any future correspondence/visibility needed at inference must be predicted or
+generated, never obtained from the ground-truth future video.
+
+Local V-RAE code at a7783e8 uses noise-time logit-normal sampling and converts x0
+predictions to velocity-space loss with denominator max(u, 0.05), equivalent to
+weighted x0 MSE. This differs from current plain-x0 probes. Applying shift > 1
+to this repo's data-time convention biases the opposite physical noise regime.
+Wan noise-time embedding reversal alone does not reproduce this loss/distribution.
+Reference repository configs and paper tables also differ; pin the exact recipe.
+
+Keep current frozen-R7 oracle/deterministic-sampler/random-noise memory diagnostics
+before scaling. No new training code, NPU jobs, checkpoint replay, or measured
+method improvement was produced in this research review.
+
+## Quality-First Scope Update (2026-09-08)
+
+The user explicitly allows evaluating both native-video-VAE geometry enhancement
+and VGGT/R7 representation replacement, prioritizing generation quality. The
+former no-VAE-at-inference constraint is therefore no longer mandatory for new
+research branches. Compute remains 48 Ascend 910B NPUs; preserve ModelArts/OBS
+launch, staging, resume and output conventions. Historical checkpoints retain
+their original contracts.
+
+See `docs/QUALITY_FIRST_AUDIT_2026-09-08.md` for the local review and proposed
+experiments. The recommendation is to establish a native I2V quality baseline,
+then compare matched LoRA-only and VGGT-supervised adaptations. Model choice and
+910B compatibility are unvalidated. Keep R7 frozen for a bounded diagnostic:
+actual sampler oracle and existing deterministic g(anchor) as time-independent
+x0, before further random-noise n1 experiments. These are recommendations, not
+new trained models or a production-gate relaxation.
+
+New audit facts: 31 desktop metrics JSONL files parsed, 313 eval/gate rows,
+zero JSON parse failures. Geo112 joint step12K: PSNR24.602, LPIPS.1083,
+feature-motion cosine.8922. Old Wan7K->14K: EMA x0 MSE.6710->.3577 while
+RGB PSNR versus AE falls10.952->9.076. Geometry-motion in the codec trainer is
+compressed-feature delta cosine, not measured physical geometry. The concatenated
+geo/texture bottleneck passes through full-channel temporal convolutions, so
+the named channel split does not guarantee disentangled final latents. The
+successful deterministic predictor and failed flow differ in conditioning,
+normalization and architecture; they are not a noise-only controlled comparison.
+
+Validation: existing flow formula/static/CLI checks PASS; torch unavailable on
+this Windows audit host, so tensor/model/gradient/sampler checks explicitly SKIP.
+No accelerator jobs, model/cache changes, or checkpoint replays were performed.
+The older phase headings and literature positioning below are historical unless
+confirmed by this update and raw evidence.
+
 ## Goals
 
 - Use StreamVGGT as a frozen geometry-aware teacher/encoder.

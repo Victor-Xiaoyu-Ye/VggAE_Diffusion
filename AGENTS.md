@@ -3,6 +3,28 @@
 Read this file first. It defines the active project context, current goals,
 rules, and safe next steps for future agents.
 
+## Priority Update (2026-09-08)
+
+The user has requested runnable validation. Start with
+`docs/R7_SAMPLER_VALIDATION_RUNBOOK.md` and stage 27 for the new oracle/deterministic
+sampler checks followed by bounded n1 diagnostics. CPU checks are available;
+actual NPU/OBS and quality results remain pending.
+
+The user now explicitly permits both R7/VGGT representation replacement and
+native-video-VAE geometry-guided routes, with generation quality taking priority.
+Resources remain 48 Ascend 910B NPUs on ModelArts with the existing OBS/wrapper
+contracts. Read `docs/QUALITY_FIRST_AUDIT_2026-09-08.md` and the latest entry in
+`PROJECT_CONTEXT.md` before the historical phase/architecture below.
+Native I2V plus geometry supervision is the recommended next baseline, not a
+completed implementation or measured NPU result. Preserve all old artifacts and
+gates; no new model or production run has been promoted.
+
+For the subsequent research-position review, also read
+`docs/RESEARCH_POSITION_AND_TRAINING_2026-09-08.md` and the newest context entry.
+VideoRAE/V-RAE and geometry-video prior work narrow the novelty claim. Proposed
+geometry-relation preservation experiments remain unvalidated; do not treat the
+proposal as an adopted architecture or advertise encoder replacement as novel.
+
 ## Current Goal
 
 Build and validate geometry-aware video generation using frozen StreamVGGT

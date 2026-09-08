@@ -1,0 +1,74 @@
+#!/bin/bash
+# Node 0/device 0: real-codec contract checks, then the bounded n1 diagnostics.
+set -euo pipefail
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+source "${SCRIPT_DIR}/../spatialvid_config.sh"
+source "${SCRIPT_DIR}/../lib/spatialvid.sh"
+source "${SCRIPT_DIR}/../lib/modelarts.sh"
+configure_modelarts_distributed
+require_output_url
+if [[ "${NODE_RANK}" -ne 0 ]]; then exit 0; fi
+export PYTHONUNBUFFERED=1
+PYTHONPATH="${PROJECT}" "${PYTHON_BIN}" "${PROJECT}/scripts/test_r7_sampler_contract.py"
+export FLOW_NAMESPACE="${FLOW_NAMESPACE:-r7_sampler_validation_n1_probe_v1}"
+[[ "${FLOW_NAMESPACE}" =~ ^[a-zA-Z0-9_-]+$ && ( "${FLOW_NAMESPACE}" == *probe* || "${FLOW_NAMESPACE}" == *diag* ) ]] || {
+  echo 'Use a plain, unique FLOW_NAMESPACE containing probe or diag.' >&2; exit 2;
+}
+[[ "${RUN_N1:-1}" == 0 || "${RUN_N1:-1}" == 1 ]] || { echo 'RUN_N1 must be 0 or 1' >&2; exit 2; }
+[[ -z "${RESUME:-}" ]] || { echo 'For a single-arm resume use stage 25, not the fresh validation ladder.' >&2; exit 2; }
+export R7_NAMESPACE="${R7_NAMESPACE:-r7_t1_c192_geo112_tex80_probe_v1}"
+export R7_CKPT="${R7_CKPT:-${SCALE_ROOT}/${R7_NAMESPACE}/joint/checkpoint_best.pt}"
+ensure_local_checkpoint "${R7_CKPT}" \
+  "${R7_CKPT_URL:-${SCALE_REMOTE_ROOT}/${R7_NAMESPACE}/joint/checkpoint_best.pt}" \
+  'frozen R7' "${R7_CKPT_MIRROR_URL:-${SCALE_MIRROR_ROOT}/${R7_NAMESPACE}/joint/checkpoint_best.pt}"
+DET_NAMESPACE="${DET_NAMESPACE:-r7_vggt_quick_geo112_tex80_v2/det_k1_n1}"
+DET_CKPT="${DET_CKPT:-${SCALE_ROOT}/${DET_NAMESPACE}/checkpoint_latest.pt}"
+ensure_local_checkpoint "${DET_CKPT}" \
+  "${DET_CKPT_URL:-${SCALE_REMOTE_ROOT}/${DET_NAMESPACE}/checkpoint_latest.pt}" \
+  'historical deterministic n1' "${DET_CKPT_MIRROR_URL:-${SCALE_MIRROR_ROOT}/${DET_NAMESPACE}/checkpoint_latest.pt}"
+require_file "${STREAMVGGT_CKPT}" 'StreamVGGT encoder'
+SPATIALVID_OFT_ROOT="${SPATIALVID_OFT_ROOT:-${PERSISTENT_OBS_ROOT}/spatial-vid-hq-oft}"
+SPATIALVID_METADATA_URL="${SPATIALVID_OFT_ROOT}/data/train/SpatialVID_HQ_metadata.csv"
+SPATIALVID_VIDEO_ROOT="${SPATIALVID_OFT_ROOT}/videos/SpatialVid/HQ/videos"
+SPATIALVID_METADATA="${LOCAL_CACHE_ROOT}/metadata/SpatialVID_HQ_metadata_oft.csv"
+SPATIALVID_SPLIT_DIR="${RUN_ROOT}/metadata/spatialvid_oft_seed${SPLIT_SEED}"
+SPATIALVID_TRAIN_10K_CSV="${SPATIALVID_SPLIT_DIR}/train_10k.csv"
+SPATIALVID_EVAL_CSV="${SPATIALVID_SPLIT_DIR}/eval.csv"
+ensure_spatialvid_subset_splits
+output="${SCALE_ROOT}/${FLOW_NAMESPACE}/contract"
+remote="${SCALE_REMOTE_ROOT}/${FLOW_NAMESPACE}/contract"
+mirror="${SCALE_MIRROR_ROOT}/${FLOW_NAMESPACE}/contract"
+# Check both persistent destinations before sync can create anything.
+PYTHONPATH="${PROJECT}" "${PYTHON_BIN}" - "${output}" "${remote}" "${mirror}" <<'PY'
+import pathlib, sys
+from utils.moxing_io import is_remote_path
+for root in sys.argv[1:]:
+    path = root.rstrip('/') + '/contract_status.json'
+    if is_remote_path(path):
+        import moxing as mox
+        exists = mox.file.exists(path)
+    else:
+        exists = pathlib.Path(path).exists()
+    if exists:
+        raise SystemExit('Existing contract output; select a fresh FLOW_NAMESPACE: ' + root)
+PY
+mkdir -p "${output}/logs"
+start_output_sync "${output}" "${remote}"
+trap 'stop_output_sync "${output}" "${remote}"' EXIT
+PYTHONPATH="${PROJECT}" "${PYTHON_BIN}" -u "${PROJECT}/validate_r7_sampler_contract.py" \
+  --eval_csv "${SPATIALVID_EVAL_CSV}" --video_root "${SPATIALVID_VIDEO_ROOT}" \
+  --encoder_ckpt "${STREAMVGGT_CKPT}" --r7_ckpt "${R7_CKPT}" \
+  --deterministic_ckpt "${DET_CKPT}" --output_dir "${output}" \
+  --dtype "${DTYPE:-bf16}" --num_workers "${NUM_WORKERS:-2}" \
+  --sample_steps "${CONTRACT_SAMPLE_STEPS:-1,30,60}" \
+  --sample_seeds "${SAMPLE_SEEDS:-42,43,44,45}" \
+  2>&1 | tee -a "${output}/logs/validation.log"
+# Publication must succeed before the next phase starts.
+"${PYTHON_BIN}" "${PROJECT}/scripts/moxing_transfer.py" "${output}" "${remote}" --directory
+"${PYTHON_BIN}" "${PROJECT}/scripts/moxing_transfer.py" "${output}" "${mirror}" --directory
+stop_output_sync "${output}" "${remote}"
+trap - EXIT
+if [[ "${RUN_N1:-1}" == 1 ]]; then
+  bash "${SCRIPT_DIR}/26_run_r7_n1_diagnostics.sh"
+fi
+echo 'Validation finished. contract_status.json checks plumbing; memory_status.json checks random-noise memory. No n16 launched.'
