@@ -3,22 +3,24 @@
 ## Active diagnostic: frozen geometry-RAE flow recovery (2026-09-07)
 
 Start with `docs/R7_FLOW_RECOVERY_PLAN.md`, not the historical scale run below.
-The current geo112|tex80 single-pair deterministic probe reached the AE ceiling;
-actual single-frame flow has only had a 2-step smoke. New isolated code compares
-plain x0 against a boundary-preconditioned flow, with online/EMA, train-memory/
-held-out, and position-mean controls. This is video generation, not 4D scenes.
+The geo112|tex80 deterministic n1 reached the AE ceiling. The later plain-x0
+flow excerpt reaches 500 steps but free-sample PSNR vs AE is only 12.89dB;
+causal diagnosis and actual run completion remain unresolved. The v2 diagnostic
+compares plain x0, preconditioned, and direct velocity without retraining R7.
 
 ```bash
-bash scripts/scale/smoke_r7_flow_probe.sh
-STAGE=n1 bash scripts/scale/25_run_r7_flow_probe.sh
+# Single bounded submission: smoke/resume checks, two n1 arms, optional fixed-path fallback.
+FLOW_NAMESPACE=r7_geo112_flow_n1_diagnostics_probe_v2 \
+  bash scripts/scale/26_run_r7_n1_diagnostics.sh
 ```
 
-Do not run both commands in one uncontrolled long chain: inspect the smoke
-first. `STAGE=n1` runs two head candidates, but never automatically starts n16,
-short-video expansion, or production caching. Larger probes require an explicit
-selected head, checkpoint-bound memory status, and a text sidecar (or explicit
-uncaptioned diagnostic). Existing R7 production gates below are unchanged.
-Actual GPU/NPU/OBS execution and generation quality are not validated locally.
+Stage25 runs exactly ONE selected head; stage26 is the explicit n1-only chain.
+Every arm verifies `run_status.json` and final checkpoint. Training completion
+and memory quality are separate. Fixed-path repeats noise while covering time;
+its success cannot promote to n16. Larger probes retain signature-bound gates.
+SAMPLE_STEPS is an integer; extra comparisons use DIAGNOSTIC_SAMPLE_STEPS=60.
+Use fresh v2 namespaces; v1 checkpoints are not silently resumed under new contracts.
+Actual GPU/NPU/OBS execution of these changes is not validated locally.
 
 ## Historical production candidate
 

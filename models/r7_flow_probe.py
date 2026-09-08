@@ -5,7 +5,8 @@ import math
 import torch
 import torch.nn as nn
 
-FLOW_SCHEMA = 'r7-prefix-flow-v1'
+FLOW_SCHEMA = 'r7-prefix-flow-v2'
+PREDICTIONS = ('plain_x0', 'preconditioned', 'direct_velocity')
 
 
 def coefficients(t):
@@ -16,6 +17,8 @@ def coefficients(t):
 def network_target(data, noise, t, prediction):
     if prediction == 'plain_x0':
         return data
+    if prediction == 'direct_velocity':
+        return data.float() - noise.float()
     if prediction != 'preconditioned':
         raise ValueError('unknown prediction contract')
     te = t.float().view(-1, 1, 1, 1)
@@ -26,6 +29,10 @@ def network_target(data, noise, t, prediction):
 def clean_prediction(output, noisy, t, prediction):
     if prediction == 'plain_x0':
         return output.float()
+    if prediction == 'direct_velocity':
+        return noisy.float() + (1-t.float().view(-1, 1, 1, 1))*output.float()
+    if prediction != 'preconditioned':
+        raise ValueError('unknown prediction contract')
     te = t.float().view(-1, 1, 1, 1)
     _, _, skip, out = coefficients(te)
     return skip*noisy.float() + out*output.float()
@@ -33,8 +40,12 @@ def clean_prediction(output, noisy, t, prediction):
 
 def velocity_prediction(output, noisy, t, prediction):
     te = t.float().view(-1, 1, 1, 1)
+    if prediction == 'direct_velocity':
+        return output.float()
     if prediction == 'plain_x0':
         return (output.float()-noisy.float()) / (1-te).clamp_min(1e-6)
+    if prediction != 'preconditioned':
+        raise ValueError('unknown prediction contract')
     d, _, _, _ = coefficients(te)
     # Algebraic form avoids xhat-x cancellation and division by 1-t at t=1.
     return ((2*te-1)/d)*noisy.float() + output.float()/d.sqrt()
@@ -78,7 +89,7 @@ class R7FlowProbe(nn.Module):
         super().__init__()
         if hidden_dim % num_heads or future_frames not in (1, 2, 4, 8):
             raise ValueError('invalid heads or future prefix length')
-        if prediction not in ('plain_x0', 'preconditioned'):
+        if prediction not in PREDICTIONS:
             raise ValueError('unknown prediction contract')
         self.latent_dim, self.num_tokens = latent_dim, num_tokens
         self.future_frames, self.prediction = future_frames, prediction
@@ -121,14 +132,27 @@ class R7FlowProbe(nn.Module):
         return self.head(self.norm(x)).reshape(b, frames+1, n, d)[:, 1:].float()
 
 
+def fixed_path_inputs(reference, seed, step, time_steps):
+    """Repeat one noise endpoint, cycle data-time over [0,1), resume by step."""
+    if time_steps < 2 or step < 0:
+        raise ValueError('fixed path requires nonnegative step and at least two times')
+    noise = torch.randn(reference.shape, generator=torch.Generator(device='cpu')
+                        .manual_seed(seed), dtype=torch.float32).to(reference.device)
+    t = torch.full((reference.shape[0],), (step % time_steps) / time_steps,
+                   device=reference.device, dtype=torch.float32)
+    return noise, t
+
+
 @torch.no_grad()
 def sample_flow(model, anchor, noise, steps=30, text=None, text_mask=None,
-                dtype=torch.float32, grid_alpha=1.):
-    if steps < 1 or grid_alpha <= 0:
-        raise ValueError('positive sampling steps and grid alpha required')
-    z = noise.float().clone()
+                dtype=torch.float32, grid_alpha=1., start=0., data=None):
+    if steps < 1 or grid_alpha <= 0 or not 0 <= start < 1:
+        raise ValueError('invalid sampling grid/start')
+    if start and (data is None or data.shape != noise.shape):
+        raise ValueError('oracle start requires target with the noise shape')
+    z = ((1-start)*noise.float()+start*data.float()) if start else noise.float().clone()
     u = torch.linspace(0, 1, steps+1, device=z.device, dtype=torch.float32)
-    grid = grid_alpha*u/(1+(grid_alpha-1)*u)
+    grid = start+(1-start)*(grid_alpha*u/(1+(grid_alpha-1)*u))
     for left, right in zip(grid[:-1], grid[1:]):
         t = torch.full((z.shape[0],), float(left), device=z.device)
         with torch.autocast(device_type=z.device.type, dtype=dtype, enabled=dtype != torch.float32):

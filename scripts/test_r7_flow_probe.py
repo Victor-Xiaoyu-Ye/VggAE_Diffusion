@@ -22,6 +22,8 @@ def formula_checks():
             v = (2*t-1)/d*x+f/math.sqrt(d)
             assert abs(clean-data) < 1e-12
             assert abs(v-(data-noise)) < 1e-12
+            direct = data-noise
+            assert abs(x+(1-t)*direct-data) < 1e-12
     for name in ('train_r7_flow_probe.py', 'models/r7_flow_probe.py',
                  'utils/latent_generation_metrics.py'):
         ast.parse((ROOT/name).read_text(encoding='utf-8'))
@@ -56,7 +58,7 @@ def tensor_checks():
         print('SKIP: torch unavailable; model/gradient/sampler/normalization tests NOT run')
         return
     from models.r7_flow_probe import (R7FlowProbe, coefficients, network_target,
-        clean_prediction, velocity_prediction, sample_flow)
+        clean_prediction, velocity_prediction, sample_flow, fixed_path_inputs)
     from utils.latent_generation_metrics import (fit_statistics, normalize, inverse,
         generation_metrics, complete_prefix)
     from utils.training import EMA
@@ -73,6 +75,36 @@ def tensor_checks():
         sampled = integrate(Oracle(), c, noise, None, None, 10, 3., 1.,
                             torch.float32, start, y if start else None)
         assert torch.allclose(sampled, y, atol=1e-5)
+    class FlowOracle(torch.nn.Module):
+        def __init__(self, prediction):
+            super().__init__()
+            self.prediction = prediction
+        def forward(self, noisy, t, anchor, text=None, text_mask=None):
+            if self.prediction == 'plain_x0':
+                return y
+            te = t[:, None, None, None]
+            v = (y-noisy)/(1-te)
+            if self.prediction == 'direct_velocity':
+                return v
+            d, _, _, _ = coefficients(te)
+            return (v-(2*te-1)/d*noisy)*d.sqrt()
+    for prediction in ('plain_x0', 'preconditioned', 'direct_velocity'):
+        for start in (0., .5, .9):
+            generated = sample_flow(FlowOracle(prediction), c, noise, steps=12,
+                                    start=start, data=y if start else None)
+            assert torch.allclose(generated, y, atol=1e-5)
+    n0, t0 = fixed_path_inputs(y, 42, 0, 8)
+    n1, t1 = fixed_path_inputs(y, 42, 1, 8)
+    nr, tr = fixed_path_inputs(y, 42, 9, 8)
+    assert torch.equal(n0, n1) and torch.equal(n1, nr)
+    assert torch.equal(t1, tr) and not torch.equal(t0, t1)
+    assert not torch.equal(n0, fixed_path_inputs(y, 43, 0, 8)[0])
+    for tval in (0., .3, .9, 1.):
+        t = torch.full((2,), tval)
+        x = (1-tval)*noise+tval*y
+        direct = network_target(y, noise, t, 'direct_velocity')
+        assert torch.allclose(clean_prediction(direct, x, t, 'direct_velocity'), y, atol=1e-6)
+        assert torch.equal(velocity_prediction(direct, x, t, 'direct_velocity'), direct)
     stats = fit_statistics(y)
     assert torch.allclose(inverse(normalize(y, stats), stats), y, atol=1e-6)
     old_mean = stats['mean'].clone()
@@ -88,7 +120,7 @@ def tensor_checks():
     full = complete_prefix(c, y, 9)
     assert full.shape == (2, 9, 4, 6)
     assert torch.equal(full[:, 3:], y[:, -1:].expand(-1, 6, -1, -1))
-    for kind in ('plain_x0', 'preconditioned'):
+    for kind in ('plain_x0', 'preconditioned', 'direct_velocity'):
         model = R7FlowProbe(latent_dim=6, num_tokens=4, future_frames=2,
                             hidden_dim=24, depth=1, num_heads=3, prediction=kind)
         t = torch.tensor([.2, .8]); te = t[:, None, None, None]

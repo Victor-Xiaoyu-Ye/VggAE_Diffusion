@@ -8,6 +8,8 @@ import hashlib
 import json
 import os
 import random
+import signal
+import time
 from pathlib import Path
 
 import numpy as np
@@ -17,8 +19,9 @@ from torch.utils.tensorboard import SummaryWriter
 
 from train_single_target_probe import FrozenR7, build_loader, psnr
 from train_causal_dual_tokenizer import get_lpips, lpips_chunked
-from models.r7_flow_probe import (FLOW_SCHEMA, R7FlowProbe, clean_prediction,
-                                  network_target, sample_flow)
+from models.r7_flow_probe import (FLOW_SCHEMA, PREDICTIONS, R7FlowProbe, clean_prediction,
+                                  network_target, sample_flow, velocity_prediction, fixed_path_inputs)
+from utils.flow_run_status import FlowRunStatus, atomic_json
 from utils.latent_generation_metrics import (complete_prefix, denoising_baselines,
     fit_statistics, generation_metrics, inverse, normalize, to_device)
 from utils.device import (configure_backend_compatibility, get_device,
@@ -34,7 +37,9 @@ def parse_args(argv=None):
     p = argparse.ArgumentParser(description=__doc__)
     for flag in ('csv', 'eval_csv', 'video_root', 'encoder_ckpt', 'r7_ckpt', 'output_dir'):
         p.add_argument('--'+flag, required=True)
-    p.add_argument('--prediction', choices=('plain_x0', 'preconditioned'), default='plain_x0')
+    p.add_argument('--prediction', choices=PREDICTIONS, default='plain_x0')
+    p.add_argument('--noise_mode', choices=('random', 'fixed_path'), default='random')
+    p.add_argument('--fixed_path_steps', type=int, default=8)
     p.add_argument('--future_frames', type=int, choices=(1, 2, 4, 8), default=1)
     p.add_argument('--max_samples', type=int, choices=(1, 16, 256), default=1)
     p.add_argument('--eval_samples', type=int, default=16)
@@ -53,7 +58,12 @@ def parse_args(argv=None):
     p.add_argument('--eval_every', type=int, default=100)
     p.add_argument('--log_every', type=int, default=10)
     p.add_argument('--save_every', type=int, default=500)
-    p.add_argument('--sample_steps', type=int, default=30)
+    p.add_argument('--sample_steps', type=int, default=30, help='primary free-sampling/gate steps')
+    p.add_argument('--diagnostic_sample_steps', default='60', help='additional grids, comma-separated')
+    p.add_argument('--oracle_starts', default='0.5,0.7,0.9', help='diagnostic only, never a memory gate')
+    p.add_argument('--denoising_times', default='0,0.01,0.05,0.1,0.3,0.5,0.7,0.9,0.99')
+    p.add_argument('--fixed_path_seed', type=int, default=42)
+    p.add_argument('--diagnostic_every', type=int, default=500)
     p.add_argument('--sample_seeds', default='42,43,44,45')
     p.add_argument('--preview_clips', type=int, default=1)
     p.add_argument('--eval_lpips', action='store_true')
@@ -98,8 +108,7 @@ def scalar_mean(rows):
             if all(isinstance(r[k], (float, int)) and not isinstance(r[k], bool) for r in rows)}
 
 
-def main(argv=None):
-    args = parse_args(argv)
+def _run(args, status):
     for k in ('eval_samples', 'train_eval_samples', 'max_steps', 'batch_size',
               'eval_every', 'log_every', 'save_every', 'sample_steps'):
         if getattr(args, k) < 1:
@@ -109,9 +118,21 @@ def main(argv=None):
         raise ValueError('invalid optimizer/statistics/preview configuration')
     if not args.text_embedding_dir and not (args.max_samples == 1 or args.allow_no_text):
         raise ValueError('n16+ requires text sidecar or explicit --allow_no_text diagnostic')
+    diagnostic_steps = [int(x) for x in args.diagnostic_sample_steps.split(',') if x.strip()]
+    starts = [float(x) for x in args.oracle_starts.split(',') if x.strip()]
+    times = [float(x) for x in args.denoising_times.split(',') if x.strip()]
+    if (any(n < 1 for n in diagnostic_steps) or any(not 0 < t < 1 for t in starts)
+            or not times or any(not 0 <= t < 1 for t in times)
+            or args.diagnostic_every < 1 or args.fixed_path_steps < 2
+            or args.stop_after_steps < 0):
+        raise ValueError('invalid diagnostic/fixed-path settings')
+    if args.noise_mode == 'fixed_path' and args.max_samples != 1:
+        raise ValueError('fixed_path is a single-pair diagnostic, not a production objective')
     seeds = [int(x) for x in args.sample_seeds.split(',')]
     if not seeds or len(seeds) != len(set(seeds)):
         raise ValueError('sample seeds must be distinct')
+    if args.noise_mode == 'fixed_path' and args.fixed_path_seed in seeds:
+        raise ValueError('fixed_path sample_seeds must be unseen; the seen seed is evaluated separately')
     outdir = Path(args.output_dir)
     if not args.resume and any(outdir.glob('checkpoint*.pt')):
         raise ValueError('existing checkpoints require explicit --resume/new namespace')
@@ -124,7 +145,9 @@ def main(argv=None):
     device = get_device(0)
     random.seed(args.seed); np.random.seed(args.seed); torch.manual_seed(args.seed)
     manual_seed_all(args.seed)
+    status.update(phase='loading_codec', resolved_dtype=str(dtype))
     frozen = FrozenR7(args.encoder_ckpt, args.r7_ckpt, device, dtype)
+    status.update(phase='materializing_data')
     train_csv = args.eval_csv if args.max_samples == 1 else args.csv
     train_loader = build_loader(train_csv, args.video_root, frozen.config,
                                args.max_samples, 1, args.num_workers, False)
@@ -194,6 +217,7 @@ def main(argv=None):
     from utils.device import create_grad_scaler
     scaler = create_grad_scaler(enabled=dtype == torch.float16)
     order = list(range(len(train))); cursor = 0; step = 0; best = float('inf')
+    best_rgb = float('-inf'); best_denoising = float('inf')
     rng = random.Random(args.seed)
     immutable = {k: v for k, v in vars(args).items() if k not in
                  ('resume', 'stop_after_steps', 'output_dir', 'num_workers', 'csv', 'eval_csv', 'video_root',
@@ -209,6 +233,7 @@ def main(argv=None):
         ema.load_state_dict(ckpt['ema']); ema.to(device); ema.load_metadata(ckpt['ema_metadata'])
         scaler.load_state_dict(ckpt['scaler'])
         step, best = ckpt['step'], ckpt['best']
+        best_rgb, best_denoising = ckpt['best_rgb'], ckpt['best_denoising']
         order, cursor = ckpt['order'], ckpt['cursor']; rng.setstate(ckpt['order_rng'])
         resume_rng = ckpt['rng']
         del ckpt
@@ -223,7 +248,9 @@ def main(argv=None):
         # Frozen decoder is kept FP32 so this contract is independent of denoiser AMP.
         return frozen.decode_full(sequence)[:, 1:args.future_frames+1]
     def save(kind):
+        status.update(phase=f'saving:{kind}', step=step)
         payload = {'schema': FLOW_SCHEMA, 'step': step, 'best': best,
+            'best_rgb': best_rgb, 'best_denoising': best_denoising,
             'model': model.state_dict(), 'model_args': model_args, 'ema': ema.state_dict(),
             'ema_metadata': ema.metadata(), 'optimizer': optimizer.state_dict(),
             'scheduler': scheduler.state_dict(), 'scaler': scaler.state_dict(),
@@ -232,6 +259,7 @@ def main(argv=None):
             'contract': immutable, 'args': vars(args)}
         atomic_torch_save(payload, str(outdir/f'checkpoint_{kind}.pt'))
     def log(row):
+        print('[flow] ' + json.dumps(row, sort_keys=True), flush=True)
         append_metrics(str(outdir/'metrics.jsonl'), row)
         for k, v in row.items():
             if isinstance(v, (int, float)) and k != 'step':
@@ -240,7 +268,9 @@ def main(argv=None):
 
     @torch.no_grad()
     def evaluate():
+        status.update(phase='evaluating', step=step)
         model.eval()
+        primary_denoising = []
         subsets = [('train-memory', train[:args.train_eval_samples])]
         if evaluation:
             subsets.append(('held-out', evaluation))
@@ -266,7 +296,7 @@ def main(argv=None):
                         for seed in seeds:
                             gen = torch.Generator(device='cpu').manual_seed(seed+1009*index)
                             noises.append(torch.randn(yn.shape, generator=gen).to(device))
-                        for tval in (.1, .3, .5, .7, .9, .99):
+                        for tval in times:
                             noisy = (1-tval)*noises[0]+tval*yn
                             t = torch.full((1,), tval, device=device)
                             with torch.autocast(device_type=backend, dtype=dtype, enabled=dtype != torch.float32):
@@ -274,7 +304,10 @@ def main(argv=None):
                             hat = clean_prediction(output, noisy, t, args.prediction)
                             diagnostic = denoising_baselines(noisy, yn, tval)
                             diagnostic.update(x0_mse=float(F.mse_loss(hat, yn)),
+                                velocity_mse=float(F.mse_loss(velocity_prediction(output, noisy, t, args.prediction), yn-noises[0])),
                                 network_mse=float(F.mse_loss(output, network_target(yn, noises[0], t, args.prediction))))
+                            if split == 'train-memory' and weight == 'model':
+                                primary_denoising.append(diagnostic['x0_mse'])
                             append_metrics(str(outdir/'denoising.jsonl'), dict(step=step, weights=weight,
                                 split=split, video_id=item['video_id'], t=tval, **diagnostic))
                         first = None
@@ -306,6 +339,30 @@ def main(argv=None):
                                               'video_id': item['video_id'], 'seed': seed,
                                               'prediction': args.prediction, 'future_frames': args.future_frames},
                                     save_frames=True, save_mp4=args.future_frames > 1)
+                        # Extra grids and oracle starts never enter the free-sampling gate.
+                        if step % args.diagnostic_every == 0 or step == args.max_steps:
+                            variants = [('free_sample_steps', n, 0., noises[0], seeds[0])
+                                        for n in diagnostic_steps if n != args.sample_steps]
+                            variants += [('oracle_start', args.sample_steps, start, noises[0], seeds[0])
+                                         for start in starts]
+                            if args.noise_mode == 'fixed_path':
+                                fixed = torch.randn(yn.shape, generator=torch.Generator(device='cpu')
+                                                    .manual_seed(args.fixed_path_seed)).to(device)
+                                variants.append(('fixed_path_seen_noise', args.sample_steps, 0., fixed, args.fixed_path_seed))
+                            for kind, count, start, noise, seed in variants:
+                                gn = sample_flow(model, cn, noise, count, emb, mask, dtype,
+                                                 start=start, data=yn if start else None)
+                                rgb = decode(c, inverse(gn, st['target']))
+                                diagnostic = dict(step=step, weights=weight, split=split,
+                                    video_id=item['video_id'], kind=kind, sample_steps=count,
+                                    start=start, seed=seed, normalized_mse=float(F.mse_loss(gn, yn)),
+                                    generated_psnr_ae=psnr(rgb, ae), generated_psnr_raw=psnr(rgb, raw))
+                                append_metrics(str(outdir/'sampling_diagnostics.jsonl'), diagnostic)
+                                if index < args.preview_clips:
+                                    save_video_preview(str(outdir/'samples'),
+                                        f'step{step:07d}_{weight}_{split}_{index:03d}_{kind}_n{count}_t{start}',
+                                        {'AE_TARGET': ae[0], 'DIAGNOSTIC': rgb[0]}, metadata=diagnostic,
+                                        save_frames=False, save_mp4=False)
                     summary = scalar_mean(rows)
                     summary['worst_generated_psnr_ae'] = min(r['generated_psnr_ae'] for r in rows)
                     summary['worst_raw_psnr_gap_to_ae'] = max(r['raw_psnr_gap_to_ae'] for r in rows)
@@ -319,22 +376,25 @@ def main(argv=None):
                     log(row)
                     if split == 'train-memory' and weight == 'model':
                         primary = summary
-                        (outdir/'memory_status.pending.json').write_text(json.dumps({'schema': FLOW_SCHEMA,
+                        atomic_json(outdir/'memory_status.json', {'schema': FLOW_SCHEMA,
                             'step': step, 'clips': len(items), 'total_train_clips': len(train),
                             'r7_signature': identity['r7_signature'], 'future_frames': args.future_frames,
                             'seeds': seeds, 'prediction': args.prediction,
+                            'noise_mode': args.noise_mode, 'sample_steps': args.sample_steps,
                             'all_train_evaluated': len(items) == len(train),
-                            'passed': (len(items) == len(train)
+                            'passed': (args.noise_mode == 'random' and len(items) == len(train)
                                 and summary['worst_generated_psnr_ae'] >= 30
                                 and summary['worst_raw_psnr_gap_to_ae'] <= .5),
                             'limits': {'min_psnr_vs_ae': 30., 'max_gap_to_ae': .5},
                             'metrics': summary,
-                            'meaning': 'training memory only, not held-out video quality'}, indent=2))
-                        os.replace(outdir/'memory_status.pending.json', outdir/'memory_status.json')
+                            'meaning': 'training memory only; fixed-path diagnostic cannot promote'})
         model.train()
-        return primary['normalized_mse']
+        primary['denoising_x0_mse'] = float(np.mean(primary_denoising))
+        return primary
 
     try:
+        status.update(phase='training', step=step)
+        log_clock = time.monotonic()
         overflow_retries = 0
         stop_step = min(args.max_steps, args.stop_after_steps) if args.stop_after_steps > 0 else args.max_steps
         while step < stop_step:
@@ -347,7 +407,10 @@ def main(argv=None):
             items = [train[i] for i in selected]
             c, y = stack(items, device)
             cn, yn = normalize(c, st['anchor']), normalize(y, st['target'])
-            noise = torch.randn_like(yn); t = torch.rand(len(items), device=device)
+            if args.noise_mode == 'fixed_path':
+                noise, t = fixed_path_inputs(yn, args.fixed_path_seed, step, args.fixed_path_steps)
+            else:
+                noise = torch.randn_like(yn); t = torch.rand(len(items), device=device)
             te = t[:, None, None, None]; noisy = (1-te)*noise+te*yn
             emb, mask = text(items)
             with torch.autocast(device_type=backend, dtype=dtype, enabled=dtype != torch.float32):
@@ -375,19 +438,61 @@ def main(argv=None):
             if step == 1 or step % args.log_every == 0:
                 log({'step': step, 'train/network_loss': float(loss),
                      'train/grad_norm': float(grad), 'train/lr': optimizer.param_groups[0]['lr'],
-                     'train/prediction': args.prediction})
+                     'train/prediction': args.prediction, 'train/noise_mode': args.noise_mode,
+                     'train/t_min': float(t.min()), 'train/t_mean': float(t.mean()),
+                     'train/t_max': float(t.max()), 'train/seconds_since_log': time.monotonic()-log_clock})
+                log_clock = time.monotonic()
+                status.update(phase='training', step=step)
             if step % args.eval_every == 0 or step == args.max_steps:
-                score = evaluate()
-                if score < best:
-                    best = score; save('best')
+                scores = evaluate()
+                if scores['normalized_mse'] < best:
+                    best = scores['normalized_mse']; save('best')
+                if scores['worst_generated_psnr_ae'] > best_rgb:
+                    best_rgb = scores['worst_generated_psnr_ae']; save('best_sample_rgb')
+                if scores['denoising_x0_mse'] < best_denoising:
+                    best_denoising = scores['denoising_x0_mse']; save('best_denoising')
                 save('latest')
             if step % args.save_every == 0:
                 save(f'step{step:07d}'); save('latest')
         if step == args.max_steps:
             save('final')
         save('latest')
+        memory_path = outdir/'memory_status.json'
+        memory = json.loads(memory_path.read_text(encoding='utf-8')) if memory_path.exists() else {}
+        status.update(status='completed' if step == args.max_steps else 'paused',
+            phase='finished', step=step,
+            checkpoint='checkpoint_final.pt' if step == args.max_steps else 'checkpoint_latest.pt',
+            quality_gate=('passed' if memory.get('passed') is True else 'failed')
+                         if memory.get('step') == step else 'not_evaluated')
     finally:
         writer.close()
+
+
+def main(argv=None):
+    args = parse_args(argv)
+    outdir = Path(args.output_dir)
+    # Never overwrite an earlier run's status when a new invocation is rejected.
+    if not args.resume and (any(outdir.glob('checkpoint*.pt')) or
+            any((outdir/name).exists() for name in ('metrics.jsonl', 'run_status.json'))):
+        raise ValueError('existing run requires explicit resume or a new namespace')
+    status = FlowRunStatus(args.output_dir, args)
+    previous_handlers = {}
+    def interrupted(signum, frame):
+        raise InterruptedError(f'received signal {signum}; use last committed checkpoint')
+    for signum in (signal.SIGTERM, signal.SIGINT):
+        previous_handlers[signum] = signal.signal(signum, interrupted)
+    try:
+        status.update()
+        _run(args, status)
+    except BaseException as exc:
+        try:
+            status.update(status='failed', error=repr(exc))
+        except Exception as report_error:
+            print(f'[flow-status] failed to record error: {report_error}', flush=True)
+        raise
+    finally:
+        for signum, handler in previous_handlers.items():
+            signal.signal(signum, handler)
 
 
 if __name__ == '__main__':

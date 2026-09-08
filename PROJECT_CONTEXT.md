@@ -51,6 +51,28 @@ Plain-x0 and preconditioned heads are separate controlled arms; train-memory and
 held-out, online and EMA, raw and position-centered metrics remain separate.
 Existing codecs/caches/checkpoints and production gates are not changed.
 
+### Evening n1 follow-up (2026-09-07)
+
+The newer `r7_geo112_flow_n1_probe_v1/n1_plain_x0_n1_f1` excerpt reaches step500
+online eval: generated-vs-AE PSNR12.893, RAW12.823 vs AE21.836, normalized
+sample MSE1.333. Denoising improves (t=.1/.5/.9 MSE .223/.053/.041), but free
+sampling has not memorized the pair. This gap does not prove a unique cause
+such as off-manifold drift, x0 amplification, or an unsuitable R7 representation.
+The user reports platform success, but the excerpt lacks final/step500-EMA
+completion; do not guess MAX_STEPS or infer a kill from an uploaded temp file.
+The .tmp-* MoXing warning comes from background watch retries, not trainer exit.
+
+Next implementation uses `r7-prefix-flow-v2` and a fresh output namespace:
+plain x0 / preconditioned / direct velocity; fixed-path means one noise endpoint
+with cycling data-time, not one fixed (noise,t) pair. Seen noise, unseen noise,
+and oracle-start rollouts are separate diagnostics, never interchangeable gates.
+`run_status.json` distinguishes running/paused/completed/failed, logs print time
+buckets and phase progress, and the wrapper verifies actual budget and final
+checkpoint before success. Local output sync snapshots skip intermediates and
+pin finalized checkpoint inodes; no original temp files or outputs are deleted.
+Stage26 runs smoke plus preconditioned/direct-velocity n1, with fixed-path
+fallback only if neither passes. It never automatically starts n16.
+
 ## Historical Phase: Reconstruction-First (H200)
 
 Generation experiments are paused. The compact latent currently reconstructs

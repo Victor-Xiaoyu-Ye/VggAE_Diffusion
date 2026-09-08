@@ -10,32 +10,42 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Corporate MoXing/OBS SDK can emit noisy logging rollover errors when several
-# copy_parallel workers initialize the same rotating OBS log. The transfer
-# result is still surfaced through exceptions from copy_file/copy_directory.
+# copy_parallel workers initialize the same rotating OBS log. Actual failures
+# are still raised by copy_file/copy_directory and retried by --watch only.
 logging.raiseExceptions = False
-for logger_name in ("obs", "moxing", "esdk-obs-python"):
+for logger_name in ('obs', 'moxing', 'esdk-obs-python'):
     logging.getLogger(logger_name).setLevel(logging.ERROR)
 
-from utils.moxing_io import copy_directory, copy_file
+from utils.moxing_io import copy_directory, copy_file, is_remote_path
+from utils.output_snapshot import build_snapshot, cleanup_snapshot
 
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("source")
-    parser.add_argument("destination")
-    parser.add_argument("--directory", action="store_true")
-    parser.add_argument("--watch", action="store_true")
-    parser.add_argument("--interval", type=int, default=300)
+    parser.add_argument('source')
+    parser.add_argument('destination')
+    parser.add_argument('--directory', action='store_true')
+    parser.add_argument('--watch', action='store_true')
+    parser.add_argument('--interval', type=int, default=300)
     return parser.parse_args()
 
 
 def transfer(args):
     if args.directory:
-        if os.path.isdir(args.source):
+        if is_remote_path(args.source):
             copy_directory(args.source, args.destination)
-    elif os.path.exists(args.source) or args.source.startswith(
-            ("obs://", "s3://")):
+        elif os.path.isdir(args.source):
+            snapshot, _ = build_snapshot(args.source)
+            try:
+                copy_directory(snapshot, args.destination)
+            finally:
+                cleanup_snapshot(snapshot)
+        elif not args.watch:
+            raise FileNotFoundError(args.source)
+    elif os.path.exists(args.source) or is_remote_path(args.source):
         copy_file(args.source, args.destination)
+    elif not args.watch:
+        raise FileNotFoundError(args.source)
 
 
 def main():
@@ -47,9 +57,9 @@ def main():
         try:
             transfer(args)
         except Exception as exc:
-            print(f"[WARN] MoXing sync failed: {exc}", flush=True)
+            print(f'[WARN] MoXing sync failed: {exc}', flush=True)
         time.sleep(max(args.interval, 10))
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
