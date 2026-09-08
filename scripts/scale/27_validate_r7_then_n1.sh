@@ -1,5 +1,5 @@
 #!/bin/bash
-# Node 0/device 0: real-codec contract checks, then the bounded n1 diagnostics.
+# Legacy filename retained: read-only sampler checks ONLY, never a trainer.
 set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source "${SCRIPT_DIR}/../spatialvid_config.sh"
@@ -14,8 +14,10 @@ export FLOW_NAMESPACE="${FLOW_NAMESPACE:-r7_sampler_validation_n1_probe_v2}"
 [[ "${FLOW_NAMESPACE}" =~ ^[a-zA-Z0-9_-]+$ && ( "${FLOW_NAMESPACE}" == *probe* || "${FLOW_NAMESPACE}" == *diag* ) ]] || {
   echo 'Use a plain, unique FLOW_NAMESPACE containing probe or diag.' >&2; exit 2;
 }
-[[ "${RUN_N1:-1}" == 0 || "${RUN_N1:-1}" == 1 ]] || { echo 'RUN_N1 must be 0 or 1' >&2; exit 2; }
-[[ -z "${RESUME:-}" ]] || { echo 'For a single-arm resume use stage 25, not the fresh validation ladder.' >&2; exit 2; }
+[[ "${RUN_N1:-0}" == 0 ]] || {
+  echo 'Stage 27 is validation only. Automatic stage 25/26 training has been withdrawn.' >&2; exit 2;
+}
+[[ -z "${RESUME:-}" ]] || { echo 'Read-only validation does not accept training RESUME.' >&2; exit 2; }
 export R7_NAMESPACE="${R7_NAMESPACE:-r7_t1_c192_geo112_tex80_probe_v1}"
 export R7_CKPT="${R7_CKPT:-${SCALE_ROOT}/${R7_NAMESPACE}/joint/checkpoint_best.pt}"
 ensure_local_checkpoint "${R7_CKPT}" \
@@ -83,7 +85,4 @@ if [[ "${codes[1]}" -ne 0 ]]; then exit "${codes[1]}"; fi
 "${PYTHON_BIN}" "${PROJECT}/scripts/moxing_transfer.py" "${output}" "${mirror}" --directory
 stop_output_sync "${output}" "${remote}"
 trap - EXIT
-if [[ "${RUN_N1:-1}" == 1 ]]; then
-  bash "${SCRIPT_DIR}/26_run_r7_n1_diagnostics.sh"
-fi
-echo 'Validation finished. contract_status.json checks plumbing; memory_status.json checks random-noise memory. No n16 launched.'
+echo 'Read-only validation finished. contract_status.json checks sampler plumbing only. No diffusion training launched.'

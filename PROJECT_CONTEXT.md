@@ -5,6 +5,16 @@ goals, architecture, training order, paths, or important decisions change.
 
 ## Sampler Validation Implementation (2026-09-08)
 
+USER CORRECTION / superseding decision: 25/26 are unfinished diagnostic work,
+not a completed or appropriate training base for this video diffusion project.
+The automatic 27->26 chain is withdrawn. Stage 27 is read-only and RUN_N1=1 now
+fails explicitly. Its validator no longer imports train_r7_flow_probe. Tested
+sampler algebra can remain a selective reference; none of this promotes the
+384x4 probe architecture, n1 ladder or objectives into the research baseline.
+Next trainer design must separate V-RAE generative modeling contracts from
+repository data/cache/DDP/OBS infrastructure and verify their historical versions;
+script comments saying production are not evidence of successful training.
+
 First cluster attempt evidence: downloaded v1 contract status remains running /
 passed=false; encoder matched 1210/1210 keys, logs end around dataset/OBS setup.
 No completed endpoint results or definitive OOM/exception evidence. A subsequent

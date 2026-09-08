@@ -1,5 +1,7 @@
 # R7 sampler 验证启动说明
 
+**用户纠正后的定位：27 仅做只读接线检查，不是 diffusion 训练入口。25/26 是未完成诊断，不能作为本项目训练基线。此前 27→26 自动串联已撤销；`RUN_N1=1` 会明确报错。** 文件名为兼容已下发命令而暂时保留，不代表仍然训练 n1。本说明不能代替新的训练方案。
+
 入口：`scripts/scale/27_validate_r7_then_n1.sh`。在现有 ModelArts 环境准备、代码同步和 StreamVGGT 权重 staging 完成后，替换原先的最后一条 scale 启动命令即可。无新增集群依赖；本机用于 CPU 测试的临时依赖不应复制进集群环境。
 
 随附 `r7_sampler_validation_bundle.zip` 是增量包，解压到当前仓库根目录，保留 `scripts/`、`utils/`、`docs/` 层级；需要当前分支已有的 25/26 阶段及其依赖（审查基线 HEAD `c4459d2`），不是独立训练仓库。本地项目已经写入这些文件。
@@ -21,7 +23,7 @@ FLOW_NAMESPACE=r7_sampler_validation_n1_probe_v2 \
 2. 读取已训练 t1 geo112/tex80 AE 与历史确定性 n1 checkpoint。
 3. 在 eval.csv 的第一个固定 clip 上重新编码；分别拟合 anchor/target 的训练统计量。
 4. 检查归一化往返、oracle x0、确定性模型接入真实 sampler；使用 4 seeds、1/30/60 步、uniform/shift=3 两种网格；按与当前 flow 相同的 prefix-repeat-to-nine 方式解码 RGB。
-5. 全部通过且结果成功发布后，启动已有 26：smoke/resume smoke、preconditioned 与 direct_velocity 各 2000 步；必要时运行 fixed-path 诊断。不会自动启动 n16。
+5. 发布只读检查结果并结束。不会启动 25、26 或任何训练。
 
 只验证链路，不训练：
 
@@ -30,7 +32,7 @@ RUN_N1=0 FLOW_NAMESPACE=r7_sampler_contract_only_probe_v1 \
   bash scripts/scale/27_validate_r7_then_n1.sh
 ```
 
-已有 namespace 会拒绝重跑，重新验证请换名字。27 是新任务入口；中断后的单个训练 arm 使用原有 25 和显式 RESUME 恢复，不向 27 传 RESUME，也不要把旧任务改成新的训练预算再恢复。
+已有 namespace 会拒绝重跑，重新验证请换名字。27 不接受训练 RESUME。不要将这个接线检查当作已建立的新 diffusion 训练方案。
 
 v1 实机输出留下 `running/false`，日志最后到数据读取，没有完整失败原因。v2 保留旧数据并增加阶段记录（loading_codec / waiting_for_video / encoding_video / sampling 等）、SIGTERM/SIGINT 失败记录和 shell 退出码。默认 `CONTRACT_NUM_WORKERS=0`，仅影响单视频验证；26 的 worker 设置仍独立。整个作业被强制终止时 shell 也可能来不及落盘，不能由残留 running 判断进程还活着。目录冲突检查现在在视频枚举之前执行。
 
@@ -47,9 +49,6 @@ v1 实机输出留下 `running/false`，日志最后到数据读取，没有完�
 - `contract/contract_status.json`：sampler/归一化/解码一致性，含当前 clip ID、窗口、物化 hash、权重签名和逐 seed/grid 误差。
 - `contract/samples/`：RAW、AE、det direct、oracle sampler、det sampler PNG 对照。
 - `contract/logs/`：验证日志。
-- `n1_preconditioned_n1_f1/{run_status,memory_status}.json`。
-- `n1_direct_velocity_n1_f1/{run_status,memory_status}.json`。
-- 对应 arm 的 `samples/`、`metrics.jsonl`、`denoising.jsonl` 和 `sampling_diagnostics.jsonl`。
 
 ## 如何读结果
 
@@ -59,7 +58,7 @@ v1 实机输出留下 `running/false`，日志最后到数据读取，没有完�
 
 `run_status` 表示训练预算/保存是否完成；`memory_status` 才表示随机噪声记忆质量。26 在质量未通过时仍可正常完成并输出诊断，这不是升级许可。fixed-path 成功也不等于新噪声成功。
 
-若 contract 失败，任务停止，不启动 n1。若 n1 失败，先看 online/EMA、各时间段误差、采样步数敏感性和生成图，再决定训练目标对照；不要直接扩到 n16、多帧或重训 AE。
+若 contract 失败，只说明需要检查接线；若通过，也不能据此启动或认可旧 25/26 训练方案。新视频 diffusion 需要独立的模型、目标、数据与分布式训练设计。
 
 ## 本地验证范围
 

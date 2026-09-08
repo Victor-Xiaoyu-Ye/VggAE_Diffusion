@@ -33,6 +33,25 @@ def parse_args():
 
 
 @torch.no_grad()
+def materialize_pair(loader, frozen):
+    """Standalone read-only input contract; no dependency on probe trainers."""
+    items = []
+    device = next(frozen.decoder.parameters()).device
+    for batch in loader:
+        if batch['decode_replacements']:
+            raise RuntimeError('replacement video invalidates diagnostic identity')
+        rgb = batch['frames'].to(device)
+        latent = frozen.encode(rgb).float().cpu()
+        for i, vid in enumerate(batch['video_id']):
+            items.append(dict(video_id=vid, window_index=int(batch['window_index'][i]),
+                anchor=latent[i, :1], target=latent[i, 1:2], full_latent=latent[i],
+                raw_target=(rgb[i, 1:2].clamp(0, 1)*255).round().byte().cpu()))
+    if len(items) != 1:
+        raise ValueError('read-only contract check requires exactly one clip')
+    return items
+
+
+@torch.no_grad()
 def run(args, progress=lambda phase: None):
     steps = [int(x) for x in args.sample_steps.split(',')]
     seeds = [int(x) for x in args.sample_seeds.split(',')]
@@ -43,7 +62,6 @@ def run(args, progress=lambda phase: None):
         raise RuntimeError('Real codec validation requires GPU/NPU; use the CPU unit tests separately')
     # Keep --help independent of video/encoder optional dependencies.
     from train_single_target_probe import FrozenR7, build_loader, psnr
-    from train_r7_flow_probe import pack_samples, stack
     configure_backend_compatibility(backend)
     manual_seed_all(42)
     device, dtype = get_device(0), resolve_dtype(args.dtype)
@@ -58,13 +76,13 @@ def run(args, progress=lambda phase: None):
             progress('encoding_video')
             yield batch
             progress('encoded_video')
-    items = pack_samples(observed_loader(), frozen, 1)
+    items = materialize_pair(observed_loader(), frozen)
     if len(items) != 1:
         raise ValueError('n1 requires exactly one materialized clip')
     del frozen.encoder, frozen.compressor, frozen.tex_encoder, loader
     from utils.device import empty_cache
     empty_cache()
-    c, y = stack(items, device)
+    c, y = (items[0][key][None].to(device) for key in ('anchor', 'target'))
     cs, ys = [to_device(fit_statistics(x), device) for x in (c, y)]
     cn, yn = normalize(c, cs), normalize(y, ys)
     progress('loading_deterministic')

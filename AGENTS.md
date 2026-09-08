@@ -5,6 +5,13 @@ rules, and safe next steps for future agents.
 
 ## Priority Update (2026-09-08)
 
+USER CORRECTION: stages 25/26 are unfinished diagnostic scripts, not a validated
+training baseline for the intended video diffusion. Do not launch or extend them
+as the default research trainer. Stage 27 now performs read-only sampler checks
+only and rejects RUN_N1=1. Selectively reuse audited formulas, not their model,
+single-pair ladder or training objectives as a whole. Earlier 27->26 guidance is
+withdrawn. A new training entry must explicitly justify its source components.
+
 The user has requested runnable validation. Start with
 `docs/R7_SAMPLER_VALIDATION_RUNBOOK.md` and stage 27 for the new oracle/deterministic
 sampler checks followed by bounded n1 diagnostics. CPU checks are available;

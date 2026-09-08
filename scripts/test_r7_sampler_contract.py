@@ -15,6 +15,10 @@ from models.single_target_generator import SingleTargetGenerator
 
 
 def main():
+    root = Path(__file__).resolve().parents[1]
+    launcher = (root/'scripts/scale/27_validate_r7_then_n1.sh').read_text()
+    assert 'bash "${SCRIPT_DIR}/26_run_r7_n1_diagnostics.sh"' not in launcher
+    assert 'from train_r7_flow_probe import' not in (root/'validate_r7_sampler_contract.py').read_text()
     torch.manual_seed(21)
     c = torch.randn(1, 1, 4, 6)*3+17
     y = torch.randn_like(c)*.7-9
@@ -58,6 +62,22 @@ def main():
     check_endpoint(ConstantClean(yn), cn, yn, ys, decode, [42], [1, 7], progress=events.append)
     assert len(events) == 2 and 'steps=7' in events[-1]
     import validate_r7_sampler_contract as entry
+    class Codec:
+        decoder = torch.nn.Linear(1, 1)
+        def encode(self, frames):
+            return torch.arange(1*9*4*6, dtype=torch.float32).reshape(1, 9, 4, 6)
+    batch = dict(decode_replacements=[], frames=torch.zeros(1, 9, 3, 2, 2),
+                 video_id=['clip'], window_index=[7])
+    item = entry.materialize_pair([batch], Codec())[0]
+    assert item['window_index'] == 7 and item['target'].shape == (1, 4, 6)
+    assert torch.equal(item['target'][0], item['full_latent'][1])
+    batch['decode_replacements'] = ['replacement']
+    try:
+        entry.materialize_pair([batch], Codec())
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError('replacement clip must be rejected')
     with tempfile.TemporaryDirectory() as directory:
         def fail(args, progress):
             progress('waiting_for_video')
