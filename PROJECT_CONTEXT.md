@@ -3,6 +3,78 @@
 This document is the durable handoff for VggAE-Diffusion. Keep it current when
 goals, architecture, training order, paths, or important decisions change.
 
+## Accepted AE Baselines and Diffusion Design (2026-09-08)
+
+Implementation update: new full-window trainer/model/flow and stages 28/29/30
+are implemented. Current runnable instructions: `docs/WINDOW_DIFFUSION_RUNBOOK.md`.
+The "not implemented" wording in the original design record below describes
+that earlier review, not the current code. No NPU or quality validation exists yet.
+
+New contracts: independent single-frame condition cache (stored comparison to
+full-window anchor), full future joint generation, FP32 reversible normalization,
+explicit x0/velocity noise-time semantics, BF16 honored without legacy FP16
+fallback, same-rank-initialized EMA before DDP, fixed-worker deterministic data
+replay plus all optimizer/scaler/scheduler/RNG state. Immutable resume arguments
+include world size/data/objective/precision/eval recipe. First-frame-only I2V is
+an explicit NO_TEXT=1 arm; caption arms reject missing IDs rather than silently
+using an empty prompt. UMT5 runtime uses bounded shard LRU instead of a complete
+embedding bank per rank.
+
+Real AE reconstruction is replayed before updates; actual checkpoint signature
+and step are logged. Evaluation is distributed by clip and aggregated on rank0;
+other-node previews live under workers/nodeN in both destinations. Periodic
+checkpoints precede RGB evaluation. `best_reconstruction` is a distance-to-AE
+selector, not a generative-quality selector. Training throughput uses synchronized
+slowest-rank step timing and reports future tokens/s/NPU plus global clips/s.
+
+User explicitly required double writes/reads and intermediates. New incremental
+snapshot publisher independently attempts current output + persistent mirror,
+retries failed files, excludes partial checkpoints, persists publication status,
+and makes final upload failures visible as nonzero exit. Read fallback stages to
+a partial file then renames. This is copy-completion evidence, not remote checksum
+validation. Cache itself remains the durable shared input dataset. Fresh-run
+guards occur before expensive preparation; resume is explicit, never a silent
+fresh start. Historical files and cache namespaces remain intact.
+
+Two required infrastructure fixes: factor>1 temporal codec now returns the anchor
+for a one-frame encode/decode instead of convolving an empty tail (no state-dict
+or multi-frame path change); distributed_barrier explicitly imports device
+registration before setup_ddp so torch_npu/HCCL detection is available. Codec
+single/full first-frame equality tested at factors1/2/4 with nonzero residuals.
+
+Local tests exercise full-window gradients/conditioning, FP32/BF16 oracle Euler
+and Heun, exact CPU pause/resume including EMA/Adam, and injected two-root I/O
+failures. Actual 48x910B forward/backward, HCCL, OBS, AE PSNR and generated videos
+remain cluster work. Default 6000 steps is an experiment budget, not quality proof.
+
+Latest user instruction: treat the several ~25 PSNR AEs as reconstruction
+baselines, then establish diffusion for this project's own setting. V-RAE is
+an idea source only; 25/26 remain unfinished diagnostics, not the trainer base.
+Current consolidated design: `docs/AE_BASELINES_AND_DIFFUSION_DESIGN_2026-09-08.md`.
+Earlier native-I2V-first ranking and 27->26 launch recommendations are superseded.
+
+Re-read AE logs (13 stage records including old unprefixed psnr fields). Peak
+rows: t1 equal-split joint step6000 PSNR24.6408/LPIPS.11010; t1 geo112 joint
+step11000 PSNR24.6200/.10825; t2 v2 joint step10500 PSNR24.5708/.11285; t2 v3
+joint step10500 PSNR24.2426/.12356. First three are primary reconstruction
+baselines; t2 v3 is a useful geometry-proxy/reconstruction tradeoff control.
+These are log-row peaks, not replayed checkpoint_best scores. Old t1 equal-split
+boundary_ratio/composite values are invalid for factor1 and may affect historical
+best selection. Confirm actual checkpoint step/metrics and matched evaluation.
+
+Proposed diffusion design (not implemented): frozen AE, first-frame/caption
+conditioning, full-window future generation (8 t1 or 4 t2 latent steps -> 8 RGB
+future frames), joint C192 target, distinct anchor memory, a new conditional
+spatiotemporal DiT, explicit prediction/loss/sampler contracts. Initially compare
+t2 v2 and t1 geo112 under one common recipe, report sample-exposure and NPU-hour
+tradeoffs. No automatic promotion of compressed-feature cosine to physical
+geometry, no assumption that a random Wan interface preserves its pretrained
+prior, no claim that RAE dimension heuristics alone explain the old failures.
+
+This turn audited logs/code/history and primary literature; no new training,
+AE replay or accelerator benchmark was performed. Exact AE artifact identity,
+latent statistics and the new trainer remain outstanding implementation work.
+
 ## Sampler Validation Implementation (2026-09-08)
 
 USER CORRECTION / superseding decision: 25/26 are unfinished diagnostic work,

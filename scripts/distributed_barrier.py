@@ -14,10 +14,12 @@ if PROJECT_ROOT not in sys.path:
 
 import torch.distributed as dist
 
+from utils.device import get_device_name
 from utils.distributed import setup_ddp
 
 
 def main():
+    get_device_name()  # Import/register torch_npu before selecting HCCL.
     use_ddp, _, _, _ = setup_ddp()
     if use_ddp:
         dist.barrier()

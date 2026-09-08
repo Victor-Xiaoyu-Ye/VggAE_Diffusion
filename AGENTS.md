@@ -5,6 +5,22 @@ rules, and safe next steps for future agents.
 
 ## Priority Update (2026-09-08)
 
+Implementation now available: independent `train_r7_window_diffusion.py` with
+`models/r7_window_dit.py`, stages 28/29/30 and `docs/WINDOW_DIFFUSION_RUNBOOK.md`.
+This supersedes historical launch suggestions below. It trains the full future
+window from a frozen historical AE, starting with t2v2 / t1geo112 controls.
+Stage 30 is the current entry, NOT 25/26/27. CPU synthetic resume and incremental
+two-destination I/O tests passed; real NPU/OBS/AE replay/quality remain untested.
+Respect user's latest requirement: dual reads/writes, intermediate artifacts,
+DI throughput, full training-state resume. Do not claim reasonable videos yet.
+
+Latest user direction: use the already trained ~25 PSNR AE variants as frozen
+reconstruction baselines and design diffusion for this project's setting. Read
+`docs/AE_BASELINES_AND_DIFFUSION_DESIGN_2026-09-08.md` first. V-RAE is only an
+idea reference, not a code base or task contract. Neither continued AE redesign
+nor a 25/26 n1 ladder is the default next task. Peak-PSNR log rows are not proof
+of checkpoint_best identity; verify actual artifacts before cache/training.
+
 USER CORRECTION: stages 25/26 are unfinished diagnostic scripts, not a validated
 training baseline for the intended video diffusion. Do not launch or extend them
 as the default research trainer. Stage 27 now performs read-only sampler checks
@@ -12,9 +28,9 @@ only and rejects RUN_N1=1. Selectively reuse audited formulas, not their model,
 single-pair ladder or training objectives as a whole. Earlier 27->26 guidance is
 withdrawn. A new training entry must explicitly justify its source components.
 
-The user has requested runnable validation. Start with
+Historical diagnostic phase (not the current training launch):
 `docs/R7_SAMPLER_VALIDATION_RUNBOOK.md` and stage 27 for the new oracle/deterministic
-sampler checks followed by bounded n1 diagnostics. CPU checks are available;
+sampler checks. CPU checks are available;
 actual NPU/OBS and quality results remain pending.
 
 The user now explicitly permits both R7/VGGT representation replacement and

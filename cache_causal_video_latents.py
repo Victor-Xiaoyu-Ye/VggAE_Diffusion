@@ -69,6 +69,8 @@ def parse_args():
     parser.add_argument("--clips_per_video", type=int, default=1)
     parser.add_argument("--resume_cache", action="store_true")
     parser.add_argument("--store_i0_rgb", action="store_true")
+    parser.add_argument("--store_rgb", action="store_true", help="Keep full raw clip for held-out RGB evaluation")
+    parser.add_argument("--independent_anchor", action="store_true", help="Encode condition from the first frame alone")
     parser.add_argument(
         "--allow_legacy_checkpoint", action="store_true",
         help="Allow a contract-less R7 checkpoint; strict four-prefix load remains")
@@ -201,6 +203,8 @@ def cache_run_config(
         "samples_per_tar": args.samples_per_tar,
         "clips_per_video": args.clips_per_video,
         "store_i0_rgb": args.store_i0_rgb,
+        **({"store_rgb": True} if args.store_rgb else {}),
+        **({"independent_anchor": True} if args.independent_anchor else {}),
         "seq_len": args.seq_len,
         "target_size": args.target_size,
         "latent_grid": args.latent_grid,
@@ -479,6 +483,12 @@ def main():
                     config.latent_grid ** 2, config.latent_dim)
                 cond = flat[:, :1]
                 target = flat[:, 1:]
+                anchor_relative_l2 = None
+                if args.independent_anchor:
+                    geo0, tex0 = encode_dual(encoder, compressor, tex_encoder, frames[:, :1], encoder_dtype)
+                    independent = tokenizer.encode(geo0, tex0).reshape_as(cond)
+                    anchor_relative_l2 = float((independent-cond).float().norm()/cond.float().norm().clamp_min(1e-8))
+                    cond = independent
                 if tuple(cond.shape[1:]) != (
                         1, config.latent_grid ** 2, config.latent_dim):
                     raise RuntimeError(
@@ -508,6 +518,11 @@ def main():
                     cached["i0_rgb"] = (
                         frames[0, 0].float().clamp(0, 1).mul(255).round()
                         .to(device="cpu", dtype=torch.uint8))
+                if args.store_rgb:
+                    cached["rgb"] = (frames[0].float().clamp(0, 1).mul(255).round()
+                                     .to(device="cpu", dtype=torch.uint8))
+                if anchor_relative_l2 is not None:
+                    cached["anchor_relative_l2"] = anchor_relative_l2
                 writer.write(key, cached)
                 update_cpu_moments(target_moments, target)
                 update_cpu_moments(cond_moments, cond)

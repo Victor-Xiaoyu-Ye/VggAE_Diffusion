@@ -1,5 +1,7 @@
 **项目审查与质量优先路线，2026-09-08**
 
+> 后续用户纠正已更新路线：以已有接近25 PSNR的AE为重建基线，按本项目setting设计diffusion。本文保留历史审查事实，但原生I2V优先排序与n1诊断推进建议不再是当前默认。请以 `AE_BASELINES_AND_DIFFUSION_DESIGN_2026-09-08.md` 为最新设计依据。
+
 本次审查基于本地仓库 `D:/workspace/VggAE_Diffusion`，审查前 HEAD 为 `c4459d252441d5ff177f7c0e55ff67e467a0ad9e`，分支 `ascend-910b`；实验来源是 `C:/Users/y50046448/Desktop/logs`。用户提供的旧路径 `D:/workspace/VggAE/_Diffusion` 在当前机器不存在。
 
 用户本轮明确：两条路线都可以评估，优先生成质量；资源继续采用仓库中的 48 卡 Ascend 910B、ModelArts、OBS 和既有启动方式。这允许重新评估“最终必须替代 VAE”的研究约束，并不表示新模型已经选定或原生 I2V 已在 NPU 跑通。

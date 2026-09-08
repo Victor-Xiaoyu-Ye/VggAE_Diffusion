@@ -123,6 +123,8 @@ class CausalTemporalDownsample(nn.Module):
         if self.factor == 1:
             return self.blocks(x)
         anchor = self.anchor(x[:, :, 0]).unsqueeze(2)
+        if x.shape[2] == 1:
+            return anchor
         tail = self.blocks(x[:, :, 1:])
         tail = self.fold(tail)
         return torch.cat([anchor, tail], dim=2)
@@ -165,6 +167,8 @@ class CausalTemporalUpsample(nn.Module):
         if self.factor == 1:
             return self.blocks(x)
         anchor = self.anchor(x[:, :, 0]).unsqueeze(2)
+        if x.shape[2] == 1:
+            return anchor
         tail = self.expand(x[:, :, 1:])
         B, CR, K, H, W = tail.shape
         tail = tail.reshape(

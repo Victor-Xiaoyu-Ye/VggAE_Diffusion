@@ -150,6 +150,8 @@ trap 'stop_output_sync "${LOG_DIR}" "${REMOTE_LOG_DIR}"' EXIT
 EXTRA_ARGS=()
 [[ "${RESUME_CACHE}" == 1 ]] && EXTRA_ARGS+=(--resume_cache)
 [[ "${STORE_I0}" == 1 ]] && EXTRA_ARGS+=(--store_i0_rgb)
+[[ "${STORE_RGB:-0}" == 1 ]] && EXTRA_ARGS+=(--store_rgb)
+[[ "${INDEPENDENT_ANCHOR:-0}" == 1 ]] && EXTRA_ARGS+=(--independent_anchor)
 run_torchrun "${PROJECT}/cache_causal_video_latents.py" \
   --csv "${CSV}" --video_root "${SPATIALVID_VIDEO_ROOT}" \
   --encoder_ckpt "${STREAMVGGT_CKPT}" --r7_ckpt "${R7_CKPT}" \
