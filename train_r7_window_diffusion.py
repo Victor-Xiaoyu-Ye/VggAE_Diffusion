@@ -204,6 +204,8 @@ def run(args):
         if device_type == 'npu': torch.npu.manual_seed_all(args.seed+rank)
         if rank == 0:
             from torch.utils.tensorboard import SummaryWriter
+            from utils.window_observability import normalization_report
+            atomic_json(out/'normalization_audit.json', normalization_report(stats))
             if args.resume: reconcile_history(out,step)
             writer = SummaryWriter(str(out/'tb'), purge_step=step or None)
             atomic_json(out/'config.json', dict(contract=contract, model=model_args,
@@ -305,7 +307,9 @@ def run(args):
                                 row['raw_motion'] = float(raw.diff(dim=1).abs().mean())
                                 row['rgb_l1_vs_raw'] = float((gen[:, 1:]-raw[:, 1:]).abs().mean())
                                 row['ae_l1_vs_raw'] = float((ae[:, 1:]-raw[:, 1:]).abs().mean())
-                            for value in (.05, .25, .5, .75, .95):
+                            row['normalized_target_power'] = float(y.square().mean())
+                            row['normalized_generated_power'] = float(generated.square().mean())
+                            for value in (.05, .25, .5, .75, .95, 1.):
                                 u = torch.full((len(y),), value, device=device)
                                 x = (1-value)*y+value*noise
                                 with torch.autocast(device_type, dtype=dtype, enabled=dtype != torch.float32):
@@ -330,8 +334,12 @@ def run(args):
             summary = {'step':step}
             for label in ('online', 'ema'):
                 group = [r for r in rows if r['weights'] == label]
-                for key in ('latent_mse','rgb_l1_vs_ae','generated_motion','ae_motion'):
-                    summary[f'eval/{label}/{key}'] = float(np.mean([r[key] for r in group]))
+                for key in ('latent_mse','rgb_l1_vs_ae','generated_motion','ae_motion',
+                            'rgb_l1_vs_raw','rgb_copy_l1_vs_raw', 'normalized_target_power',
+                            'normalized_generated_power', 'x0_mse_u0.05','x0_mse_u0.25',
+                            'x0_mse_u0.5','x0_mse_u0.75','x0_mse_u0.95','x0_mse_u1'):
+                    if all(key in r for r in group):
+                        summary[f'eval/{label}/{key}'] = float(np.mean([r[key] for r in group]))
             if rank == 0:
                 for row in rows: append_metrics(out/'eval_samples.jsonl',row)
                 append_metrics(out/'metrics.jsonl', summary)
@@ -367,6 +375,8 @@ def run(args):
         reconstruction_baseline()
         restore_rng_state(baseline_rng)
         progress('training', step=step)
+        from utils.window_observability import NoiseMeter
+        noise_meter = NoiseMeter(device)
         while step < stop:
             started = time.perf_counter(); optimizer.zero_grad(set_to_none=True); loss_sum = 0.
             for micro in range(args.accum_steps):
@@ -387,6 +397,9 @@ def run(args):
                     if not torch.isfinite(loss): raise RuntimeError('nonfinite training loss')
                     scaler.scale(loss/args.accum_steps).backward()
                 loss_sum += float(loss.detach())/args.accum_steps
+                noise_meter.update(flow, prediction, y, noise, u)
+                noise_meter.observe_latents('cond', c)
+                noise_meter.observe_latents('target', y)
             scaler.unscale_(optimizer)
             norm = torch.nn.utils.clip_grad_norm_(core.parameters(), 1.)
             if not torch.isfinite(norm): raise RuntimeError('nonfinite gradient norm')
@@ -398,7 +411,9 @@ def run(args):
             if ddp:
                 dist.all_reduce(measured[:1]); measured[0] /= world
                 dist.all_reduce(measured[1:], op=dist.ReduceOp.MAX)
-            if rank == 0 and (step % args.log_every == 0 or step == 1):
+            log_now = step % args.log_every == 0 or step == 1 or step == stop
+            noise_metrics = noise_meter.flush(ddp) if log_now else {}
+            if rank == 0 and log_now:
                 row = dict(step=step, **{'train/loss':float(measured[0]),'train/grad_norm':float(norm),
                     'train/lr':scheduler.get_last_lr()[0], 'step_seconds':float(measured[1]),
                     'DI_throughput':args.batch_size*args.accum_steps*future*grid*grid/float(measured[1]),
@@ -406,6 +421,7 @@ def run(args):
                     'samples_seen_global':step*args.batch_size*args.accum_steps*world,
                     'clips_per_second_global':args.batch_size*args.accum_steps*world/float(measured[1]),
                     'consumed_batches_rank0':consumed})
+                row.update(noise_metrics)
                 if device_type != 'cpu':
                     row['peak_memory_gib'] = getattr(torch, device_type).max_memory_allocated()/2**30
                 append_metrics(out/'metrics.jsonl', row); print('[window-train]', row, flush=True)

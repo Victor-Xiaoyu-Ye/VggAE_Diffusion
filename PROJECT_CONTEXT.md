@@ -5,6 +5,37 @@ goals, architecture, training order, paths, or important decisions change.
 
 ## Completed v2 Window Run Audit (2026-09-09)
 
+Next controlled training arm implemented: stage33_train_window_shift3.sh,
+fresh6000 steps same t2v2 legacy AE/cache/model/seed/Euler64 and optimizer;
+only training time_shift1->3 (P(u>.9)1.40%->13.60%). This is a hypothesis,
+not a confirmed cause/fix; both exposure and effective loss balance change.
+No EMA6000 warm start. Namespace r7_window_t2v2_legacy_x0_shift3_v1;
+stage29 preserves double I/O/full-state resume, no cache rebuilding.
+Trainer now saves exact normalization metadata, detached per-noise-bin loss
+contributions and empirical latent moments; eval adds pure-noise u1 error and
+power, aggregates RAW/noise errors in TensorBoard. No RNG/loss changes from
+telemetry, existing resume contract preserved. Actual latent stats absent in
+local logs, so numerical scale audit awaits cluster output. See
+docs/WINDOW_SHIFT3_RUNBOOK.md for evidence, controls and rejection criteria.
+Stage33 NPU quality is pending; do not advertise reasonable video yet.
+
+Stage32 results now audited: diagnostics_v1 contains320 unique matrix rows,
+48 completed ranks,6 exit0 receipts and6 synced publication receipts. Startup
+logs confirm persistent OBS fallback for both AE and diffusion checkpoint.
+EMA6000 Euler64 exactly reproduces prior heldout metrics. Euler128 RAW L1
+.117486 versus .118928 (1.21% gain, ~2x sampling time); Heun64=.117535.
+Sampler integration is not supported as the dominant quality bottleneck.
+Zero/shuffle heldout vsAE L1=.258880/.268696 versus normal=.112928; all paired
+samples worsen. A shuffled house preview becomes donor street scenery, so
+DiT uses the anchor, although geometric sufficiency is unproven. Decoder
+anchor is held fixed. Train vsAE L1=.121794 vs heldout=.112928; train preview
+also deforms. No evidence here for good training generation with only heldout
+failure; small unmatched subsets cannot rule out overfitting. AE remains24.49.
+Next recommendation: audit noise-wise learning/loss scaling before choosing
+one controlled training change, not more sampler steps/AE retraining by default.
+No new recipe implemented. Detailed audit in projectless outputs/
+window_diagnostics_v1_audit.md. NPU diagnostic matrix is no longer pending.
+
 Follow-up now implemented: diagnose_window_diffusion.py and stage32 read the
 EMA at exactly6000, validate original manifests/stats/flow/AE, gate heldout AE
 before sampling, then run train/eval16 x2 seeds x5 arms (Euler64/128, Heun64,

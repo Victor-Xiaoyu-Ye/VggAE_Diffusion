@@ -5,6 +5,16 @@ rules, and safe next steps for future agents.
 
 ## Priority Update (2026-09-09)
 
+CURRENT TRAINING ENTRY: stage33_train_window_shift3.sh. Single-factor fresh
+time_shift3 arm, unchanged validated legacy AE/cache and6000-step recipe,
+plus noise-bin/latent-scale telemetry. Read docs/WINDOW_SHIFT3_RUNBOOK.md.
+Full resume applies only within that arm; real quality remains unverified.
+
+Stage32 has now COMPLETED:320 unique samples,48 ranks completed,6 node exits0.
+Sampler128 gives only1.21% RAW L1 gain at2x sampling cost; conditioning works
+but train previews also fail. Read newest PROJECT_CONTEXT diagnostic results.
+Do not repeat stage32 by default or treat its NPU validation as still pending.
+
 NEXT ENTRY: stage32 diagnose_window_diffusion.sh, read-only EMA6000 sampler /
 train-heldout / anchor ablations, fresh diagnostics namespace. Read
 docs/WINDOW_DIAGNOSTICS_RUNBOOK.md. No new training recipe is promoted.
