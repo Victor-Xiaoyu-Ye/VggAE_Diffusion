@@ -83,6 +83,21 @@ PY
 trap finish EXIT
 exec > >(tee -a "${STAGE_LOG_FILE}") 2>&1
 ensure_local_checkpoint "${R7_CKPT}" "${R7_CKPT_URL}" "frozen historical AE" "${R7_CKPT_MIRROR_URL}"
+if [[ "${WINDOW_DIAGNOSTIC_ONLY:-0}" == 1 ]]; then
+  [[ "${RESUME}" == 0 ]] || { echo 'Diagnostics use fresh outputs, not training resume'; exit 2; }
+  DIAG_CKPT="${LOCAL_CACHE_ROOT}/window_diagnostics/${DIAGNOSTIC_SOURCE}/checkpoint.pt"
+  "${PYTHON_BIN}" "${IO}" stage --destination "${DIAG_CKPT}" \
+    --root "${DIAGNOSTIC_CKPT_URL:-${SCALE_REMOTE_ROOT}/${DIAGNOSTIC_SOURCE}/checkpoint_latest.pt}" \
+    --root "${DIAGNOSTIC_CKPT_MIRROR_URL:-${SCALE_MIRROR_ROOT}/${DIAGNOSTIC_SOURCE}/checkpoint_latest.pt}"
+  STAGE_LOG_FILE="" run_torchrun "${PROJECT}/diagnose_window_diffusion.py" \
+    --checkpoint "${DIAG_CKPT}" --r7_ckpt "${R7_CKPT}" --output_dir "${LOCAL_OUT}" \
+    --manifest "${TRAIN_MANIFEST:-${CACHE_ROOT}/train/manifest.txt}" \
+    --eval_manifest "${EVAL_MANIFEST:-${CACHE_ROOT}/eval/manifest.txt}" \
+    --eval_stats "${EVAL_STATS:-${CACHE_ROOT}/eval/stats.pt}" \
+    --expected_step "${EXPECTED_STEP:-6000}" --clips "${DIAGNOSTIC_CLIPS:-16}" \
+    --previews "${PREVIEW_CLIPS:-4}"
+  exit 0
+fi
 EXTRA=()
 if [[ "${NO_TEXT:-0}" == 1 ]]; then
   EXTRA+=(--no_text)

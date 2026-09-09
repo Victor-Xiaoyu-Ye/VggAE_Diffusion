@@ -3,7 +3,20 @@
 Read this file first. It defines the active project context, current goals,
 rules, and safe next steps for future agents.
 
-## Priority Update (2026-09-08)
+## Priority Update (2026-09-09)
+
+NEXT ENTRY: stage32 diagnose_window_diffusion.sh, read-only EMA6000 sampler /
+train-heldout / anchor ablations, fresh diagnostics namespace. Read
+docs/WINDOW_DIAGNOSTICS_RUNBOOK.md. No new training recipe is promoted.
+
+LATEST CLUSTER RESULT: r7_window_t2v2_legacy_x0_diag_v2 completed6000 steps,
+48-NPU BF16, exit0. Legacy AE replay recovered24.48933dB on the same16 clips
+as v1; compatibility repair is validated. Generation still has blur/deformation
+and late plateau (EMA RAW L1 .118928 vs RGB-copy .098126). Read newest
+PROJECT_CONTEXT entry. Earlier repaired-AE-pending statements below are stale.
+Dual-destination publication receipt reports success; downloaded logs do not
+include training checkpoints, so full resume/remote bytes remain unverified.
+No new training recipe is implemented by this audit; do not promise video quality.
 
 CRITICAL UPDATE AFTER CLUSTER RUN: v1 t2v2 AE replay is degraded (18.73dB).
 Historical t2v2 uses cross-time GroupNorm; current framewise norm silently loads

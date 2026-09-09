@@ -3,6 +3,44 @@
 This document is the durable handoff for VggAE-Diffusion. Keep it current when
 goals, architecture, training order, paths, or important decisions change.
 
+## Completed v2 Window Run Audit (2026-09-09)
+
+Follow-up now implemented: diagnose_window_diffusion.py and stage32 read the
+EMA at exactly6000, validate original manifests/stats/flow/AE, gate heldout AE
+before sampling, then run train/eval16 x2 seeds x5 arms (Euler64/128, Heun64,
+zero/shuffled DiT anchor). Decoder anchor stays original; train has no RAW so
+cross-split comparison is vs AE. Stage29 diagnostic-only dispatch reuses its
+fresh guard, dual reads/writes, incremental publication and exit handling;
+no optimizer updates/resume or training artifact writes. Diagnostics require
+a fresh namespace on retry, retain partial outputs but do not resume them.
+New docs/WINDOW_DIAGNOSTICS_RUNBOOK.md specifies metrics/interpretation.
+10 CPU tests pass; real checkpoint/NPU diagnostic matrix remains pending.
+
+Downloaded r7_window_t2v2_legacy_x0_diag_v2 completed6000/6000, world48,
+BF16, launcher exit0. AE legacy replay is24.48933dB over the same16 video IDs
+as v1 (18.72765dB), with identical sampled weight signatures. Historical AE
+compatibility is now cluster-validated; previous pending statements below are
+historical. Four final preview grids show restored AE but blurred/deformed
+generated futures. EMA6000 RAW L1=.118928 versus true RGB-copy=.098126;
+EMA3000=.121732 and EMA4000=.119681 indicate late plateau under this schedule.
+Pixel error alone does not establish perceptual failure or overfitting.
+Generated frame difference=.066782, RAW=.059360, AE=.045201: frame difference
+includes flicker and is not geometry/motion correctness. No reasonable-video
+or geometry-differentiation claim is warranted yet.
+
+Main-node publication receipt reports both destinations synced/errors=[];
+intermediate500-step previews/evaluation exist. Download lacks training
+checkpoints and startup stdout; remote bytes/full resume and exact fallback
+source were not independently verified. Missing current-job AE path was not
+fatal to this completed run. Logged median train throughput after500 is about
+3436 future tokens/s/NPU, .754s/step, peak11.03GiB (excludes eval/save time).
+
+Recommendation, not implemented: retain EMA6000 as baseline; compare same-
+checkpoint Euler64/128 vs Heun64, training/heldout free generation, and anchor
+ablation before a costly rerun. Do not assume extending identical fixed9935
+windows will solve quality, or revert to AE retraining/stages25/26. Audit saved
+as projectless outputs/window_v2_run_audit.md. No trainer changes this audit.
+
 ## Accepted AE Baselines and Diffusion Design (2026-09-08)
 
 Repair implemented after the cluster audit: utils/window_codec.py explicitly
