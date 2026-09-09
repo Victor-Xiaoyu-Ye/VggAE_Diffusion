@@ -3,7 +3,61 @@
 This document is the durable handoff for VggAE-Diffusion. Keep it current when
 goals, architecture, training order, paths, or important decisions change.
 
+## Completed Shift3 Run Audit (2026-09-09)
+
+Follow-up implemented: stage34 read-only frozen decoder perturbation mode in
+diagnose_window_diffusion.py, reusing stage29 dual IO/fresh guards/receipts.
+Default shift3 best_reconstruction with mandatory step2500 and strict EMA,
+AE/statistics/manifest/flow checks and clean AE gate. Heldout16x2 seeds,
+generated-error/random per-slot equal normalized RMS x6 alphas=384 rows;
+original decoder anchor retained, save all latent inputs/directions and
+per-frame metrics/previews. Optional separate shift1 EMA6000 reference job.
+15 CPU tests pass; cluster matrix remains pending. No AE/training changes.
+Read docs/WINDOW_DECODER_DIAGNOSTICS_RUNBOOK.md; no diagnostic resume,
+fresh namespace on retry; existing full training resume stays unchanged.
+
+r7_window_t2v2_legacy_x0_shift3_v1 completed6000 steps,world48,BF16;
+main-node launcher exit0 and dual publication synced/errors[]. Download has
+768 unique eval rows but no training checkpoints/full workers receipts.
+Same identity/model as shift1; contract differs only time_shift1->3.
+AE replay remains24.48933dB. At6000 EMA RAW L1 .118928->.112278 (5.59%
+gain), vsAE .112928->.105430;22/32 paired video-seeds improve across16 videos.
+Shift3 best RAW and vsAE are at2500: .109971/.103196; final worsens ~2.1%.
+Retain EMA2500 for diagnostics, verifying actual checkpoint step/EMA first;
+do not assume downloaded logs establish checkpoint_best identity.
+
+Fixed-u x0 MSE improves at .5/.75/.95 but worsens at .05/.25; u.95
+.298327->.271881, u.05 .002802->.004853. Training exposure u>.8 about38.65%.
+Normalized latent window means near0/std near1, no near-zero cached std;
+this excludes no covariance/off-manifold decoder failure. Generated power
+closer to1 at6000 despite worse RGB error. Median logged DI throughput
+about3477 future tokens/s/NPU, excludes eval/save. Road/house/street previews
+still blur/deform, including2500 house roof; reasonable-video gate not met.
+
+Recommendation: frozen decoder directed/equal-RMS random perturbation audit
+before further shift/step changes or AE tuning. Keep original anchor; compare
+shift3 EMA2500 and shift1 EMA6000; clean AE replay is not decoder robustness.
+Small heldout set/upturn alone does not establish overfitting. No code/recipe
+changes this audit. Report: projectless outputs/window_shift3_run_audit.md.
+These measured results supersede shift3-pending statements below.
+
 ## Completed v2 Window Run Audit (2026-09-09)
+
+Broad literature refresh after user started shift3: see
+docs/RELATED_WORK_REVIEW_2026-09-09.md (32 works/resources, primary sources).
+IMPORTANT correction: AE clean replay24.49 does NOT exclude decoder sensitivity
+to generated/off-manifold latent errors. Prior 'generator learning' diagnosis
+was too narrow. LV-RAE motivates frozen directed/random perturbation tests
+before any decoder-only robustness tuning. Keep stage33 running unchanged.
+RAEv2/iREPA motivate a subsequent single auxiliary clean-R7 head (guidance0
+first), not an immediate encoder change or claimed geometry preservation.
+V-RAE already has auxiliary prediction; borrowed mechanism, not novelty.
+DC-VideoGen embedding/head alignment is relevant to future Wan transfer, but
+its official repo still states code/models pending release as checked today.
+VideoWeave already jointly models implicit geometry/video latents; joint streams
+alone are not sufficient differentiation. GeoFlow/GeCo motivate dynamic/static
+evaluation; do not reward stillness or treat static geometry scores as valid for
+all moving objects. Proposed P0/P1 work is NOT implemented by this research turn.
 
 Next controlled training arm implemented: stage33_train_window_shift3.sh,
 fresh6000 steps same t2v2 legacy AE/cache/model/seed/Euler64 and optimizer;

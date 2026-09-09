@@ -5,6 +5,26 @@ rules, and safe next steps for future agents.
 
 ## Priority Update (2026-09-09)
 
+NEXT READ-ONLY ENTRY IMPLEMENTED: stage34_diagnose_window_decoder.sh,
+frozen decoder directed/random matched-RMS perturbations on shift3 EMA2500.
+Read docs/WINDOW_DECODER_DIAGNOSTICS_RUNBOOK.md. Default best_reconstruction
+must internally be step2500; no silent latest fallback. Stage29 dual IO reused.
+CPU validation available; real384-row NPU matrix remains pending.
+
+SHIFT3 COMPLETED:6000 steps, main-node exit0/synced receipts; local download
+does not include full workers receipts or training checkpoints. EMA RAW L1
+improves .118928->.112278 at6000, but best shift3 is2500 (.109971) and
+previews still deform. Normalized scale is broadly healthy; high-noise x0
+error improves while low-noise worsens. Prefer frozen decoder perturbation
+audit with verified EMA2500; do not extend/increase shift by default.
+This result supersedes shift3-pending statements below. No new recipe launched.
+
+Literature refreshed after shift3 launch: read docs/RELATED_WORK_REVIEW_2026-09-09.md.
+Clean AE replay does not exclude decoder amplification of generated errors.
+Prioritize frozen perturbation audit; auxiliary clean-latent supervision is a
+later controlled candidate. No running recipe changed. VideoWeave/RAEv2/LV-RAE
+are relevant; no 'VGGT replacement alone' novelty claim.
+
 CURRENT TRAINING ENTRY: stage33_train_window_shift3.sh. Single-factor fresh
 time_shift3 arm, unchanged validated legacy AE/cache and6000-step recipe,
 plus noise-bin/latent-scale telemetry. Read docs/WINDOW_SHIFT3_RUNBOOK.md.

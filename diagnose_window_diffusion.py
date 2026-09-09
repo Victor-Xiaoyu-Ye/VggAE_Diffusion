@@ -91,10 +91,18 @@ def run(args):
             raise ValueError('train/eval diagnostic overlap')
         if rank == 0:
             atomic_json(out/'config.json', dict(args=vars(args), model=model_args, temporal_norm=mode,
-                checkpoint_signature=sampled_file_signature(args.checkpoint), arms=ARMS,
+                checkpoint_signature=sampled_file_signature(args.checkpoint), arms=ARMS if args.mode == 'standard' else 'see perturbation_contract.json',
                 ids={k: [x['video_id'] for x in v] for k, v in data.items()},
                 decoder_anchor='original for all arms', zero_condition='zero in normalized space',
                 weights='ema', checkpoint_step=args.expected_step))
+        if args.mode == 'perturbation':
+            from utils.window_perturbation import ALPHAS, audit_sample
+            data = {'eval': data['eval']}
+            if rank == 0:
+                atomic_json(out/'perturbation_contract.json', dict(alphas=ALPHAS,
+                    directions=['generated', 'random'], random_matching='RMS per future slot in normalized space',
+                    anchor='original native anchor', weights='ema', sampler='euler64',
+                    checkpoint_step=args.expected_step, no_training=True))
         def sync():
             if kind == 'npu': torch.npu.synchronize()
             elif kind == 'cuda': torch.cuda.synchronize()
@@ -135,6 +143,12 @@ def run(args):
                 raw = batch.get('rgb')
                 raw = raw.to(device).float().div(255).permute(0, 1, 3, 4, 2) if raw is not None else None
                 if split == 'eval' and raw is None: raise ValueError('eval RAW missing')
+                if args.mode == 'perturbation':
+                    rows.extend(audit_sample(model=model, flow=flow, c=c, y=y, cr=cr,
+                        ae=ae, raw=raw, stats=st['target'], decode=decode, sync=sync,
+                        dtype=dtype, seeds=args.seeds, index=index, video_id=sample['video_id'],
+                        out=out, rank=rank, previews=args.previews, status=status))
+                    continue
                 for sample_seed in args.seeds:
                     noise = torch.randn(y.shape, generator=torch.Generator().manual_seed(sample_seed+1009*index)).to(device)
                     reference = None
@@ -168,16 +182,18 @@ def run(args):
             gathered = [None]*world; dist.all_gather_object(gathered, rows)
             rows = [r for part in gathered for r in part]
         if rank == 0:
-            expected_rows = 2*args.clips*len(args.seeds)*len(ARMS)
+            arms = [r[0] for r in ARMS] if args.mode == 'standard' else [
+                f'{direction}_a{alpha:g}' for direction in ('generated', 'random') for alpha in ALPHAS]
+            expected_rows = len(data)*args.clips*len(args.seeds)*len(arms)
             if len(rows) != expected_rows: raise ValueError('incomplete diagnostic matrix')
             summary = {}
             for split in data:
-                for arm, *_ in ARMS:
+                for arm in arms:
                     group = [r for r in rows if r['split'] == split and r['arm'] == arm]
                     summary[split+'/'+arm] = {k: sum(r[k] for r in group)/len(group) for k in group[0]
                         if isinstance(group[0][k], float)}
             atomic_json(out/'summary.json', dict(groups=summary, ae_psnr=mean_psnr, ae_gate_passed=passed,
-                complete=True, rows=len(rows), note='Train/heldout compare vs AE; pixel errors are not perceptual or geometry scores. DI is sampler token-steps/s per active device, excludes decode/IO.'))
+                complete=True, rows=len(rows), note='Pixel errors and finite perturbation ratios are not perceptual/geometry scores or Jacobian norms. DI is sampler token-steps/s per active device, excludes decode/IO. Sampling time is repeated across perturbation rows; do not sum it.'))
             for row in rows: append_metrics(out/'metrics.jsonl', row)
             if not passed: raise RuntimeError('AE gate failed; diagnostics not quality-valid')
         if ddp: dist.barrier()
@@ -193,6 +209,7 @@ if __name__ == '__main__':
     for name in ('checkpoint', 'r7_ckpt', 'manifest', 'eval_manifest', 'eval_stats', 'output_dir'):
         p.add_argument('--'+name, required=True)
     p.add_argument('--expected_step', type=int, default=6000)
+    p.add_argument('--mode', choices=['standard', 'perturbation'], default='standard')
     p.add_argument('--clips', type=int, default=16)
     p.add_argument('--previews', type=int, default=4)
     p.add_argument('--seeds', type=int, nargs='+', default=[42, 43])
