@@ -1,5 +1,14 @@
 # Intermediate clean-R7 supervision
 
+Stage36 adds a separate depth control: block8 instead of block6, weight0.5
+and every other stage33 setting unchanged. Entry36_train_window_aux8_x0.sh,
+namespace r7_window_t2v2_legacy_x0_shift3_aux8_w05_v1, fresh6000 steps.
+Do not resume aux6 into aux8 or modify a running aux6 job. Same-aux8 full
+resume is supported. Aux8 is a hypothesis, not a promoted quality winner.
+User will finish aux6 and run this separately, then compare complete curves.
+Early aux6 EMA500 RAW L1=.141345 vs baseline .140643, latent MSE=.792394
+vs .808685: no clear RGB benefit yet. Same300–500-step DI median5034 vs5104.
+
 Stage35 is a fresh6000-step controlled arm against stage33 shift3. Same
 legacy t2v2 AE/cache, noise shift3, data/seed/batch96, optimizer, EMA,
 Euler64,16 eval clips x2 seeds and500-step checkpoints/previews.

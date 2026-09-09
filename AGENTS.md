@@ -5,6 +5,11 @@ rules, and safe next steps for future agents.
 
 ## Priority Update (2026-09-09)
 
+PREPARED NEXT ARM stage36_train_window_aux8_x0.sh: move auxiliary block6->8
+only, still weight0.5/shift3/6000 steps. Keep current aux6 running unchanged.
+EMA500 latent improves2% but RAW L1 worsens0.5%, too early to select winner.
+Fresh aux8 namespace; never resume aux6 into aux8. Compare full runs later.
+
 NEW TRAINING ENTRY stage35_train_window_aux_x0.sh: fresh shift3 control plus
 block6 clean-R7 auxiliary head weight0.5, unchanged6000-step recipe/cache/AE.
 Read docs/WINDOW_AUX_X0_RUNBOOK.md. Sampling main head only; full resume only

@@ -5,6 +5,16 @@ goals, architecture, training order, paths, or important decisions change.
 
 ## Completed Shift3 Run Audit (2026-09-09)
 
+Aux6 early audit: local status720/6000, complete500-step eval. EMA RAW L1
+.141345 vs shift3 .140643 (+0.50%), latent MSE .792394 vs .808685 (-2.01%).
+Highest-noise u1 .478990 vs .470903, no clear early generation gain; paired
+house preview remains smeared. Same300–500-step DI medians5034 vs5104
+(~1.37% lower, excludes eval/save). Keep aux6 running to full budget.
+User requests another queued experiment: stage36 auxiliary layer8 weight0.5,
+only layer placement changed, fresh6000, same stage33/29 IO/recipe. No old
+aux6 resume into aux8. Purpose: deeper representation supervision control,
+not a proven fix. Full no-aux/aux6/aux8 curves will be compared after completion.
+
 User accepts partial perturbation evidence for next-arm selection. Implemented
 stage35 fresh6000-step shift3 + block6 LayerNorm/linear clean-R7 auxiliary
 head, weight0.5 with same weighted x0 objective. Main-only inference; no
