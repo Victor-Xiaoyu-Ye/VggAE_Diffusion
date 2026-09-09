@@ -63,7 +63,7 @@ class WindowBlock(nn.Module):
 
 class R7WindowDiT(nn.Module):
     def __init__(self, channels=192, grid=18, future=4, temporal_factor=2,
-                 width=768, depth=12, heads=12, text_dim=4096, checkpoint_blocks=True):
+                 width=768, depth=12, heads=12, text_dim=4096, checkpoint_blocks=True, aux_layer=0):
         super().__init__()
         if min(channels, grid, future, width, depth, heads) < 1 or width % heads:
             raise ValueError('positive dimensions and divisible heads required')
@@ -80,8 +80,19 @@ class R7WindowDiT(nn.Module):
         nn.init.zeros_(self.head.bias)
         self.register_buffer('future_pos', position(future, grid, width, temporal_factor), persistent=False)
         self.register_buffer('anchor_pos', position(1, grid, width, anchor=True), persistent=False)
+        if aux_layer and not 1 <= aux_layer < depth:
+            raise ValueError('aux_layer must be an intermediate block (1-based)')
+        self.aux_layer = aux_layer
+        if aux_layer:
+            # Preserve baseline initialization and global random stream.
+            with torch.random.fork_rng(devices=[]):
+                self.aux_head = nn.Sequential(nn.LayerNorm(width), nn.Linear(width, channels))
+                nn.init.zeros_(self.aux_head[-1].weight)
+                nn.init.zeros_(self.aux_head[-1].bias)
 
-    def forward(self, noisy, u, anchor, text=None, text_valid=None):
+    def forward(self, noisy, u, anchor, text=None, text_valid=None, return_aux=False):
+        if return_aux and not self.aux_layer:
+            raise ValueError('auxiliary head is disabled')
         b = noisy.shape[0]
         if noisy.shape != (b, self.future, self.grid**2, self.channels):
             raise ValueError('future shape mismatch')
@@ -93,9 +104,13 @@ class R7WindowDiT(nn.Module):
         memory = self.anchor(anchor[:, 0].float())+self.anchor_pos
         context = self.text(text.float()) if self.text_dim else None
         time = self.time(sinusoid(u*1000, 256))[:, None]
-        for block in self.blocks:
+        auxiliary = None
+        for index, block in enumerate(self.blocks, 1):
             if self.training and self.checkpoint_blocks:
                 x = checkpoint(block, x, time, memory, context, text_valid, use_reentrant=False)
             else:
                 x = block(x, time, memory, context, text_valid)
-        return self.head(self.norm(x)).reshape_as(noisy).float()
+            if return_aux and index == self.aux_layer:
+                auxiliary = self.aux_head(x).reshape_as(noisy).float()
+        output = self.head(self.norm(x)).reshape_as(noisy).float()
+        return (output, auxiliary) if return_aux else output

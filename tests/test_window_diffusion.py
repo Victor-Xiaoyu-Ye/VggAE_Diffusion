@@ -128,6 +128,12 @@ class WindowTests(unittest.TestCase):
             with self.assertRaises(ValueError): bank.batch(['missing'],'cpu')
 
     def test_resume_end_to_end(self):
+        self._check_resume(False)
+
+    def test_aux_resume_end_to_end(self):
+        self._check_resume(True)
+
+    def _check_resume(self, auxiliary):
         with tempfile.TemporaryDirectory() as td:
             p = Path(td)
             torch.manual_seed(19)
@@ -151,6 +157,8 @@ class WindowTests(unittest.TestCase):
                 '--max_steps','4','--warmup_steps','0','--eval_every','4','--save_every','2',
                 '--eval_clips','1','--preview_clips','1','--sample_steps','2','--sample_seeds','42',
                 '--shuffle_buffer','3','--log_every','1']
+            if auxiliary:
+                base += ['--depth','2','--aux_layer','1','--aux_weight','0.5']
             with contextlib.redirect_stdout(io.StringIO()):
                 run(parse_args(base+['--output_dir',str(p/'full')]))
                 run(parse_args(base+['--output_dir',str(p/'split'),'--stop_after_steps','2']))
@@ -169,6 +177,9 @@ class WindowTests(unittest.TestCase):
             self.assertEqual(json.loads((p/'split/run_status.json').read_text())['status'],'completed')
             self.assertTrue(list((p/'split/samples').rglob('*.pt')))
             with self.assertRaises(ValueError): validate_resume(resumed,{'wrong':'AE'})
+            if auxiliary:
+                changed = dict(resumed['contract'], args=dict(resumed['contract']['args'], aux_weight=.25))
+                with self.assertRaises(ValueError): validate_resume(resumed, changed)
 
 
 if __name__ == '__main__':

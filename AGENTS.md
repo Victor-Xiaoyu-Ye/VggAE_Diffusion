@@ -5,6 +5,12 @@ rules, and safe next steps for future agents.
 
 ## Priority Update (2026-09-09)
 
+NEW TRAINING ENTRY stage35_train_window_aux_x0.sh: fresh shift3 control plus
+block6 clean-R7 auxiliary head weight0.5, unchanged6000-step recipe/cache/AE.
+Read docs/WINDOW_AUX_X0_RUNBOOK.md. Sampling main head only; full resume only
+within same auxiliary contract. User accepted partial decoder audit as enough
+to choose this arm; no further snapshot requirement blocks implementation.
+
 NEXT READ-ONLY ENTRY IMPLEMENTED: stage34_diagnose_window_decoder.sh,
 frozen decoder directed/random matched-RMS perturbations on shift3 EMA2500.
 Read docs/WINDOW_DECODER_DIAGNOSTICS_RUNBOOK.md. Default best_reconstruction

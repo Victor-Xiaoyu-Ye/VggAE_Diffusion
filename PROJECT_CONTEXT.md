@@ -5,6 +5,28 @@ goals, architecture, training order, paths, or important decisions change.
 
 ## Completed Shift3 Run Audit (2026-09-09)
 
+User accepts partial perturbation evidence for next-arm selection. Implemented
+stage35 fresh6000-step shift3 + block6 LayerNorm/linear clean-R7 auxiliary
+head, weight0.5 with same weighted x0 objective. Main-only inference; no
+guidance/AE/cache changes. Separate main/aux/total logging and strict auxiliary
+resume contract; disabled defaults preserve baseline resumes. Initial main
+weights/RNG unchanged. Reuses stage33/29 double I/O/full-state lifecycle.
+See docs/WINDOW_AUX_X0_RUNBOOK.md. NPU overhead and quality remain unmeasured;
+no novelty claim for auxiliary supervision itself.
+
+Stage34 partial download audit:306/384 rows, no final summary;40 ranks
+completed/five worker exits0, main-node snapshot still running/old statuses.
+Do not claim whole-job completion or failure; fetch final root artifacts first.
+AE gate24.48933 and EMA2500 contract passed.24 complete video-seed groups
+(12 videos, excludes four preview videos) show generated/random RGB L1 vsAE
+at alpha .05=.006013/.003472, .1=.012166/.006840, .25=.031173/.016200,
+.5=.062369/.029832,1=.099512/.052687, equal per-slot latent RMS.
+Alpha0 error9.3e-7; small-alpha response smooth, no catastrophic amplification
+evidence in this subset. Direction matters; this is not proof of geometry
+or a Jacobian norm. Retain AE pending complete data; mid-layer clean-R7
+supervision remains candidate, not implemented. Report in projectless outputs/
+decoder_shift3_partial_audit.md. Do not rerun just for incomplete download.
+
 Follow-up implemented: stage34 read-only frozen decoder perturbation mode in
 diagnose_window_diffusion.py, reusing stage29 dual IO/fresh guards/receipts.
 Default shift3 best_reconstruction with mandatory step2500 and strict EMA,

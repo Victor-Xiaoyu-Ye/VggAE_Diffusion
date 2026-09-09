@@ -150,6 +150,7 @@ STAGE_LOG_FILE="" run_torchrun "${PROJECT}/train_r7_window_diffusion.py" \
   --ae_norm "${WINDOW_AE_NORM}" --min_ae_psnr "${MIN_AE_PSNR:-23.5}" \
   --prediction "${PREDICTION}" --time_shift "${TIME_SHIFT:-1}" --loss_floor "${LOSS_FLOOR:-0.05}" \
   --width "${WIDTH:-768}" --depth "${DEPTH:-12}" --heads "${HEADS:-12}" \
+  --aux_layer "${AUX_LAYER:-0}" --aux_weight "${AUX_WEIGHT:-0}" \
   --batch_size "${BATCH_SIZE:-1}" --accum_steps "${ACCUM_STEPS:-2}" \
   --max_steps "${MAX_STEPS:-6000}" --warmup_steps "${WARMUP_STEPS:-300}" \
   --lr "${LR:-1e-4}" --wd "${WD:-0.01}" --dtype "${DTYPE:-bf16}" \

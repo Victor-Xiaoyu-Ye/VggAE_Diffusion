@@ -41,6 +41,8 @@ def parse_args(argv=None):
     p.add_argument('--width', type=int, default=768)
     p.add_argument('--depth', type=int, default=12)
     p.add_argument('--heads', type=int, default=12)
+    p.add_argument('--aux_layer', type=int, default=0)
+    p.add_argument('--aux_weight', type=float, default=0.)
     p.add_argument('--batch_size', type=int, default=1)
     p.add_argument('--accum_steps', type=int, default=2)
     p.add_argument('--max_steps', type=int, default=6000)
@@ -69,6 +71,10 @@ def parse_args(argv=None):
 
 
 def run(args):
+    if not np.isfinite(args.aux_weight) or args.aux_weight < 0 or bool(args.aux_layer) != bool(args.aux_weight):
+        raise ValueError('aux_layer and positive aux_weight must be enabled together')
+    if args.aux_layer and (not 1 <= args.aux_layer < args.depth or args.prediction != 'x0'):
+        raise ValueError('intermediate clean supervision requires x0 and an intermediate block')
     for k in ('batch_size', 'accum_steps', 'max_steps', 'eval_every', 'save_every', 'log_every', 'eval_clips', 'sample_steps'):
         if getattr(args, k) < 1:
             raise ValueError(k+' must be positive')
@@ -159,6 +165,7 @@ def run(args):
         contract = resume_contract(args, identity, world)
         model_args = dict(channels=channels, grid=grid, future=future, temporal_factor=factor,
                          width=args.width, depth=args.depth, heads=args.heads, text_dim=4096 if bank else 0)
+        if args.aux_layer: model_args['aux_layer'] = args.aux_layer
         # EMA is constructed before DDP's parameter broadcast, so initialize the
         # same model on every rank; rank-specific noise RNG is set below.
         torch.manual_seed(args.seed)
@@ -379,6 +386,7 @@ def run(args):
         noise_meter = NoiseMeter(device)
         while step < stop:
             started = time.perf_counter(); optimizer.zero_grad(set_to_none=True); loss_sum = 0.
+            main_sum = aux_sum = 0.
             for micro in range(args.accum_steps):
                 progress('reading_batch', step=step) if step == 0 else None
                 batch = next(iterator); consumed += 1
@@ -392,11 +400,18 @@ def run(args):
                 sync = model.no_sync() if ddp and micro < args.accum_steps-1 else contextlib.nullcontext()
                 with sync:
                     with torch.autocast(device_type, dtype=dtype, enabled=dtype != torch.float32):
-                        prediction = model(x, u, c, text, valid)
-                    loss = flow.loss(prediction, y, noise, u)
+                        if args.aux_layer:
+                            prediction, auxiliary = model(x, u, c, text, valid, return_aux=True)
+                        else:
+                            prediction = model(x, u, c, text, valid)
+                    main_loss = flow.loss(prediction, y, noise, u)
+                    aux_loss = flow.loss(auxiliary, y, noise, u) if args.aux_layer else main_loss.new_zeros(())
+                    loss = main_loss + args.aux_weight*aux_loss
                     if not torch.isfinite(loss): raise RuntimeError('nonfinite training loss')
                     scaler.scale(loss/args.accum_steps).backward()
                 loss_sum += float(loss.detach())/args.accum_steps
+                main_sum += float(main_loss.detach())/args.accum_steps
+                aux_sum += float(aux_loss.detach())/args.accum_steps
                 noise_meter.update(flow, prediction, y, noise, u)
                 noise_meter.observe_latents('cond', c)
                 noise_meter.observe_latents('target', y)
@@ -407,10 +422,11 @@ def run(args):
             if device_type != 'cpu':
                 getattr(torch, device_type).synchronize()
             elapsed = time.perf_counter()-started
-            measured = torch.tensor([loss_sum, elapsed], device=device)
+            measured = torch.tensor([loss_sum, elapsed, main_sum, aux_sum], device=device)
             if ddp:
                 dist.all_reduce(measured[:1]); measured[0] /= world
-                dist.all_reduce(measured[1:], op=dist.ReduceOp.MAX)
+                dist.all_reduce(measured[1:2], op=dist.ReduceOp.MAX)
+                dist.all_reduce(measured[2:]); measured[2:] /= world
             log_now = step % args.log_every == 0 or step == 1 or step == stop
             noise_metrics = noise_meter.flush(ddp) if log_now else {}
             if rank == 0 and log_now:
@@ -422,6 +438,8 @@ def run(args):
                     'clips_per_second_global':args.batch_size*args.accum_steps*world/float(measured[1]),
                     'consumed_batches_rank0':consumed})
                 row.update(noise_metrics)
+                row.update({'train/main_loss':float(measured[2]), 'train/aux_loss':float(measured[3]),
+                    'train/aux_weighted_loss':args.aux_weight*float(measured[3])})
                 if device_type != 'cpu':
                     row['peak_memory_gib'] = getattr(torch, device_type).max_memory_allocated()/2**30
                 append_metrics(out/'metrics.jsonl', row); print('[window-train]', row, flush=True)

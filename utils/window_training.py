@@ -141,6 +141,9 @@ def resume_contract(args, identity, world):
     # Eval settings are immutable too, so checkpoint selection remains comparable.
     mutable = {'resume', 'output_dir', 'stop_after_steps', 'manifest', 'eval_manifest',
                'stats', 'eval_stats', 'r7_ckpt', 'text_dir', 'cpu_test'}
+    # Disabled auxiliary defaults preserve pre-auxiliary full-resume contracts.
+    if not getattr(args, 'aux_layer', 0) and not getattr(args, 'aux_weight', 0):
+        mutable |= {'aux_layer', 'aux_weight'}
     return dict(args={k:v for k, v in vars(args).items() if k not in mutable},
                 identity=identity, world_size=world)
 
