@@ -38,19 +38,21 @@ class WindowFlow:
 
     @torch.no_grad()
     def sample(self, model, anchor, noise, steps=64, dtype=torch.float32, text=None,
-               text_valid=None, method='euler'):
+               text_valid=None, method='euler', observer=None):
         if steps < 1 or method not in ('euler', 'heun'):
             raise ValueError('invalid integrator')
         x = noise.float().clone()
         grid = torch.linspace(1, 0, steps+1, device=x.device)
-        def evaluate(z, value):
+        def evaluate(z, value, index=None):
             u = value.expand(z.shape[0])
             with torch.autocast(z.device.type, dtype=dtype, enabled=dtype != torch.float32):
                 out = model(z, u, anchor, text, text_valid)
+            if observer is not None and index is not None:
+                observer(index, float(value), z, self.clean(out, z, u))
             return self.velocity(out, z, u)
         for i, (left, right) in enumerate(zip(grid[:-1], grid[1:])):
             delta = right-left
-            v = evaluate(x, left)
+            v = evaluate(x, left, i)
             candidate = x+delta*v
             if method == 'heun' and i < steps-1:
                 candidate = x+delta*.5*(v+evaluate(candidate, right))

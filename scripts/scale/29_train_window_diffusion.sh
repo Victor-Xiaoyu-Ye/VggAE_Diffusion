@@ -91,13 +91,14 @@ if [[ "${WINDOW_DIAGNOSTIC_ONLY:-0}" == 1 ]]; then
   "${PYTHON_BIN}" "${IO}" stage --destination "${DIAG_CKPT}" \
     --root "${DIAGNOSTIC_CKPT_URL:-${SCALE_REMOTE_ROOT}/${DIAGNOSTIC_SOURCE}/${DIAG_FILE}}" \
     --root "${DIAGNOSTIC_CKPT_MIRROR_URL:-${SCALE_MIRROR_ROOT}/${DIAGNOSTIC_SOURCE}/${DIAG_FILE}}"
+  read -r -a DIAG_SEEDS <<< "${DIAGNOSTIC_SEEDS:-42 43}"
   STAGE_LOG_FILE="" run_torchrun "${PROJECT}/diagnose_window_diffusion.py" \
     --checkpoint "${DIAG_CKPT}" --r7_ckpt "${R7_CKPT}" --output_dir "${LOCAL_OUT}" \
     --manifest "${TRAIN_MANIFEST:-${CACHE_ROOT}/train/manifest.txt}" \
     --eval_manifest "${EVAL_MANIFEST:-${CACHE_ROOT}/eval/manifest.txt}" \
     --eval_stats "${EVAL_STATS:-${CACHE_ROOT}/eval/stats.pt}" \
     --expected_step "${EXPECTED_STEP:-6000}" --clips "${DIAGNOSTIC_CLIPS:-16}" \
-    --previews "${PREVIEW_CLIPS:-4}" --mode "${DIAGNOSTIC_MODE:-standard}"
+    --previews "${PREVIEW_CLIPS:-4}" --mode "${DIAGNOSTIC_MODE:-standard}" --seeds "${DIAG_SEEDS[@]}"
   exit 0
 fi
 EXTRA=()

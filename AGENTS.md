@@ -5,6 +5,19 @@ rules, and safe next steps for future agents.
 
 ## Priority Update (2026-09-09)
 
+NEW stage39_diagnose_window_trajectory.sh: read docs/WINDOW_TRAJECTORY_RUNBOOK.md.
+Read-only memory64 checkpoint_final step6000,16memory+16heldout,online/EMA,
+seeds101/211. Production Euler observer,9nodes state/x0/GTprobe plusfinal,
+3584metrics. Match original subset fingerprint and heldout noise-index64offset.
+All metrics/latents before small PNG-only previews. No NPU validation yet.
+
+LATEST RESULTS: memory64 completed6000 (main receipt), all7680global evalrows;
+EMA memoryL1 .03782,heldout .13757 vsAE. Partial visual evidence shows learning,
+not heldout baseline. Pure-noise one-call x0 MSE .01574 vs fullflow .12438;
+next priority read-only trajectory/single-call decode. Subspace download only
+94/384,nohigh/PCApairs: do not select whitening/frequency recipe yet.
+See newest PROJECT_CONTEXT and projectless memory64_subspace_results_review.md.
+
 2026-09-10 IMPLEMENTED stages37/38: read docs/WINDOW_MEMORY_SUBSPACE_RUNBOOK.md.
 Stage37 trains64 train-only windows with same t2v2 legacy/noaux shift3 chain,
 balanced global sample stream, full resume, all64 previews/four seeds; separate

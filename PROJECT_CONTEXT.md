@@ -5,6 +5,27 @@ goals, architecture, training order, paths, or important decisions change.
 
 ## RAE Generation Root-Cause Review (2026-09-10, latest)
 
+Implemented stage39 trajectory diagnosis: memory64 checkpoint_final step6000,
+original subset hash validation,16memory+16heldout,online/EMA,seeds101/211.
+Shared production Euler sampler gains optional observational callback (no
+training/sampling contract changes when absent).9snapshots compare state/x0
+with post-sampling GT-noised probes, plusfinal.3584rows,all metrics andlatents
+saved before16PNG grids; noffmpeg. New namespace r7_window_memory64_trajectory_s6000_v1.
+Read docs/WINDOW_TRAJECTORY_RUNBOOK.md. No cluster run or quality claim yet.
+
+RESULT AUDIT: memory64 main completes6000/exit0/publication synced; downloaded
+8rank statuses only, but7680unique global eval rows (12x640) complete.
+EMA memoryL1 .12341@500 -> .037821@6000, latentMSE .124378; heldoutAE L1
+.137568,RAW .141686. Six representative available previews show recognizable
+structures/motion; not cleanAE equivalence or heldout success. u1 one-call
+x0 MSE .015742 vs fullflow .124378, u.25 diagnostic .069323: prioritize
+read-only trajectory and single-call decode before blaming data alone.
+Subspace download only94/384 rows, no finalsummary;16 lowfrequency pairs
+repair/control L1 .099282/.098144 (3wins),13mid .094975/.100102 (9wins).
+Only1high row/no paired control, noPCA rows; await remaining download rather
+than rerun or choose whitening. Synced snapshot does not mean job finished.
+Audit in projectless outputs/memory64_subspace_results_review.md.
+
 Implementation follow-up: stages37_train_window_memory64.sh and
 38_diagnose_window_subspace.sh now implement the first two diagnostics.
 Stage37 same178M/6000step/shift3/legacyAE,64train-only fixed samples, globally

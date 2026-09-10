@@ -83,10 +83,21 @@ def run(args):
         if flow.contract() != saved['contract']['flow']: raise ValueError('flow contract mismatch')
         dtype = {'bf16': torch.bfloat16, 'fp32': torch.float32, 'fp16': torch.float16}[saved['args']['dtype']]
         seed = saved['args']['seed']
+        if args.mode == 'trajectory':
+            from utils.window_memorization import select_training_subset, subset_identity
+            memory_count = saved['args'].get('memorize_clips', 0)
+            if not memory_count or args.clips > memory_count:
+                raise ValueError('trajectory requires memory checkpoint and sufficient subset')
+            memory_samples = select_training_subset(args.manifest, memory_count, seed)
+            if subset_identity(memory_samples) != identity.get('memorization'):
+                raise ValueError('memory subset differs from training checkpoint')
+            online_state = saved['model']
         del artifact, saved, state
         st = {k: {n: stats[k][n].to(device).float() for n in ('mean', 'std')} for k in ('cond', 'target')}
         data = {split: select_samples(path, args.clips, seed) for split, path in
                 [('train', args.manifest), ('eval', args.eval_manifest)]}
+        if args.mode == 'trajectory':
+            data['train'] = memory_samples[:args.clips]
         if {x['video_id'] for x in data['train']} & {x['video_id'] for x in data['eval']}:
             raise ValueError('train/eval diagnostic overlap')
         if rank == 0:
@@ -94,7 +105,7 @@ def run(args):
                 checkpoint_signature=sampled_file_signature(args.checkpoint), arms=ARMS if args.mode == 'standard' else 'see perturbation_contract.json',
                 ids={k: [x['video_id'] for x in v] for k, v in data.items()},
                 decoder_anchor='original for all arms', zero_condition='zero in normalized space',
-                weights='ema', checkpoint_step=args.expected_step))
+                weights=['online','ema'] if args.mode == 'trajectory' else 'ema', checkpoint_step=args.expected_step))
         if args.mode == 'perturbation':
             from utils.window_perturbation import ALPHAS, audit_sample
             data = {'eval': data['eval']}
@@ -144,6 +155,20 @@ def run(args):
         mean_psnr, passed = reconstruction_gate(psnrs, 23.5)
         if rank == 0: atomic_json(out/'ae_gate.json', dict(psnr=mean_psnr, passed=passed, clips=len(psnrs)))
         if not passed: raise RuntimeError('AE gate failed before sampling')
+        if args.mode == 'trajectory':
+            from utils.window_trajectory import run_audit, NODES
+            if rank == 0:
+                atomic_json(out/'trajectory_contract.json',dict(nodes=NODES, steps=64,
+                    weights=['online','ema'], memory_count=memory_count, checkpoint_step=args.expected_step,
+                    seeds=args.seeds, sampler='production WindowFlow Euler with observer',
+                    publication='all metrics and latents before PNG-only previews'))
+            run_audit(model=model, flow=flow, online_state=online_state,
+                data={'memorization':data['train'], 'heldout':data['eval']}, memory_count=memory_count,
+                model_args=model_args, stats=stats, decode=decode, dtype=dtype, device=device,
+                rank=rank, world=world, ddp=ddp, out=out, seeds=args.seeds,
+                previews=args.previews, status=status)
+            status('completed')
+            return
         rows = []
         for split, samples in data.items():
             for index, sample in enumerate(samples):
@@ -226,7 +251,7 @@ if __name__ == '__main__':
     for name in ('checkpoint', 'r7_ckpt', 'manifest', 'eval_manifest', 'eval_stats', 'output_dir'):
         p.add_argument('--'+name, required=True)
     p.add_argument('--expected_step', type=int, default=6000)
-    p.add_argument('--mode', choices=['standard', 'perturbation', 'subspace'], default='standard')
+    p.add_argument('--mode', choices=['standard', 'perturbation', 'subspace', 'trajectory'], default='standard')
     p.add_argument('--clips', type=int, default=16)
     p.add_argument('--previews', type=int, default=4)
     p.add_argument('--seeds', type=int, nargs='+', default=[42, 43])
