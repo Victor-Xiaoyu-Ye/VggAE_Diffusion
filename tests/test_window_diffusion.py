@@ -133,7 +133,10 @@ class WindowTests(unittest.TestCase):
     def test_aux_resume_end_to_end(self):
         self._check_resume(True)
 
-    def _check_resume(self, auxiliary):
+    def test_memory_resume_end_to_end(self):
+        self._check_resume(False, memorize=True)
+
+    def _check_resume(self, auxiliary, memorize=False):
         with tempfile.TemporaryDirectory() as td:
             p = Path(td)
             torch.manual_seed(19)
@@ -159,6 +162,8 @@ class WindowTests(unittest.TestCase):
                 '--shuffle_buffer','3','--log_every','1']
             if auxiliary:
                 base += ['--depth','2','--aux_layer','1','--aux_weight','0.5']
+            if memorize:
+                base += ['--memorize_clips','2']
             with contextlib.redirect_stdout(io.StringIO()):
                 run(parse_args(base+['--output_dir',str(p/'full')]))
                 run(parse_args(base+['--output_dir',str(p/'split'),'--stop_after_steps','2']))
@@ -176,6 +181,12 @@ class WindowTests(unittest.TestCase):
                     torch.testing.assert_close(tensor,resumed['optimizer']['state'][key][name],atol=0,rtol=0)
             self.assertEqual(json.loads((p/'split/run_status.json').read_text())['status'],'completed')
             self.assertTrue(list((p/'split/samples').rglob('*.pt')))
+            if memorize:
+                rows = [json.loads(x) for x in (p/'full/eval_samples.jsonl').read_text().splitlines()]
+                self.assertEqual({r['split'] for r in rows}, {'memorization', 'heldout'})
+                self.assertEqual(len([r for r in rows if r['split'] == 'memorization']), 4)
+                changed = dict(resumed['contract'], args=dict(resumed['contract']['args'], memorize_clips=1))
+                with self.assertRaises(ValueError): validate_resume(resumed, changed)
             with self.assertRaises(ValueError): validate_resume(resumed,{'wrong':'AE'})
             if auxiliary:
                 changed = dict(resumed['contract'], args=dict(resumed['contract']['args'], aux_weight=.25))

@@ -5,6 +5,41 @@ rules, and safe next steps for future agents.
 
 ## Priority Update (2026-09-09)
 
+2026-09-10 IMPLEMENTED stages37/38: read docs/WINDOW_MEMORY_SUBSPACE_RUNBOOK.md.
+Stage37 trains64 train-only windows with same t2v2 legacy/noaux shift3 chain,
+balanced global sample stream, full resume, all64 previews/four seeds; separate
+heldout16 RAW AE gate/eval. Best checkpoint uses MEMORIZATION score explicitly.
+Train cache lacksRAW; memory RGB comparisons useAE, not GT RGB. Stage38 frozen
+EMA2500 oracle repairs frequency/PCA components with matched residual MSE;
+PCA uses64train videos only. Neither stage has cluster/quality validation yet.
+
+2026-09-10 RAE ROOT-CAUSE REVIEW (supersedes native-only next-step advice):
+User asks why MIRA works and requests a defensible R7 generation baseline.
+Read docs/RAE_VIDEO_ROOT_CAUSE_REVIEW_2026-09-10.md. Do not claim scratch RAE
+is disproven or launch another aux sweep. Prioritize same-pipeline small-set
+pure-noise generation fit and frozen frequency/PCA oracle diagnosis, then
+narrow-domain heldout I2V. These are proposals, not implemented launchers.
+New CPU audit on16 heldout seed42 latents: channel covariance PR rank17.32,
+top8 energy50.29%; high spatial-frequency error energy50.21%. Descriptive,
+not evidence to blindly whiten/truncate; train-derived statistics required.
+DiT width768>C192; RAE width-bound argument does not directly explain failure.
+Legacy temporal codec is window-dependent; do not convert to AR by changing
+norm or slicing latent slots. Keep good AE/shift3/aux8 reference artifacts.
+Native I2V remains a quality reference, not a substitute for this diagnosis.
+
+2026-09-10 QUALITY REDESIGN REQUEST: user rejects further small recipe sweeps.
+Recommend native pretrained I2V/VAE/input-output interfaces as quality-first
+mainline, geometry residual adapters/relational supervision, richer windows,
+strict first-frame/no-future-condition contract. Original R7 branch retained.
+Design only, no native NPU path implemented. Do not launch another aux sweep.
+
+2026-09-10 COMPLETE AUX AUDIT: aux6/aux8 both6000,48 completed ranks,
+6 node exits0 and6 synced receipts each. Aux6 not promoted. Aux8 bestEMA3500
+RAW .109237 vs no-aux best2500 .109971 (only0.67%); structure still fails.
+Retain both reference checkpoints, verify actual artifact step/EMA first.
+Stop auxiliary-layer sweeps; recommend native pretrained I2V quality baseline
+as next route evaluation, not implemented by audit. Read newest context.
+
 PREPARED NEXT ARM stage36_train_window_aux8_x0.sh: move auxiliary block6->8
 only, still weight0.5/shift3/6000 steps. Keep current aux6 running unchanged.
 EMA500 latent improves2% but RAW L1 worsens0.5%, too early to select winner.

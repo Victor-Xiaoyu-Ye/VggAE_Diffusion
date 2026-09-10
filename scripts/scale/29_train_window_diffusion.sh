@@ -140,6 +140,7 @@ if [[ "${RESUME}" == 1 ]]; then
   fi
 fi
 EXTRA+=(--stop_after_steps "${STOP_AFTER_STEPS:-0}")
+EXTRA+=(--memorize_clips "${MEMORIZE_CLIPS:-0}")
 # Use one tee (the shell above), so run_torchrun's own tee is disabled here.
 STAGE_LOG_FILE="" run_torchrun "${PROJECT}/train_r7_window_diffusion.py" \
   --manifest "${TRAIN_MANIFEST:-${CACHE_ROOT}/train/manifest.txt}" \

@@ -3,6 +3,94 @@
 This document is the durable handoff for VggAE-Diffusion. Keep it current when
 goals, architecture, training order, paths, or important decisions change.
 
+## RAE Generation Root-Cause Review (2026-09-10, latest)
+
+Implementation follow-up: stages37_train_window_memory64.sh and
+38_diagnose_window_subspace.sh now implement the first two diagnostics.
+Stage37 same178M/6000step/shift3/legacyAE,64train-only fixed samples, globally
+shuffled stream strided by48ranks without epoch-tail drops. IDs/content hash
+immutable on resume; heldout remains disjoint. Eval64memory+16heldout x2weights
+x4seeds=640rows; all64memory previews/latents, per-frame/spectral errors.
+Train cache lacksRAW: useAE reference for memory and heldoutRAW for AE gate.
+Best checkpoint selection explicitly memoryEMA L1, not heldout quality.
+Stage38 old noauxEMA2500,16heldout x2seeds x12arms=384rows; CPU PCA from64train
+samples and frequency projection, matching remaining MSE per future slot.
+GT oracle only, never deployed quality claim. Full IO/status/resume inherited;
+no training launch or NPU quality validation locally. Read new runbook.
+
+User challenges abandoning R7 and asks why MIRA/RAE succeeds while ours fails.
+The previous quality-first native-I2V recommendation is a reference route,
+not the exclusive next step. Scratch RAE is not disproven; neither data
+insufficiency nor representation failure has been isolated causally.
+Full review: docs/RAE_VIDEO_ROOT_CAUSE_REVIEW_2026-09-10.md.
+
+Reviewed24 unique user papers, core methods in detail, other papers screened
+at abstract level. Official local MIRA commitdb25448391d42547161673a77950a1154d8b5f1f:
+published codec config frozenDINOv3, strided bottleneckC32,9x16 grid,noise_tau0;
+history/action-conditioned causal model, default1B, paper headline5B/10000h.
+OurR7 is learned nonlinear compression+texture+temporal mixing,C192,18x18,
+178M joint future-window DiT,first-frame-only,9935fixed windows/6000x96 exposure.
+Do not equate loaded Wan transformer blocks with preserved native generation:
+old adapters bypass native patch_embedding/head. Current768width exceeds192
+latent channels, so RAE width-bound argument is not direct failure evidence.
+
+New CPU audit reads16 unique stage34 seed42 target/generated normalized
+latent files, shape16x4x324x192. Pooled channel covariance participation rank
+17.322,entropy rank54.076,top8 energy50.294%. FFT latent r>.3 energy target
+25.337%,generated20.522%,error50.211%;low r<=.15 target47.742%,generated52.784%.
+Each spectrum normalized independently. Heldout descriptive results only;
+not intrinsic dimension or proof whitening helps. Latent frequency !=RGB
+frequency. Outputs latent_structure_audit.json and audit_latent_structure.py
+in projectless outputs. Existing stage34 decoder metrics remain306/384;
+the12video complete perturbation groups differ from these16latent files.
+
+Proposed next sequence (not yet implemented/trained): same current pipeline
+64window memorization with pure-noise formal inference/multiple new seeds;
+frozen GT-oracle frequency/PCA error removal with matched-energy controls;
+then narrow-domain strictly heldout I2V and scaling based on measured curves.
+Keep existing ~25dB AE. Do not substitute old25/26n1 scripts or noisy-target
+reconstruction for complete generation fit. Legacy cross-time GN makes
+future slots window-dependent: any AR redesign requires prefix-consistency
+and codec revalidation, not silently swapping normalization or slicing slots.
+No new training recipe, cluster verification, or quality guarantee this turn.
+Dual IO/full-state resume/intermediates/DI remain mandatory for future runs.
+
+## Completed Auxiliary Controls (2026-09-10)
+
+Following user request for fundamental quality improvement, redesigned proposal
+prioritizes native pretrained I2V (first verify repository's Wan2.1-I2V14B
+candidate; compare native Wan2.2 options when available), preserving native
+VAE/heads/time/sampling/conditioning. No implicit T2V1.3B fallback. Current
+R7 scratch branch retained as reference, no further auxiliary sweeps.
+Geometry plan: zero residual adapters and confidence/visibility-aware relation
+supervision; future teacher labels for training only, never GT future conditions.
+First establish native quality, then ordinary adaptation vs geometry controls;
+expand independent video/time-window coverage and separate dynamic regions.
+Avoid claiming joint geometry-video or VGGT alignment alone as novelty.
+48x910B native sharding/ops/quality unvalidated; design is not implemented.
+Detailed source-linked design in projectless outputs/
+quality_first_redesign_2026-09-10.md. User quality-first intent now supersedes
+historical default-to-frozen-R7 experimental ordering.
+
+Aux6 and aux8 both complete6000, each48 completed ranks/6 exit0/6 synced
+publication receipts,768 unique eval rows. Identity equals baseline shift3;
+contract only adds auxiliary layer6/8 andweight.5. BestEMA RAW/AE L1:
+noaux2500=.109971/.103196; aux63000=.112138/.105387;
+aux83500=.109237/.102367. FinalRAW .112278/.114451/.110712 respectively.
+Aux6 not promoted. Aux8 best improves baseline best only0.67%, final1.39%;
+best comparison20/32 paired seeds improve (10/16 video means), final8/16
+video means improve. One trainingseed/small selected evalset, no significance
+claim. Aux8 late regression persists; best house/street previews still deform.
+DI medians after500 baseline3477/aux63523/aux83341, cross-run timing only.
+Actual best checkpoints not downloaded; verify step/EMA before use.
+
+Retain aux8 EMA3500 provisional numerical candidate + noaux EMA2500 control;
+not reasonable-video quality. Recommend ending layer-position sweeps and
+prioritizing same-input native pretrained I2V quality baseline/geometry route,
+still unimplemented; if continuing R7, small-set fit test before scaling.
+No new training recipe launched. Full audit in projectless outputs/
+aux6_aux8_complete_audit_2026-09-10.md.
+
 ## Completed Shift3 Run Audit (2026-09-09)
 
 Aux6 early audit: local status720/6000, complete500-step eval. EMA RAW L1

@@ -67,10 +67,14 @@ def parse_args(argv=None):
     p.add_argument('--cpu_test', action='store_true', help='synthetic tests only: cannot decode real AE')
     p.add_argument('--ae_norm',choices=('legacy','framewise'),required=True)
     p.add_argument('--min_ae_psnr',type=float,default=23.5)
+    p.add_argument('--memorize_clips', type=int, default=0,
+                   help='explicit training-subset fit diagnostic; heldout remains disjoint')
     return p.parse_args(argv)
 
 
 def run(args):
+    if args.memorize_clips < 0:
+        raise ValueError('memorize_clips must be nonnegative')
     if not np.isfinite(args.aux_weight) or args.aux_weight < 0 or bool(args.aux_layer) != bool(args.aux_weight):
         raise ValueError('aux_layer and positive aux_weight must be enabled together')
     if args.aux_layer and (not 1 <= args.aux_layer < args.depth or args.prediction != 'x0'):
@@ -162,6 +166,19 @@ def run(args):
             eval_statistics=digest(evstats), train_manifest=train_shards,
             eval_manifest=eval_shards, text_signature=bank.signature if bank else None,
             synthetic_test=args.cpu_test)
+        memory_samples = None
+        if args.memorize_clips:
+            from utils.window_memorization import select_training_subset, subset_identity
+            progress('loading_memory_subset')
+            memory_samples = select_training_subset(args.manifest, args.memorize_clips, args.seed)
+            identity['memorization'] = subset_identity(memory_samples)
+            if ddp:
+                signatures = [None]*world
+                dist.all_gather_object(signatures, identity['memorization']['sha256'])
+                if len(set(signatures)) != 1:
+                    raise ValueError('ranks selected different memorization data')
+            if rank == 0:
+                atomic_json(out/'memorization_subset.json', identity['memorization'])
         contract = resume_contract(args, identity, world)
         model_args = dict(channels=channels, grid=grid, future=future, temporal_factor=factor,
                          width=args.width, depth=args.depth, heads=args.heads, text_dim=4096 if bank else 0)
@@ -192,9 +209,13 @@ def run(args):
             del saved
         # Fixed zero workers and an isolated DataLoader generator make replay of
         # consumed batches deterministic. No claim of O(1) resume; large replay costs I/O.
-        dataset = LatentShardDataset(args.manifest, args.shuffle_buffer, args.seed, True, rank, world)
-        if len(dataset.shards) < world:
-            raise ValueError('not enough train shards for all ranks')
+        if memory_samples is not None:
+            from utils.window_memorization import MemorizationDataset
+            dataset = MemorizationDataset(memory_samples, args.seed, rank, world)
+        else:
+            dataset = LatentShardDataset(args.manifest, args.shuffle_buffer, args.seed, True, rank, world)
+            if len(dataset.shards) < world:
+                raise ValueError('not enough train shards for all ranks')
         loader = DataLoader(dataset, batch_size=args.batch_size, num_workers=0, collate_fn=collate,
                             drop_last=True, generator=torch.Generator().manual_seed(args.seed))
         evdata = list(LatentShardDataset(args.eval_manifest, 0, args.seed, False, 0, 1))
@@ -204,6 +225,11 @@ def run(args):
         if bank and eval_ids-set(bank.values):
             raise ValueError('held-out captions missing')
         evbatches = [collate([x]) for x in evdata[:args.eval_clips]]
+        if memory_samples is not None and set(identity['memorization']['video_ids']) & eval_ids:
+            raise ValueError('memorization subset overlaps heldout IDs')
+        evaluation_batches = ([('memorization', collate([x])) for x in memory_samples]
+                              if memory_samples is not None else [])
+        evaluation_batches += [('heldout', b) for b in evbatches]
         del evdata
         model = torch.nn.parallel.DistributedDataParallel(core, device_ids=[local],
             output_device=local, find_unused_parameters=False) if ddp else core
@@ -216,7 +242,8 @@ def run(args):
             if args.resume: reconcile_history(out,step)
             writer = SummaryWriter(str(out/'tb'), purge_step=step or None)
             atomic_json(out/'config.json', dict(contract=contract, model=model_args,
-                parameters=sum(p.numel() for p in core.parameters()), global_batch=world*args.batch_size*args.accum_steps))
+                parameters=sum(p.numel() for p in core.parameters()), global_batch=world*args.batch_size*args.accum_steps,
+                checkpoint_selection_split='memorization' if memory_samples is not None else 'heldout'))
         progress('replaying_data_cursor', step=step, consumed_batches=consumed)
         iterator = iter(loader)
         for i in range(consumed):
@@ -281,11 +308,12 @@ def run(args):
 
         @torch.no_grad()
         def evaluate():
+            evaluation_started = time.perf_counter()
             eval_rng = capture_rng_state()
             core.eval(); rows = []; preview_root = out/'samples'/f'step{step:07d}'
             for label in ('online', 'ema'):
                 with use_ema(core, ema) if label == 'ema' else contextlib.nullcontext():
-                    for index, batch in enumerate(evbatches):
+                    for index, (split, batch) in enumerate(evaluation_batches):
                         if index % world != rank:
                             continue
                         cr, yr = validate_batch(batch, future, grid, channels)
@@ -301,7 +329,7 @@ def run(args):
                             noise = torch.randn(y.shape, generator=torch.Generator().manual_seed(seed+1009*index)).to(device)
                             generated = flow.sample(core, c, noise, args.sample_steps, dtype, text, valid, args.sample_method)
                             gen = decode(cr, inverse(generated, st['target']))
-                            row = dict(step=step, weights=label, video_id=batch['video_id'][0], seed=seed,
+                            row = dict(step=step, weights=label, split=split, video_id=batch['video_id'][0], seed=seed,
                                 latent_mse=float((generated-y).square().mean()),
                                 rgb_l1_vs_ae=float((gen[:, 1:]-ae[:, 1:]).abs().mean()),
                                 rgb_copy_l1_vs_ae=float((copy[:, 1:]-ae[:, 1:]).abs().mean()),
@@ -316,6 +344,13 @@ def run(args):
                                 row['ae_l1_vs_raw'] = float((ae[:, 1:]-raw[:, 1:]).abs().mean())
                             row['normalized_target_power'] = float(y.square().mean())
                             row['normalized_generated_power'] = float(generated.square().mean())
+                            if memory_samples is not None:
+                                from utils.window_subspace import removed_component
+                                error = generated-y
+                                for band in ('low', 'mid', 'high'):
+                                    part = removed_component(error, 'frequency_'+band, None)
+                                    row['latent_error_'+band+'_mse'] = float(part.square().mean())
+                                row['per_frame_l1_vs_ae'] = (gen[:,1:]-ae[:,1:]).abs().mean((0,2,3,4)).cpu().tolist()
                             for value in (.05, .25, .5, .75, .95, 1.):
                                 u = torch.full((len(y),), value, device=device)
                                 x = (1-value)*y+value*noise
@@ -330,7 +365,7 @@ def run(args):
                                 save_video_preview(str(preview_root), f'{label}_clip{index}_seed{seed}', videos,
                                     metadata=row, fps=8, save_mp4=not args.cpu_test)
                                 atomic_torch_save(dict(cond=cr.cpu(), target=yr.cpu(), generated=inverse(generated, st['target']).cpu(),
-                                    video_id=batch['video_id'][0], seed=seed, weights=label),
+                                    video_id=batch['video_id'][0], seed=seed, weights=label, split=split),
                                     str(preview_root/f'{label}_clip{index}_seed{seed}.pt'))
             core.train()
             if ddp:
@@ -338,15 +373,25 @@ def run(args):
                 dist.all_gather_object(gathered, rows)
                 rows = [r for part in gathered for r in part]
             rows.sort(key=lambda r:(r['weights'],r['video_id'],r['seed']))
-            summary = {'step':step}
+            if memory_samples is not None:
+                expected_rows = 2*len(evaluation_batches)*len(seeds)
+                keys = {(r['split'], r['weights'], r['video_id'], r['seed']) for r in rows}
+                if len(rows) != expected_rows or len(keys) != expected_rows:
+                    raise ValueError('incomplete/duplicate memorization evaluation matrix')
+            summary = {'step':step, 'evaluation_seconds':time.perf_counter()-evaluation_started}
             for label in ('online', 'ema'):
-                group = [r for r in rows if r['weights'] == label]
+                group = [r for r in rows if r['weights'] == label and r['split'] == 'heldout']
                 for key in ('latent_mse','rgb_l1_vs_ae','generated_motion','ae_motion',
                             'rgb_l1_vs_raw','rgb_copy_l1_vs_raw', 'normalized_target_power',
                             'normalized_generated_power', 'x0_mse_u0.05','x0_mse_u0.25',
                             'x0_mse_u0.5','x0_mse_u0.75','x0_mse_u0.95','x0_mse_u1'):
                     if all(key in r for r in group):
                         summary[f'eval/{label}/{key}'] = float(np.mean([r[key] for r in group]))
+                memory_rows = [r for r in rows if r['weights'] == label and r['split'] == 'memorization']
+                if memory_rows:
+                    for key, value in memory_rows[0].items():
+                        if isinstance(value, float):
+                            summary[f'memorization/{label}/{key}'] = float(np.mean([r[key] for r in memory_rows]))
             if rank == 0:
                 for row in rows: append_metrics(out/'eval_samples.jsonl',row)
                 append_metrics(out/'metrics.jsonl', summary)
@@ -354,7 +399,7 @@ def run(args):
                     if k != 'step': writer.add_scalar(k,v,step)
                 writer.flush()
             restore_rng_state(eval_rng)
-            return summary['eval/ema/rgb_l1_vs_ae']
+            return summary[('memorization' if memory_samples is not None else 'eval')+'/ema/rgb_l1_vs_ae']
 
         def save(kind):
             progress('saving:'+kind, step=step)
