@@ -136,7 +136,10 @@ class WindowTests(unittest.TestCase):
     def test_memory_resume_end_to_end(self):
         self._check_resume(False, memorize=True)
 
-    def _check_resume(self, auxiliary, memorize=False):
+    def test_uniform_memory_resume_end_to_end(self):
+        self._check_resume(False, memorize=True, uniform=True)
+
+    def _check_resume(self, auxiliary, memorize=False, uniform=False):
         with tempfile.TemporaryDirectory() as td:
             p = Path(td)
             torch.manual_seed(19)
@@ -164,6 +167,8 @@ class WindowTests(unittest.TestCase):
                 base += ['--depth','2','--aux_layer','1','--aux_weight','0.5']
             if memorize:
                 base += ['--memorize_clips','2']
+            if uniform:
+                base += ['--time_distribution','uniform','--time_shift','1']
             with contextlib.redirect_stdout(io.StringIO()):
                 run(parse_args(base+['--output_dir',str(p/'full')]))
                 run(parse_args(base+['--output_dir',str(p/'split'),'--stop_after_steps','2']))
@@ -171,6 +176,10 @@ class WindowTests(unittest.TestCase):
                 run(parse_args(base+['--output_dir',str(p/'split'),'--resume',ckpt]))
             full=torch.load(p/'full/checkpoint_final.pt',weights_only=False)
             resumed=torch.load(p/'split/checkpoint_final.pt',weights_only=False)
+            if uniform:
+                self.assertEqual(resumed['contract']['flow']['time_distribution'], 'uniform')
+                changed=dict(resumed['contract'],flow=WindowFlow().contract())
+                with self.assertRaises(ValueError):validate_resume(resumed,changed)
             for key in ('model','ema'):
                 for name,value in full[key].items():
                     torch.testing.assert_close(value,resumed[key][name],atol=0,rtol=0)

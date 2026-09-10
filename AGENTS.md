@@ -5,6 +5,15 @@ rules, and safe next steps for future agents.
 
 ## Priority Update (2026-09-09)
 
+NEW stage40_train_window_memory64_uniform.sh: same stage37 recipe except noise
+law changes shifted-logit-normal3 -> unwarpedUniform;fresh6000,never resume old
+memory checkpoint. Loss floor/weight unchanged, so effective bin contributions
+also change; monitor existing sample/loss fractions. Stage41 runs same stage39
+trajectory after uniformfinal6000. Read docs/WINDOW_MEMORY_UNIFORM_RUNBOOK.md.
+Old flow identities/default draws remain compatible. New quality/NPU pending.
+Stage39 now completed3584rows/48ranks/6exit0: memory x0L1 .01107@u.375 ->
+.03714final, but heldout bad already at u1; do not promise generalization.
+
 NEW stage39_diagnose_window_trajectory.sh: read docs/WINDOW_TRAJECTORY_RUNBOOK.md.
 Read-only memory64 checkpoint_final step6000,16memory+16heldout,online/EMA,
 seeds101/211. Production Euler observer,9nodes state/x0/GTprobe plusfinal,

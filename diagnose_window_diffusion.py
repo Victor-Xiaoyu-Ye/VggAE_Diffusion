@@ -79,7 +79,8 @@ def run(args):
         expected = {k for k, v in state.items() if v.is_floating_point()}
         if set(saved['ema']) != expected: raise ValueError('incomplete EMA state')
         state.update(saved['ema']); model.load_state_dict(state, strict=True)
-        flow = WindowFlow(saved['args']['prediction'], saved['args']['loss_floor'], saved['args']['time_shift'])
+        flow = WindowFlow(saved['args']['prediction'], saved['args']['loss_floor'], saved['args']['time_shift'],
+                          saved['args'].get('time_distribution', 'logit_normal_0_1'))
         if flow.contract() != saved['contract']['flow']: raise ValueError('flow contract mismatch')
         dtype = {'bf16': torch.bfloat16, 'fp32': torch.float32, 'fp16': torch.float16}[saved['args']['dtype']]
         seed = saved['args']['seed']

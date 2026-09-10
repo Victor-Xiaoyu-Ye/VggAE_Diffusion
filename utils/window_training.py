@@ -143,6 +143,8 @@ def resume_contract(args, identity, world):
                'stats', 'eval_stats', 'r7_ckpt', 'text_dir', 'cpu_test'}
     if not getattr(args, 'memorize_clips', 0):
         mutable.add('memorize_clips')
+    if getattr(args, 'time_distribution', 'logit_normal_0_1') == 'logit_normal_0_1':
+        mutable.add('time_distribution')  # Preserve historical full-resume identities.
     # Disabled auxiliary defaults preserve pre-auxiliary full-resume contracts.
     if not getattr(args, 'aux_layer', 0) and not getattr(args, 'aux_weight', 0):
         mutable |= {'aux_layer', 'aux_weight'}

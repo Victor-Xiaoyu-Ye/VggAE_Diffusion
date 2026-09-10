@@ -5,6 +5,28 @@ goals, architecture, training order, paths, or important decisions change.
 
 ## RAE Generation Root-Cause Review (2026-09-10, latest)
 
+Implemented stage40 uniform time-law control: identical stage37 frozenAE,
+64subset/model/6000budget/weightedx0loss, only replace shifted logitNormal3 with
+unwarped U(0,1), explicit time_distribution=uniform,time_shift=1. Fresh init;
+cannot full-resume old flow. Disabled default field omitted from historical
+resume args and old flowcontract unchanged. Diagnostic readers default old
+checkpoints to logitNormal. Stage41 same trajectory audit of uniformfinal6000.
+New namespaces memory64_uniform_v1 / memory64_uniform_trajectory_s6000_v1.
+Per-bin sampling and objective telemetry retained; changing sampling changes
+effective loss contributions, no importance correction. New NPU/quality untested.
+Read docs/WINDOW_MEMORY_UNIFORM_RUNBOOK.md. No AE,optimizer orsamplingchanges.
+
+STAGE39 COMPLETE:3584unique rows,48rank completed,6node exit0,AEgate24.48933,
+publication synced,previews_complete.json true (summary false is prepreview
+snapshot). EMA memory16x2: u1 x0MSE .015678/RGBL1 .013887;u.375 .011145/.011067;
+u.25 .087796/.032661;final .126886/.037139. GTprobe at u.25 also worsens .070230,
+then improves at .0625 to .006572 while trajectory stays .096239. Online same.
+Heldout highnoise prediction alreadybad: u1MSE .899239/L1 .143808,final .854195/
+.137694;earlyexit does not solve generalization. Next candidate controlled
+noise-coverage training arm on same64set,notAEretrain or declaring1stepbaseline.
+No new recipe implemented by audit. Full report projectless outputs/
+memory64_trajectory_results_review.md. Stage39 NPU/outputs now validated.
+
 Implemented stage39 trajectory diagnosis: memory64 checkpoint_final step6000,
 original subset hash validation,16memory+16heldout,online/EMA,seeds101/211.
 Shared production Euler sampler gains optional observational callback (no

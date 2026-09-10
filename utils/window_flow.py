@@ -8,16 +8,22 @@ class WindowFlow:
     prediction: str = 'x0'
     loss_floor: float = .05
     time_shift: float = 1.
+    time_distribution: str = 'logit_normal_0_1'
 
     def __post_init__(self):
         if self.prediction not in ('x0', 'velocity') or not 0 < self.loss_floor <= 1 or self.time_shift <= 0:
             raise ValueError('invalid window flow contract')
+        if self.time_distribution not in ('logit_normal_0_1', 'uniform'):
+            raise ValueError('invalid noise-time distribution')
+        if self.time_distribution == 'uniform' and self.time_shift != 1.:
+            raise ValueError('uniform noise time requires shift=1 (no warp)')
 
     def contract(self):
-        return dict(schema='r7-window-flow-v1', path='(1-u)*data+u*noise',
-                    time_distribution='logit_normal_0_1', **asdict(self))
+        return dict(schema='r7-window-flow-v1', path='(1-u)*data+u*noise', **asdict(self))
 
     def times(self, n, device):
+        if self.time_distribution == 'uniform':
+            return torch.rand(n, device=device).clamp(1e-5, 1-1e-5)
         u = torch.randn(n, device=device).sigmoid()
         return (self.time_shift*u/(1+(self.time_shift-1)*u)).clamp(1e-5, 1-1e-5)
 

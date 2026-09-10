@@ -37,6 +37,7 @@ def parse_args(argv=None):
     p.add_argument('--no_text', action='store_true', help='explicit uncaptioned I2V arm')
     p.add_argument('--prediction', choices=('x0', 'velocity'), default='x0')
     p.add_argument('--time_shift', type=float, default=1.)
+    p.add_argument('--time_distribution', choices=('logit_normal_0_1', 'uniform'), default='logit_normal_0_1')
     p.add_argument('--loss_floor', type=float, default=.05)
     p.add_argument('--width', type=int, default=768)
     p.add_argument('--depth', type=int, default=12)
@@ -73,6 +74,8 @@ def parse_args(argv=None):
 
 
 def run(args):
+    # Reject contradictory distributions before distributed initialization/staging.
+    WindowFlow(args.prediction, args.loss_floor, args.time_shift, args.time_distribution)
     if args.memorize_clips < 0:
         raise ValueError('memorize_clips must be nonnegative')
     if not np.isfinite(args.aux_weight) or args.aux_weight < 0 or bool(args.aux_layer) != bool(args.aux_weight):
@@ -187,7 +190,7 @@ def run(args):
         # same model on every rank; rank-specific noise RNG is set below.
         torch.manual_seed(args.seed)
         core = R7WindowDiT(**model_args).to(device)
-        flow = WindowFlow(args.prediction, args.loss_floor, args.time_shift)
+        flow = WindowFlow(args.prediction, args.loss_floor, args.time_shift, args.time_distribution)
         contract['flow'] = flow.contract()
         optimizer = build_optimizer(core, args.lr, args.wd)
         def schedule(s):
