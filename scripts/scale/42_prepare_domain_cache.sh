@@ -11,9 +11,9 @@ configure_modelarts_distributed
 require_scale_cluster
 require_output_url
 export PYTHONPATH="${PROJECT}${PYTHONPATH:+:${PYTHONPATH}}"
-LOCAL_STAGE="${SCALE_ROOT}/domain_cache_${ARM}_v1"
-CURRENT_STAGE="${SCALE_REMOTE_ROOT}/domain_cache_${ARM}_v1"
-MIRROR_STAGE="${SCALE_MIRROR_ROOT}/domain_cache_${ARM}_v1"
+LOCAL_STAGE="${SCALE_ROOT}/domain_cache_${ARM}_v2"
+CURRENT_STAGE="${SCALE_REMOTE_ROOT}/domain_cache_${ARM}_v2"
+MIRROR_STAGE="${SCALE_MIRROR_ROOT}/domain_cache_${ARM}_v2"
 if [[ "${NODE_RANK}" != 0 ]]; then
   CURRENT_STAGE="${CURRENT_STAGE}/workers/node${NODE_RANK}"
   MIRROR_STAGE="${MIRROR_STAGE}/workers/node${NODE_RANK}"
@@ -42,20 +42,24 @@ PY
 }
 trap finish_domain_cache EXIT
 exec > >(tee -a "${LOCAL_STAGE}/prepare.log") 2>&1
-DOMAIN_DIR="${LOCAL_CACHE_ROOT}/metadata/domain_csv_v1"
+DOMAIN_DIR="${LOCAL_CACHE_ROOT}/metadata/domain_csv_v2"
 mkdir -p "${DOMAIN_DIR}"
 ensure_local_checkpoint "${SPATIALVID_METADATA}" "${SPATIALVID_METADATA_URL}" 'HQ metadata'
 "${PYTHON_BIN}" "${PROJECT}/scripts/prepare_domain_csv.py" \
-  --metadata "${SPATIALVID_METADATA}" --selection "${PROJECT}/configs/spatialvid_domain_v1.json" \
+  --metadata "${SPATIALVID_METADATA}" --selection "${PROJECT}/configs/spatialvid_domain_v2.json" \
   --output "${DOMAIN_DIR}"
 cp "${DOMAIN_DIR}/domain_manifest.json" "${LOCAL_STAGE}/domain_manifest.json"
-cp "${PROJECT}/configs/spatialvid_domain_v1.json" "${LOCAL_STAGE}/selection.json"
+cp "${PROJECT}/configs/spatialvid_domain_v2.json" "${LOCAL_STAGE}/selection.json"
+"${PYTHON_BIN}" "${PROJECT}/scripts/preflight_domain_objects.py" \
+  --csv "${DOMAIN_DIR}/train_${ARM}_2048.csv" "${DOMAIN_DIR}/eval_street_128.csv" "${DOMAIN_DIR}/eval_other_128.csv" \
+  --video_root "${SPATIALVID_VIDEO_ROOT}" --output "${LOCAL_STAGE}/object_preflight.json"
+run_distributed_barrier
 export DOMAIN_VIDEO_ROOT="${SPATIALVID_VIDEO_ROOT}"
 export AE_VARIANT=t2v2 WINDOW_AE_NORM=legacy
 export CACHE_NUM_PARTITIONS=1 CACHE_PARTITION_ID=0 MAX_FAILURE_RATE=0
 export SAMPLES_PER_TAR=64 BATCH_SIZE=1 NUM_WORKERS="${NUM_WORKERS:-2}"
-export MOX_CACHE_WRITER_DIR="${LOCAL_CACHE_ROOT}/cache/domain_writer/${ARM}"
-BASE="${PERSISTENT_OBS_ROOT}/cache_latents/r7_domain_${ARM}_t2v2_legacy_diag_v1"
+export MOX_CACHE_WRITER_DIR="${LOCAL_CACHE_ROOT}/cache/domain_writer_v2/${ARM}"
+BASE="${PERSISTENT_OBS_ROOT}/cache_latents/r7_domain_${ARM}_t2v2_legacy_diag_v2"
 cache_split() {
   local name=$1 mode=$2 root=$3 version=$4 windows=$5
   export DOMAIN_CSV_FILE="${DOMAIN_DIR}/${name}.csv"
@@ -64,9 +68,9 @@ cache_split() {
   MODE="${mode}" bash "${SCRIPT_DIR}/28_prepare_window_cache.sh"
   run_distributed_barrier
 }
-cache_split "train_${ARM}_2048" train "${BASE}" "r7_domain_${ARM}_t2v2_legacy_diag_v1" 4
-cache_split eval_street_128 eval "${BASE}" "r7_domain_${ARM}_t2v2_legacy_diag_v1" 1
-cache_split eval_other_128 eval "${BASE}/other" "r7_domain_${ARM}_other_t2v2_legacy_diag_v1" 1
+cache_split "train_${ARM}_2048" train "${BASE}" "r7_domain_${ARM}_t2v2_legacy_diag_v2" 4
+cache_split eval_street_128 eval "${BASE}" "r7_domain_${ARM}_t2v2_legacy_diag_v2" 1
+cache_split eval_other_128 eval "${BASE}/other" "r7_domain_${ARM}_other_t2v2_legacy_diag_v2" 1
 if [[ "${NODE_RANK}" == 0 ]]; then
   for suffix in train eval other/eval; do
     "${PYTHON_BIN}" "${PROJECT}/merge_latent_cache.py" --cache_dir "${BASE}/${suffix}" \

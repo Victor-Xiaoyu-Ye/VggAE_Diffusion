@@ -5,6 +5,11 @@ rules, and safe next steps for future agents.
 
 ## Priority Update (2026-09-09)
 
+Domain v1 cache failed onmissingHQ object.42/43/44 nowusefrozenv2 selection
+andnamespaces afterfullHQ objectlisting (360610present vs365362CSV). No raw
+downloads. Preflight2304objects/arm beforeAE,zero replacement/failures retained.
+Rerun43 ARM=single RESUME=0;do notresume oldv1cache/training. Seeupdatedrunbook.
+
 NEW stages42/43/44: docs/DOMAIN_UNIFORM_RUNBOOK.md. FrozenCSV single/mixed
 2048clip cohorts,4windows each,fullHQ root;freshuniform6000 on48NPUs.43 is
 one-command cache+train entry,ARM=single default. No local raw downloads.

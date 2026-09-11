@@ -5,6 +5,18 @@ goals, architecture, training order, paths, or important decisions change.
 
 ## RAE Generation Root-Cause Review (2026-09-10, latest)
 
+2026-09-11 DOMAIN v1 failed duringAEcache(~20/171rank0,0committed shards):
+HQ group0014/c6cd8a63-3d2c-5c85-9b96-53f14ba96f13.mp4 absent atspecifiedpath.
+CSV-onlyselection without objectpreflight was insufficient. FullHQ listing
+(not oldoft):360610nonemptyMP4,365362metadata,4752unmatched paths. V1missing
+singletrain35/mixed41/evalstreet2/evalother2. v2reselects fromlisted objects with
+samepolicy/2048counts/512shared,core4333/other11945;4096unique selectedIDs all
+present. Scripts42/43/44 nowdefaultv2 namespaces/config;retainv1 artifacts,
+restartRESUME=0. Newpreflight checks2304selectedtrain/evalobjects perarm before
+AE loading;metadata-only,logsnotfoundvsaccesserror,dualpublished. Rawnotdownloaded
+locally. Cdrivewas~20MBfree;downloadedCSV andinventory movedto
+D:/workspace/VggAE_DataAudit (outside repo). Source-level leakage remainsunknown.
+
 Implemented stages42/43/44 for frozenCSV domaincomparison;read docs/
 DOMAIN_UNIFORM_RUNBOOK.md.43 ARM=single(default)/mixed prepares3cache splits
 thenfreshuniform6000 global96.2048clipsx4windows=8192train;eval128street,
