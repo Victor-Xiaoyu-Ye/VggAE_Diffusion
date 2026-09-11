@@ -5,6 +5,86 @@ goals, architecture, training order, paths, or important decisions change.
 
 ## RAE Generation Root-Cause Review (2026-09-10, latest)
 
+Implemented stages42/43/44 for frozenCSV domaincomparison;read docs/
+DOMAIN_UNIFORM_RUNBOOK.md.43 ARM=single(default)/mixed prepares3cache splits
+thenfreshuniform6000 global96.2048clipsx4windows=8192train;eval128street,
+other/eval128;testunused.32street evalx2seeds every500;8previews.42 forcesfullHQ
+video root,not oft. Immutablemetadata+selectionCSVsha;no decode replacements,
+failfast without advancingcommittedcursor;zero failure/exactcount cache gate.
+frame_indices/window_id saved;olddefaultcache contracts preserved withoutsha.
+Training+prep logsdualwrite;latentdata remainsownerdurableOBS asbefore.
+44 othercohortfinal6000 diagnostic explicitly validatesnewCSVsha,representation,
+RAW/anchor;trainingnormalization unchanged.24CPUtests+16384frameindices verified,
+no newNPU/OBS run yet. Scripts prepared,notclaiming launched/qualitypassed.
+
+2026-09-11 USER LIMIT:CSV-only local data analysis;do notdownload raw videos,
+depth orper-video annotations. DomainCSV audit completed projectless outputs/
+spatialvid_domains/README.md.365362unique IDs/paths. Explicit daytimeurbanstreet
+forward(+one lateral) core4417clips/13.97metadatah;otheroutdoor12185/40.40h.
+No walking/aerial viewpoint inference fromCSV. rotAngle rawquantile notdegrees;
+distLevelactual0–4,notassume docs1–5. Candidate2048single/2048mixed share512core,
+1536matched replacements;128eval+128test percore/other,clipIDs disjoint.
+8numeric matchingSMD<.08;metadata matchingnotunobservedcausalbalance. Different
+coreexposure means test measuresfixedbudget domainconcentration,notpure negative
+transfer. Four9frame1s windows/clip manifests8192/arm prepared;newcache integration
+NOTimplemented. OriginalYouTube mappingabsent;source-disjoint NOTverified.
+NoNPUlaunch,no newmedia IO. Retainuniformchain andtaildiagnostic separately.
+
+2026-09-11 local OBS read access established for user-provided fullHQ prefix
+dataset/SpatialVID-HQ (distinct fromolder sparseoft). OfficialPythonSDK3.26.6
+isolated in projectless work/obs_deps;outputs/obs-read.ps1 +obs_readonly.py
+restrict local actions tols/get andHQprefix. Credentials stored withWindows
+current-user DPAPI outside repo;never copy credentials intodocs/code.
+Downloaded metadata141824869bytes:365362rows/1111.55metadatahours;notyetfull
+object existence audit. ActualsceneType composite 'Urban;Street Scene'96509,
+'Natural Landscape;Forest Trail'7530;normalize labels,not =='urban'.
+Actualvideo root videos/SpatialVID/videos/;annotationroot
+annotations/SpatialVID/annotations/. Samplecaption and6annotationfiles verified;
+1001object pagination unique. Metadata lacksdirectYouTube source mapping.
+Guide projectless outputs/OBS_READONLY_GUIDE.md. No remote mutations/trainchanges.
+
+2026-09-11 STAGE41 COMPLETE:uniformfinal6000,3584unique rows with exact same
+sample/seed/arm keys asstage39,48completed ranks,6exit0/6synced,AE24.489331.
+EMA memory finalL1 .025247 vsold .037139;heldout .116136 vsold .137694.
+Tail failure delayed notremoved: memoryu.25 L1 .014432 ->u.125 .025281,
+32/32 worsen;final32/32 worse thanmid andonecall. GTprobe memory MSE stays
+.017636->.017070 whilefree .018913->.059425;u.015625 GTprobe .000314 vs
+free .062235. Heldout highnoise alreadybad (.117711 L1),final .116136;
+29/32 improvefinalvsonecall. Noearlyexit generalization cure. Visualchecked
+memory00 andheldout00 EMAseed101 grids:heldout smeared fromfirstprediction.
+Report projectless outputs/uniform_trajectory_results_review.md. Retainuniform
+control;recommend narrow-domain multiwindow/source-disjoint heldout baseline,
+notanother noise sweep;trajectory-error correction is hypothesis notimplemented.
+
+2026-09-11 stage40 downloaded snapshot audited: status5630/6000 running,
+7040unique global eval rows complete500–5500. Same subset/config except time law.
+EMA5500 uniform vs shift3 memory RGBL1 .027225/.038138,latent .066464/.127837;
+heldout RGBL1vsAE .115892/.137361,RAW .120616/.141493. Heldout uniform best
+observed3000 .114526 then slight regression;copyAE L1 .095610 still lower.
+Late interval DI medians5355.9/5601.1,not causal speed attribution.
+Uniform sample bins~20% each butlowestbin~68.9% objective;notgradientfraction.
+Available5500 previews128 sets=16memory clips x2weights x4seeds,all PNGs present;
+six paired EMAseed101 frame selections show improved detail/less smear but
+remaining defects. Noheldout visual evidence;do not call generalization solved.
+No6000 completion/exit0 evidence;publication synced is snapshot only.
+Report projectless outputs/uniform_partial_review.md;retain recipe andstage41.
+
+Research follow-up: user clarifies real data comprises aerial natural scenery
+and first-person walking streets from broad YouTube sources. Do not equate
+these with synchronized observations of the same place/world. MIRA official
+blog uses3arenas/singlebot; paper independently studies data/model/codec effects.
+Our results isolate memory-tail degradation AND highnoise heldout failure;
+neither data-only nor encoder-only explanations are established.
+Proposed project thesis (not implemented): geometric correspondence reduces
+learning burden of camera-induced changes and improves data efficiency/motion
+generalization. Prioritize controlled camera/scene decomposition + matched
+DINO,pose-only,2Dcorrespondence,3Dcorrespondence controls. Generic geometry memory,
+VGGTalignment,RGB+geometry or camera control alone overlap existing work.
+Survey in projectless outputs/vggt_project_positioning_survey.md, repo docs copy.
+User has been asked whether explicit user camera trajectories may define main
+task; no answer yet, preserve first-frame-only contract until decided.40/41
+recipe unchanged, no new training launched by research.
+
 Implemented stage40 uniform time-law control: identical stage37 frozenAE,
 64subset/model/6000budget/weightedx0loss, only replace shifted logitNormal3 with
 unwarped U(0,1), explicit time_distribution=uniform,time_shift=1. Fresh init;

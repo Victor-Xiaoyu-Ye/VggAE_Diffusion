@@ -80,7 +80,15 @@ fi
 configure_modelarts_distributed
 require_scale_cluster
 require_output_url
-ensure_spatialvid_subset_splits
+if [[ -n "${DOMAIN_CSV_FILE:-}" ]]; then
+  require_file "${DOMAIN_CSV_FILE}" "frozen domain CSV"
+  [[ -n "${DOMAIN_VIDEO_ROOT:-}" && -n "${DOMAIN_CSV_SHA256:-}" ]] || {
+    echo 'Domain cache requires video root and CSV checksum' >&2; exit 2;
+  }
+  SPATIALVID_VIDEO_ROOT="${DOMAIN_VIDEO_ROOT}"
+else
+  ensure_spatialvid_subset_splits
+fi
 
 if [[ "${ALLOW_DIAGNOSTIC_CACHE}" != 1 ]]; then
   if [[ "${NODE_RANK}" -ne 0 ]]; then rm -f "${R7_CKPT}"; fi
@@ -144,10 +152,14 @@ else
 fi
 LOG_DIR="${SCALE_ROOT}/cache_generation/${CACHE_VERSION}/${MODE}"
 REMOTE_LOG_DIR="${SCALE_REMOTE_ROOT}/cache_generation/${CACHE_VERSION}/${MODE}"
+if [[ -n "${DOMAIN_CSV_FILE:-}" ]]; then CSV="${DOMAIN_CSV_FILE}"; fi
 start_output_sync "${LOG_DIR}" "${REMOTE_LOG_DIR}"
 trap 'stop_output_sync "${LOG_DIR}" "${REMOTE_LOG_DIR}"' EXIT
 
 EXTRA_ARGS=()
+if [[ -n "${DOMAIN_CSV_FILE:-}" ]]; then
+  EXTRA_ARGS+=(--csv_sha256 "${DOMAIN_CSV_SHA256}" --decode_retries 0)
+fi
 [[ "${RESUME_CACHE}" == 1 ]] && EXTRA_ARGS+=(--resume_cache)
 [[ "${STORE_I0}" == 1 ]] && EXTRA_ARGS+=(--store_i0_rgb)
 [[ "${STORE_RGB:-0}" == 1 ]] && EXTRA_ARGS+=(--store_rgb)

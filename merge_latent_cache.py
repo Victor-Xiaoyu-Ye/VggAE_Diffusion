@@ -118,7 +118,7 @@ def comparable_config(config):
     # R7 caches record these fields in every partition. Equality prevents a
     # train/eval or sampling-contract mix while allowing per-partition CSVs.
     durable_keys = (
-        "split", "csv", "max_videos", "check_files", "num_partitions",
+        "split", "csv", "csv_sha256", "max_videos", "check_files", "num_partitions",
         "index_num_shards", "video_root", "annotation_index",
         "clips_per_video", "seq_len", "target_size", "latent_grid",
         "max_frame_span", "clip_duration_seconds", "store_i0_rgb", "store_rgb", "independent_anchor", "window_ae_norm", "dtype",

@@ -39,6 +39,9 @@ fi
 # No writes until the fresh-output check has succeeded on node zero.
 run_distributed_barrier
 mkdir -p "${LOCAL_OUT}/logs/npu"
+if [[ -n "${DOMAIN_PROTOCOL_FILE:-}" ]]; then
+  cp "${DOMAIN_PROTOCOL_FILE}" "${LOCAL_OUT}/domain_selection.json"
+fi
 "${PYTHON_BIN}" - "${LOCAL_OUT}" <<'PY'
 import sys,time,shutil
 from pathlib import Path
@@ -92,13 +95,17 @@ if [[ "${WINDOW_DIAGNOSTIC_ONLY:-0}" == 1 ]]; then
     --root "${DIAGNOSTIC_CKPT_URL:-${SCALE_REMOTE_ROOT}/${DIAGNOSTIC_SOURCE}/${DIAG_FILE}}" \
     --root "${DIAGNOSTIC_CKPT_MIRROR_URL:-${SCALE_MIRROR_ROOT}/${DIAGNOSTIC_SOURCE}/${DIAG_FILE}}"
   read -r -a DIAG_SEEDS <<< "${DIAGNOSTIC_SEEDS:-42 43}"
+  DIAG_EXTRA=()
+  if [[ -n "${ALTERNATE_EVAL_CSV_SHA256:-}" ]]; then
+    DIAG_EXTRA+=(--alternate_eval_csv_sha256 "${ALTERNATE_EVAL_CSV_SHA256}")
+  fi
   STAGE_LOG_FILE="" run_torchrun "${PROJECT}/diagnose_window_diffusion.py" \
     --checkpoint "${DIAG_CKPT}" --r7_ckpt "${R7_CKPT}" --output_dir "${LOCAL_OUT}" \
     --manifest "${TRAIN_MANIFEST:-${CACHE_ROOT}/train/manifest.txt}" \
     --eval_manifest "${EVAL_MANIFEST:-${CACHE_ROOT}/eval/manifest.txt}" \
     --eval_stats "${EVAL_STATS:-${CACHE_ROOT}/eval/stats.pt}" \
     --expected_step "${EXPECTED_STEP:-6000}" --clips "${DIAGNOSTIC_CLIPS:-16}" \
-    --previews "${PREVIEW_CLIPS:-4}" --mode "${DIAGNOSTIC_MODE:-standard}" --seeds "${DIAG_SEEDS[@]}"
+    --previews "${PREVIEW_CLIPS:-4}" --mode "${DIAGNOSTIC_MODE:-standard}" --seeds "${DIAG_SEEDS[@]}" "${DIAG_EXTRA[@]}"
   exit 0
 fi
 EXTRA=()

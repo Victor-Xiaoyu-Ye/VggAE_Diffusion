@@ -7,6 +7,7 @@ import argparse
 import io
 import json
 import os
+import hashlib
 
 import torch
 import torch.distributed as dist
@@ -49,6 +50,7 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description="Cache R7 absolute anchor/future latents")
     parser.add_argument("--csv", required=True)
+    parser.add_argument("--csv_sha256", default="", help="Optional immutable cohort checksum")
     parser.add_argument("--video_root", required=True)
     parser.add_argument("--annotation_index", default="")
     parser.add_argument("--encoder_ckpt", required=True)
@@ -197,6 +199,7 @@ def cache_run_config(
     return {
         "split": args.split,
         "csv": args.csv,
+        **({"csv_sha256": args.csv_sha256} if getattr(args, 'csv_sha256', '') else {}),
         "video_root": args.video_root,
         "annotation_index": args.annotation_index,
         "index_shard_id": args.index_shard_id,
@@ -258,6 +261,10 @@ def validate_requested_config(args, config):
 
 def main():
     args = parse_args()
+    if args.csv_sha256:
+        with open(args.csv, 'rb') as source:
+            if hashlib.sha256(source.read()).hexdigest() != args.csv_sha256:
+                raise ValueError('CSV checksum differs from frozen cohort')
     if args.batch_size != 1:
         raise ValueError(
             "Durable resume requires --batch_size 1 for an exact cursor")
@@ -300,6 +307,11 @@ def main():
 
     success_path = artifact_path(shared_partition, "_SUCCESS")
     if args.resume_cache and remote_exists(success_path):
+        if args.csv_sha256:
+            saved = json.loads(read_text(success_path))['config']
+            expected = cache_run_config(args, partition_id, num_partitions, world_size)
+            if saved != expected:
+                raise ValueError('Completed cache differs from requested cohort/config')
         if is_main_process():
             print(f"R7 cache partition already complete: {success_path}")
         if use_ddp:
@@ -461,6 +473,10 @@ def main():
     try:
         with torch.inference_mode():
             for batch in progress:
+                if args.csv_sha256 and (batch['errors'] or batch.get('decode_replacements', 0)):
+                    # Leave the committed cursor unchanged so a later retry reads
+                    # the failed window again instead of accepting a smaller cohort.
+                    raise RuntimeError(f"Frozen cohort decode failed: {batch['errors']}")
                 failed_samples.extend(batch["errors"])
                 replacement_count = int(batch.get("decode_replacements", 0))
                 if replacement_count:
@@ -523,6 +539,8 @@ def main():
                         "requested_video_id", batch["video_id"])[0],
                     "window_index": window_index,
                     "clips_per_video": args.clips_per_video,
+                    "frame_indices": batch["frame_indices"][0],
+                    "window_id": f"{batch['video_id'][0]}:w{window_index:02d}",
                 }
                 if args.store_i0_rgb:
                     cached["i0_rgb"] = (

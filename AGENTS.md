@@ -5,6 +5,12 @@ rules, and safe next steps for future agents.
 
 ## Priority Update (2026-09-09)
 
+NEW stages42/43/44: docs/DOMAIN_UNIFORM_RUNBOOK.md. FrozenCSV single/mixed
+2048clip cohorts,4windows each,fullHQ root;freshuniform6000 on48NPUs.43 is
+one-command cache+train entry,ARM=single default. No local raw downloads.
+Strict CSV checksums/no replacement/zero failures;oldcache defaultcompatible.
+24CPUtests passed;newNPU run pending. Source-level leakage still unverified.
+
 NEW stage40_train_window_memory64_uniform.sh: same stage37 recipe except noise
 law changes shifted-logit-normal3 -> unwarpedUniform;fresh6000,never resume old
 memory checkpoint. Loss floor/weight unchanged, so effective bin contributions

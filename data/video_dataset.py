@@ -182,6 +182,7 @@ class SpatialVidDataset(Dataset):
             "caption": entry["caption"],
             "video_id": entry["video_id"],
             "window_index": window_index,
+            "frame_indices": [int(i) for i in indices],
             "depth": depth,           # [S, H, W] or None
         }
 
@@ -238,6 +239,7 @@ def collate_fn(batch):
         "window_index": [
             int(b.get("window_index", 0)) for b in batch
         ],
+        "frame_indices": [b.get("frame_indices", []) for b in batch],
         "requested_video_id": [
             b.get("requested_video_id", b["video_id"]) for b in batch
         ],

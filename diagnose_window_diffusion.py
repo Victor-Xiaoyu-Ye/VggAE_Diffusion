@@ -51,6 +51,8 @@ def run(args):
                     dict(phase=phase, rank=rank, world_size=world, unix_time=time.time(), **extra))
     try:
         status('loading')
+        if args.alternate_eval_csv_sha256 and args.mode != 'standard':
+            raise ValueError('Alternate heldout cohort is supported only in standard diagnostics')
         saved = load_artifact(args.checkpoint)
         if saved.get('schema') != 'r7-window-trainer-v1' or saved['step'] != args.expected_step:
             raise ValueError('checkpoint schema/step mismatch')
@@ -60,10 +62,19 @@ def run(args):
         identity = saved['contract']['identity']
         if digest(stats) != identity['statistics']: raise ValueError('checkpoint statistics mismatch')
         for split, manifest in [('train', args.manifest), ('eval', args.eval_manifest)]:
+            if split == 'eval' and args.alternate_eval_csv_sha256:
+                continue
             if read_shard_manifest(manifest) != identity[split+'_manifest']:
                 raise ValueError(split+' manifest differs from checkpoint')
         evstats = load_artifact(args.eval_stats)
-        if digest(evstats) != identity['eval_statistics']: raise ValueError('eval statistics differ')
+        if args.alternate_eval_csv_sha256:
+            validate_statistics(evstats)
+            if (evstats.get('config', {}).get('csv_sha256') != args.alternate_eval_csv_sha256
+                    or digest(evstats['representation']) != digest(stats['representation'])
+                    or not evstats.get('config', {}).get('store_rgb')
+                    or not evstats.get('config', {}).get('independent_anchor')):
+                raise ValueError('Alternate evaluation cache contract differs')
+        elif digest(evstats) != identity['eval_statistics']: raise ValueError('eval statistics differ')
         artifact = load_artifact(args.r7_ckpt)
         validate_contract(stats['representation'], artifact['representation_contract'])
         if sampled_file_signature(args.r7_ckpt) != stats['representation']['signatures']['r7']:
@@ -252,6 +263,7 @@ if __name__ == '__main__':
     for name in ('checkpoint', 'r7_ckpt', 'manifest', 'eval_manifest', 'eval_stats', 'output_dir'):
         p.add_argument('--'+name, required=True)
     p.add_argument('--expected_step', type=int, default=6000)
+    p.add_argument('--alternate_eval_csv_sha256', default='', help='Explicit checksum for a new heldout cohort; training statistics remain frozen')
     p.add_argument('--mode', choices=['standard', 'perturbation', 'subspace', 'trajectory'], default='standard')
     p.add_argument('--clips', type=int, default=16)
     p.add_argument('--previews', type=int, default=4)
