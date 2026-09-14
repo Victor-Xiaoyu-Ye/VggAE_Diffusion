@@ -42,10 +42,20 @@ ensure_local_checkpoint "${R7_CKPT}" \
   "${R7_CKPT_URL:-${SCALE_REMOTE_ROOT}/${R7_NAMESPACE}/joint/checkpoint_best.pt}" \
   'historical t2v2 AE' "${R7_CKPT_MIRROR_URL:-${SCALE_MIRROR_ROOT}/${R7_NAMESPACE}/joint/checkpoint_best.pt}"
 AUDIT_CACHE="${AUDIT_CACHE:-${PERSISTENT_OBS_ROOT}/cache_latents/r7_window_t2v2_diag_v1/eval}"
+[[ -f "${STREAMVGGT_CKPT}" ]] || { echo "Missing staged StreamVGGT: ${STREAMVGGT_CKPT}; run the existing ModelArts dependency initialization"; exit 2; }
+EXTRA=()
+if [[ "${AUDIT_REPORT_ONLY:-0}" == 1 ]]; then EXTRA+=(--report_only); fi
+if [[ -n "${AUDIT_BASELINE_RUN:-}" ]]; then
+  [[ "${AUDIT_BASELINE_RUN}" =~ ^[a-zA-Z0-9_-]+$ ]] || exit 2
+  ensure_local_checkpoint "${OUT}/source_ae_baseline.json" \
+    "${SCALE_REMOTE_ROOT}/${AUDIT_BASELINE_RUN}/ae_baseline.json" 'exact AE evaluation IDs' \
+    "${SCALE_MIRROR_ROOT}/${AUDIT_BASELINE_RUN}/ae_baseline.json"
+  EXTRA+=(--baseline_json "${OUT}/source_ae_baseline.json")
+fi
 "${PYTHON_BIN}" -u "${PROJECT}/audit_window_ae.py" \
   --manifest "${AUDIT_MANIFEST:-${AUDIT_CACHE}/manifest.txt}" \
   --stats "${AUDIT_STATS:-${AUDIT_CACHE}/stats.pt}" \
   --r7_ckpt "${R7_CKPT}" --encoder_ckpt "${STREAMVGGT_CKPT}" \
   --output_dir "${OUT}" --selected_norm "${WINDOW_AE_NORM:-legacy}" \
   --clips "${AUDIT_CLIPS:-16}" --previews "${AUDIT_PREVIEWS:-4}" \
-  --min_psnr "${MIN_AE_PSNR:-23.5}" --min_gain "${MIN_AE_NORM_GAIN:-2.0}"
+  --min_psnr "${MIN_AE_PSNR:-23.5}" --min_gain "${MIN_AE_NORM_GAIN:-2.0}" "${EXTRA[@]}"

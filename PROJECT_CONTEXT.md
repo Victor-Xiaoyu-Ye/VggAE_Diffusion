@@ -1538,3 +1538,14 @@ Context Update
 建议写入项目文档
 - ...
 ```
+# 2026-09-14: domain AE gate and read-only replay
+
+Both domain uniform v2 runs stopped at reconstruction_baseline, step0 on all
+48 ranks. Same32 eval IDs, same signatures/legacy norm; single22.41186 dB,
+mixed22.41298 dB vs inherited23.5 gate. All six per-run publication receipts
+report synced. Old24.48933 is different16 clips, not a same-data regression.
+Stage45 now orchestrates exact-ID single32/mixed32/historical16 RAW replay,
+fresh/cache latent and RGB comparisons, per-frame PSNR, progress/throughput,
+and stage31 dual IO. Report completion is not training approval. No training
+threshold changed; preserve v2 caches, do not full-resume nonexistent step0
+checkpoint. Read docs/DOMAIN_AE_REPLAY_RUNBOOK.md. NPU execution pending.

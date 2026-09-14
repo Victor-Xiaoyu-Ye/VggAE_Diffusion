@@ -5,6 +5,12 @@ rules, and safe next steps for future agents.
 
 ## Priority Update (2026-09-09)
 
+2026-09-14: domain v2 both stopped at AE gate before training (22.412dB on
+new32 clips vs23.5 threshold). Do not lower automatically or resume step0.
+Stage45 read-only exact-ID RAW/cache replay single/mixed/old control is ready;
+read docs/DOMAIN_AE_REPLAY_RUNBOOK.md. Report-only completion is not quality
+approval. Training/cache recipes unchanged; real NPU replay pending.
+
 Domain v1 cache failed onmissingHQ object.42/43/44 nowusefrozenv2 selection
 andnamespaces afterfullHQ objectlisting (360610present vs365362CSV). No raw
 downloads. Preflight2304objects/arm beforeAE,zero replacement/failures retained.
