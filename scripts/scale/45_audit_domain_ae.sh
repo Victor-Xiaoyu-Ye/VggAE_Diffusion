@@ -4,8 +4,13 @@ set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source "${SCRIPT_DIR}/../spatialvid_config.sh"
 source "${SCRIPT_DIR}/../lib/modelarts.sh"
+export MASTER_PORT="${MASTER_PORT:-29945}"
 configure_modelarts_distributed
-[[ "${NODE_RANK}" == 0 ]] || exit 0
+if [[ "${1:-}" != --leader ]]; then
+  exec "${PYTHON_BIN}" -u "${PROJECT}/scripts/coordinated_diagnostic.py" \
+    bash "${BASH_SOURCE[0]}" --leader
+fi
+[[ "${NODE_RANK}" == 0 ]] || { echo 'Only coordinator may start the leader'; exit 2; }
 export WINDOW_AE_NORM=legacy AUDIT_REPORT_ONLY=1
 export AUDIT_PREVIEWS="${AUDIT_PREVIEWS:-4}"
 # Do not inherit per-cache overrides from an earlier diagnostic invocation.

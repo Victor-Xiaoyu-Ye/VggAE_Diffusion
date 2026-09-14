@@ -10,7 +10,19 @@ test across datasets. No training threshold has been changed.
 
 Use the existing ModelArts environment/dependency initialization, including
 the staged StreamVGGT checkpoint. One NPU on node0 is sufficient. The script
-also accepts the existing six-node launch: other nodes exit without work.
+also accepts the existing six-node launch: all nodes enter a TCP coordinator;
+node0 runs the diagnostic, the others wait without allocating NPU memory.
+They exit only after the leader finishes its final publication and announces
+the exit code. All print a heartbeat every30 seconds. Default execution timeout
+is7200 seconds (AUDIT_TIMEOUT_SECONDS); initial rendezvous timeout is180 seconds.
+All nodes must use the updated stage45. Each Python audit prints stack traces
+every300 seconds to expose the current operation even when progress stalls.
+
+The previous non-main-node early exit is withdrawn. User console logs explicitly
+show ModelArts terminating user processes for a restart at10:42 on September14,
+after8 samples. The platform's trigger is not reported, so early node exit is a
+suspected contributor, not a proven cause. OBS fallback succeeded; no model
+exception precedes that platform message in the supplied log.
 
 ```bash
 bash /cache/yexiaoyu/VggAE_Diffusion/scripts/scale/45_audit_domain_ae.sh

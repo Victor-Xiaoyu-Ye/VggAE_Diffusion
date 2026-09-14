@@ -10,6 +10,9 @@ new32 clips vs23.5 threshold). Do not lower automatically or resume step0.
 Stage45 read-only exact-ID RAW/cache replay single/mixed/old control is ready;
 read docs/DOMAIN_AE_REPLAY_RUNBOOK.md. Report-only completion is not quality
 approval. Training/cache recipes unchanged; real NPU replay pending.
+Stage45 now keeps non-main nodes alive via TCP coordinator until final leader
+publication; earlier early-exit six-node guidance is withdrawn. Console shows
+platform-initiated restart after8 clips, but does not identify its trigger.
 
 Domain v1 cache failed onmissingHQ object.42/43/44 nowusefrozenv2 selection
 andnamespaces afterfullHQ objectlisting (360610present vs365362CSV). No raw

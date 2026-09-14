@@ -4,6 +4,7 @@ import argparse
 import json
 import signal
 import time
+import faulthandler
 from pathlib import Path
 import torch
 from utils.device import get_device, get_device_name, configure_backend_compatibility
@@ -37,8 +38,11 @@ def main():
     signal.signal(signal.SIGTERM,interrupted);signal.signal(signal.SIGINT,interrupted)
     def record(**kw):
         result.update(kw);atomic_json(out/'audit.json',result)
-        print('[AE audit]',json.dumps({k:v for k,v in result.items() if k not in ('clips','args')}),flush=True)
+        print('[AE audit]',json.dumps({k:v for k,v in result.items() if k in
+              ('status','phase','completed_clips','elapsed_seconds','DI_throughput','error','mean_psnr')}),flush=True)
     try:
+        faulthandler.enable()
+        faulthandler.dump_traceback_later(300, repeat=True)
         record(phase='loading')
         if get_device_name()=='cpu': raise RuntimeError('real AE audit requires an accelerator')
         device=get_device(0);configure_backend_compatibility()
@@ -112,7 +116,6 @@ def main():
                        DI_throughput=len(result['clips'])*frames.shape[1]/elapsed,
                        throughput_units='source frames/s, includes both norm modes and cache replay')
                 if index<a.previews:save_video_preview(str(out/'samples'),f'clip{index}',videos,metadata=row)
-                record(phase='replaying',completed_clips=len(result['clips']))
         if len(result['clips'])!=a.clips:raise ValueError('insufficient RAW audit clips')
         means={m:sum(x[m+'/psnr'] for x in result['clips'])/a.clips for m in ('legacy','framewise')}
         _,passed=reconstruction_gate([x[a.selected_norm+'/psnr'] for x in result['clips']],a.min_psnr)
@@ -123,6 +126,8 @@ def main():
         if not passed and not a.report_only:raise RuntimeError('AE reconstruction audit gate failed; training must not start')
     except BaseException as e:
         record(status='failed',error=repr(e));raise
+    finally:
+        faulthandler.cancel_dump_traceback_later()
 
 
 if __name__=='__main__':main()

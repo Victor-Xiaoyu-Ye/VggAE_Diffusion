@@ -1540,6 +1540,14 @@ Context Update
 ```
 # 2026-09-14: domain AE gate and read-only replay
 
+Follow-up: console explicitly shows ModelArts killing user processes to restart
+at10:42 after8 samples. Earlier OBS snapshots had5/6; these are partial reports,
+not evidence of model failure. Stage45 non-main early exit withdrawn: TCPStore
+coordinator keeps every node alive until leader final dual publication, shares
+exit code, heartbeat30s, bounded timeout. Early exit is a suspected platform
+trigger; console does not identify actual trigger. Audit now prints concise
+progress once per clip and periodic300s stack traces. Training gate unchanged.
+
 Both domain uniform v2 runs stopped at reconstruction_baseline, step0 on all
 48 ranks. Same32 eval IDs, same signatures/legacy norm; single22.41186 dB,
 mixed22.41298 dB vs inherited23.5 gate. All six per-run publication receipts
