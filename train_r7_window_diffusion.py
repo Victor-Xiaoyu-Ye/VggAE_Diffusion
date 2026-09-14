@@ -68,6 +68,7 @@ def parse_args(argv=None):
     p.add_argument('--cpu_test', action='store_true', help='synthetic tests only: cannot decode real AE')
     p.add_argument('--ae_norm',choices=('legacy','framewise'),required=True)
     p.add_argument('--min_ae_psnr',type=float,default=23.5)
+    p.add_argument('--ae_reference',default='',help='Reviewed exact-cohort replay reference JSON')
     p.add_argument('--memorize_clips', type=int, default=0,
                    help='explicit training-subset fit diagnostic; heldout remains disjoint')
     return p.parse_args(argv)
@@ -169,6 +170,13 @@ def run(args):
             eval_statistics=digest(evstats), train_manifest=train_shards,
             eval_manifest=eval_shards, text_signature=bank.signature if bank else None,
             synthetic_test=args.cpu_test)
+        ae_reference = None
+        if args.ae_reference:
+            import hashlib
+            reference_bytes=Path(args.ae_reference).read_bytes()
+            ae_reference=json.loads(reference_bytes)
+            identity['ae_reference_sha256']=hashlib.sha256(reference_bytes).hexdigest()
+            if rank == 0: atomic_json(out/'reviewed_ae_reference.json',ae_reference)
         memory_samples = None
         if args.memorize_clips:
             from utils.window_memorization import select_training_subset, subset_identity
@@ -303,11 +311,18 @@ def run(args):
             else:
                 from utils.window_codec import reconstruction_gate
                 _,result['gate_passed']=reconstruction_gate([r['ae_psnr_full_vs_raw'] for r in rows],args.min_ae_psnr)
+            if ae_reference is not None:
+                from utils.ae_replay_reference import compare_replay
+                try:
+                    result['reference_check']=compare_replay(result,ae_reference)
+                except ValueError as exc:
+                    result['reference_check']=dict(passed=False,error=str(exc))
+                result['gate_passed']=result['gate_passed'] and result['reference_check']['passed']
             if rank == 0:
                 atomic_json(out/'ae_baseline.json',result)
                 print('[AE reconstruction baseline]',json.dumps(result),flush=True)
             if not result['gate_passed']:
-                raise RuntimeError('AE replay PSNR below declared minimum; no diffusion updates performed')
+                raise RuntimeError('AE reconstruction minimum or reviewed replay check failed; no diffusion updates performed')
 
         @torch.no_grad()
         def evaluate():

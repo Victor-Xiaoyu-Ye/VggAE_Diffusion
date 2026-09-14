@@ -1,0 +1,153 @@
+{
+  "schema": "reviewed-ae-replay-v1",
+  "review": "DOMAIN_AE_REPLAY_RESULTS.md; two complete 32-clip NPU replays",
+  "max_clip_psnr_delta": 0.05,
+  "ae_signature": {
+    "streamvggt": {
+      "size": 5026743569,
+      "sample_bytes": 1048576,
+      "sample_sha256": "873feff7254ce80650c142acef8e0dc1a012ba1fa6178668f3fcc241f84f8e92"
+    },
+    "source_dual_ae": {
+      "size": 1433735901,
+      "sample_bytes": 1048576,
+      "sample_sha256": "0f8852439a5f8d26dcb51c1b4a5b126b9330697e3e827157d49a54c3f192ac27"
+    },
+    "r7": {
+      "size": 1088365547,
+      "sample_bytes": 1048576,
+      "sample_sha256": "2e74ca8da0c492fa71d9f55276ec85ae96ef1fd6773ae449e329be6c3ddcaac1"
+    }
+  },
+  "temporal_norm": "legacy",
+  "clips": [
+    {
+      "video_id": "2f52e2fd-a9d4-559b-b756-9ddf2bfa3046",
+      "ae_psnr_full_vs_raw": 22.881948471069336
+    },
+    {
+      "video_id": "e1e1a9a9-70fa-55f4-a68d-55ae75eaeacd",
+      "ae_psnr_full_vs_raw": 21.759214401245117
+    },
+    {
+      "video_id": "67481a5c-402c-5248-81e1-5a19381dd49b",
+      "ae_psnr_full_vs_raw": 21.756818771362305
+    },
+    {
+      "video_id": "3d769ea5-4aa4-577a-ac42-2f8c5938bc64",
+      "ae_psnr_full_vs_raw": 22.454742431640625
+    },
+    {
+      "video_id": "7195a9e3-6f6f-5f4e-9627-24af76e6d71c",
+      "ae_psnr_full_vs_raw": 21.440637588500977
+    },
+    {
+      "video_id": "7558af9c-6f36-56b6-8bdc-7992a76fe588",
+      "ae_psnr_full_vs_raw": 21.56715202331543
+    },
+    {
+      "video_id": "3a4b4f40-78e6-546b-9ff5-128d73f03c33",
+      "ae_psnr_full_vs_raw": 20.63477325439453
+    },
+    {
+      "video_id": "ea0bccfa-f3c8-541a-a3ac-687341d94127",
+      "ae_psnr_full_vs_raw": 21.535499572753906
+    },
+    {
+      "video_id": "f60b6978-d3d6-5d21-8de5-ce1f68706da2",
+      "ae_psnr_full_vs_raw": 21.602344512939453
+    },
+    {
+      "video_id": "5b79a31f-b20e-5a39-b657-aaac5cd1fd7e",
+      "ae_psnr_full_vs_raw": 21.635665893554688
+    },
+    {
+      "video_id": "53779e7b-0082-5e7e-9ed7-3dd9db750f60",
+      "ae_psnr_full_vs_raw": 23.464012145996094
+    },
+    {
+      "video_id": "b55120a5-2a25-55a1-9a1c-9b9507d530e0",
+      "ae_psnr_full_vs_raw": 25.396324157714844
+    },
+    {
+      "video_id": "ed1e4c91-0d76-5609-852a-393185be2597",
+      "ae_psnr_full_vs_raw": 23.667755126953125
+    },
+    {
+      "video_id": "79962a6b-01d0-5063-a552-0283ea0cc981",
+      "ae_psnr_full_vs_raw": 25.760723114013672
+    },
+    {
+      "video_id": "b376c01a-3c46-5738-9345-29db498f01b9",
+      "ae_psnr_full_vs_raw": 22.966655731201172
+    },
+    {
+      "video_id": "82913fd9-8658-5e86-a07c-2cfe3c29f039",
+      "ae_psnr_full_vs_raw": 23.193790435791016
+    },
+    {
+      "video_id": "50528fce-c01f-5f32-93ce-a0e42b6449b0",
+      "ae_psnr_full_vs_raw": 22.228473663330078
+    },
+    {
+      "video_id": "9315e4dd-c922-5ad2-9c82-87de02b9abab",
+      "ae_psnr_full_vs_raw": 21.89730453491211
+    },
+    {
+      "video_id": "497fb8cf-775e-5ad4-9a58-fb0bc01c7fac",
+      "ae_psnr_full_vs_raw": 23.34998893737793
+    },
+    {
+      "video_id": "4d41e8a8-6597-5cea-813d-a03ee313073e",
+      "ae_psnr_full_vs_raw": 21.949569702148438
+    },
+    {
+      "video_id": "a493a57d-92c7-5597-9039-01b4a49f9dad",
+      "ae_psnr_full_vs_raw": 24.049795150756836
+    },
+    {
+      "video_id": "f36e3ddb-2b0b-5416-9f99-340df489d05f",
+      "ae_psnr_full_vs_raw": 23.000164031982422
+    },
+    {
+      "video_id": "dc203b8b-031f-53fc-9bff-5d508020b2ad",
+      "ae_psnr_full_vs_raw": 23.272850036621094
+    },
+    {
+      "video_id": "bf37703a-a95a-5cc7-9e29-5337e5e1a613",
+      "ae_psnr_full_vs_raw": 21.848735809326172
+    },
+    {
+      "video_id": "de96ef8c-367a-5213-af86-110306e12b9b",
+      "ae_psnr_full_vs_raw": 22.59851837158203
+    },
+    {
+      "video_id": "b9e2e0c0-d3cd-5580-afb3-9a5bf88f2404",
+      "ae_psnr_full_vs_raw": 20.639530181884766
+    },
+    {
+      "video_id": "43cf3083-ac96-5730-8cba-d2447651b31d",
+      "ae_psnr_full_vs_raw": 20.472801208496094
+    },
+    {
+      "video_id": "3079900b-0b04-5b6f-9ec6-81ba2609a1e5",
+      "ae_psnr_full_vs_raw": 19.35182762145996
+    },
+    {
+      "video_id": "18cb4124-b00d-5c3c-a0ce-af55ae489467",
+      "ae_psnr_full_vs_raw": 20.55628204345703
+    },
+    {
+      "video_id": "b8e272a2-4b73-5d62-a30c-468b72e129fd",
+      "ae_psnr_full_vs_raw": 22.289152145385742
+    },
+    {
+      "video_id": "aefc78ee-7b01-521d-85a7-706b6201d536",
+      "ae_psnr_full_vs_raw": 25.64008331298828
+    },
+    {
+      "video_id": "15804831-39c5-55da-a507-c12ecc3fa86d",
+      "ae_psnr_full_vs_raw": 22.316444396972656
+    }
+  ]
+}

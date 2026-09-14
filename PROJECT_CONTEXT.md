@@ -1540,6 +1540,15 @@ Context Update
 ```
 # 2026-09-14: domain AE gate and read-only replay
 
+USER APPROVED next single-domain training after completed replay. Stage46
+46_train_domain_single_reviewed.sh: existing v2 caches, fresh namespace
+r7_domain_single_uniform_reviewed_v1, same6000/uniform/48NPUs recipe. New
+opt-in reference JSON locks32 IDs, signatures/norm and per-clip PSNR within
+0.05dB; meanminimum22.3 (measured22.41186). Old default23.5 untouched. Reference
+content hash enters resume identity and copied to output. Dual IO,500-step
+eval/checkpoints and DI metrics retained. See DOMAIN_SINGLE_REVIEWED_RUNBOOK.
+Local checks only; actual training and generated quality pending.
+
 COMPLETED: stage45 two triplets, each single32/mixed32/historical16; all six
 exit0 and synced publication receipts, per-clip results identical on repeats.
 Freshlegacy22.411859/22.412977/24.489302 vs cache22.411862/22.412981/24.489331.

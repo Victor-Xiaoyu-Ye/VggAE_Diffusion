@@ -109,6 +109,9 @@ if [[ "${WINDOW_DIAGNOSTIC_ONLY:-0}" == 1 ]]; then
   exit 0
 fi
 EXTRA=()
+if [[ -n "${AE_REFERENCE_FILE:-}" ]]; then
+  EXTRA+=(--ae_reference "${AE_REFERENCE_FILE}")
+fi
 if [[ "${NO_TEXT:-0}" == 1 ]]; then
   EXTRA+=(--no_text)
 else

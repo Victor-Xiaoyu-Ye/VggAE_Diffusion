@@ -140,7 +140,7 @@ def use_ema(model, ema):
 def resume_contract(args, identity, world):
     # Eval settings are immutable too, so checkpoint selection remains comparable.
     mutable = {'resume', 'output_dir', 'stop_after_steps', 'manifest', 'eval_manifest',
-               'stats', 'eval_stats', 'r7_ckpt', 'text_dir', 'cpu_test'}
+               'stats', 'eval_stats', 'r7_ckpt', 'text_dir', 'cpu_test', 'ae_reference'}
     if not getattr(args, 'memorize_clips', 0):
         mutable.add('memorize_clips')
     if getattr(args, 'time_distribution', 'logit_normal_0_1') == 'logit_normal_0_1':

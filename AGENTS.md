@@ -5,6 +5,11 @@ rules, and safe next steps for future agents.
 
 ## Priority Update (2026-09-09)
 
+User approved first reviewed single-domain run: stage46, see
+docs/DOMAIN_SINGLE_REVIEWED_RUNBOOK.md. Fresh reviewed_v1 output, reuse v2 cache,
+6000steps48NPUs. Exact32 AE replay reference/tolerance plus22.3 mean minimum
+only in this launcher. Old defaults remain. NPU training not yet validated.
+
 LATEST: stage45 completed two full triplets with six exit0/synced receipts.
 Same-sample cached replay exactly matches previous PSNR; fresh encoding differs
 only at rounding scale, oldcontrol24.4893 reproduced, newstreet22.412 real.
