@@ -5,6 +5,13 @@ rules, and safe next steps for future agents.
 
 ## Priority Update (2026-09-09)
 
+LATEST: stage45 completed two full triplets with six exit0/synced receipts.
+Same-sample cached replay exactly matches previous PSNR; fresh encoding differs
+only at rounding scale, oldcontrol24.4893 reproduced, newstreet22.412 real.
+Read docs/DOMAIN_AE_REPLAY_RESULTS.md. Stop default compatibility reruns.
+No gate changed yet; recommend reviewed cohort-specific baseline for restarting
+single/mixed diffusion with existing caches and a fresh output namespace.
+
 2026-09-14: domain v2 both stopped at AE gate before training (22.412dB on
 new32 clips vs23.5 threshold). Do not lower automatically or resume step0.
 Stage45 read-only exact-ID RAW/cache replay single/mixed/old control is ready;

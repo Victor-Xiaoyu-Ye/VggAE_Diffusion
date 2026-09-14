@@ -1540,6 +1540,17 @@ Context Update
 ```
 # 2026-09-14: domain AE gate and read-only replay
 
+COMPLETED: stage45 two triplets, each single32/mixed32/historical16; all six
+exit0 and synced publication receipts, per-clip results identical on repeats.
+Freshlegacy22.411859/22.412977/24.489302 vs cache22.411862/22.412981/24.489331.
+Every cached PSNR exactly reproduces previous per-clip baseline; fresh/cache
+future relative L2 max0.000208881, comparable to historical control. Close AE
+compatibility audit for measured samples; do not rerun by default. Recommend
+using measured22.412 new-domain AE reference for domain-concentration training,
+with reviewed cohort-specific gate and fresh namespace; no gate changed in this
+review. Diffusion/sampling quality remains unvalidated. See
+docs/DOMAIN_AE_REPLAY_RESULTS.md; earlier pending/partial statements superseded.
+
 Follow-up: console explicitly shows ModelArts killing user processes to restart
 at10:42 after8 samples. Earlier OBS snapshots had5/6; these are partial reports,
 not evidence of model failure. Stage45 non-main early exit withdrawn: TCPStore
