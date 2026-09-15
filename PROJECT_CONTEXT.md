@@ -1579,6 +1579,13 @@ threshold changed; preserve v2 caches, do not full-resume nonexistent step0
 checkpoint. Read docs/DOMAIN_AE_REPLAY_RUNBOOK.md. NPU execution pending.
 # 2026-09-15: reviewed single-domain diffusion completed
 
+User approved final frozen trajectory trial before discussion. Stage47 uses
+domain_trajectory mode, checkpointfinal internal6000, EMAonly, original32heldout
+and seeds101/211, noiseindex0–31. Reuses production observer and checked reference
+hash/perclip AE gate.1792 rows before16 expanded RAW/AE/one-call/intermediate/final
+PNG grids. No retraining, no memory subset or64offset. Read DOMAIN_TRAJECTORY_RUNBOOK.
+Local tests only; NPU run pending. Output r7_domain_single_trajectory_s6000_v1.
+
 Stage46 run r7_domain_single_uniform_reviewed_v1 completed6000,48rank finished,
 six exits0/synced receipts, all1536 unique evalrows. AEreference exactpass22.41186.
 Best observed EMA6000 RAWL1 .126551 vs RGBcopy .126585 (15/32 videos better);

@@ -28,7 +28,8 @@ def capture(model, flow, c, y, noise, dtype):
 
 @torch.no_grad()
 def run_audit(*, model, flow, online_state, data, memory_count, model_args, stats,
-              decode, dtype, device, rank, world, ddp, out, seeds, previews, status):
+              decode, dtype, device, rank, world, ddp, out, seeds, previews, status,
+              labels=('online','ema'), expanded_previews=False):
     from torch import distributed as dist
     ema_state = {k:v.cpu().clone() for k,v in model.state_dict().items()}
     st = {k:{n:stats[k][n].to(device).float() for n in ('mean','std')} for k in ('cond','target')}
@@ -36,6 +37,7 @@ def run_audit(*, model, flow, online_state, data, memory_count, model_args, stat
         if device.type != 'cpu': getattr(torch, device.type).synchronize()
     rows, preview_jobs = [], []
     for label, state in [('online', online_state), ('ema', ema_state)]:
+        if label not in labels: continue
         model.load_state_dict(state, strict=True)
         for split_no, (split, samples) in enumerate(data.items()):
             for index, sample in enumerate(samples):
@@ -83,12 +85,12 @@ def run_audit(*, model, flow, online_state, data, memory_count, model_args, stat
         gathered=[None]*world; dist.all_gather_object(gathered,rows)
         rows=[r for group in gathered for r in group]
     if rank == 0:
-        expected=sum(len(v) for v in data.values())*2*len(seeds)*len(ARMS)
+        expected=sum(len(v) for v in data.values())*len(labels)*len(seeds)*len(ARMS)
         keys={(r['split'],r['index'],r['weights'],r['seed'],r['arm']) for r in rows}
         if len(rows)!=expected or len(keys)!=expected: raise ValueError('incomplete trajectory matrix')
         groups={}
         for split in data:
-            for label in ('online','ema'):
+            for label in labels:
                 for arm in ARMS:
                     part=[r for r in rows if (r['split'],r['weights'],r['arm'])==(split,label,arm)]
                     groups[f'{split}/{label}/{arm}']={k:sum(r[k] for r in part)/len(part)
@@ -107,6 +109,10 @@ def run_audit(*, model, flow, online_state, data, memory_count, model_args, stat
         for name,z in [('one_call',saved['snapshots'][0]['x0']),('x0_u050',saved['snapshots'][32]['x0']),
                        ('x0_u025',saved['snapshots'][48]['x0']),('final',saved['final'])]:
             videos[name]=decode(cr,inverse(z.to(device),st['target']))[0]
+        if expanded_previews:
+            if 'rgb' in sample: videos['raw']=sample['rgb'].float().div(255).permute(0,2,3,1).to(device)
+            for i in (40,56,60,63):
+                videos[f'x0_step{i:02d}']=decode(cr,inverse(saved['snapshots'][i]['x0'].to(device),st['target']))[0]
         save_video_preview(str(out/'samples'),artifact.stem,videos,save_frames=False,save_mp4=False)
     if ddp: dist.barrier()
     if rank==0: atomic_json(out/'previews_complete.json',dict(complete=True))

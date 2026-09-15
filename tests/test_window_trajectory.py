@@ -3,6 +3,7 @@ import tempfile
 import json
 from pathlib import Path
 import torch
+from unittest.mock import patch
 from utils.window_flow import WindowFlow
 from utils.window_trajectory import capture, run_audit, NODES
 
@@ -41,6 +42,21 @@ class TrajectoryTests(unittest.TestCase):
             self.assertEqual(summary['rows'],112)
             self.assertTrue(summary['complete'])
             self.assertEqual(len(list((out/'latents').glob('*.pt'))),4)
+        with tempfile.TemporaryDirectory() as directory, patch('utils.video_preview.save_video_preview') as preview:
+            out=Path(directory)
+            run_audit(model=model,flow=WindowFlow(),online_state=model.state_dict(),
+                data={'heldout':[dict(sample,rgb=torch.zeros(3,3,2,2,dtype=torch.uint8))]},memory_count=0,
+                model_args=dict(future=2,grid=2,channels=6),stats=stats,decode=decode,
+                dtype=torch.float32,device=torch.device('cpu'),rank=0,world=1,ddp=False,
+                out=out,seeds=[101,211],previews=1,status=lambda *a,**k:None,labels=('ema',),expanded_previews=True)
+            summary=json.loads((out/'summary.json').read_text())
+            self.assertEqual(summary['rows'],56)
+            self.assertTrue(all('/ema/' in k for k in summary['groups']))
+            saved=torch.load(out/'latents/heldout_00_ema_seed101.pt',weights_only=False)
+            noise=torch.randn((1,2,4,6),generator=torch.Generator().manual_seed(101))
+            torch.testing.assert_close(saved['snapshots'][0]['x0'],.1*noise)
+            self.assertEqual(preview.call_count,2)
+            self.assertTrue({'raw','ae','one_call','final','x0_step56','x0_step63'} <= set(preview.call_args.args[2]))
 
 
 if __name__=='__main__':unittest.main()

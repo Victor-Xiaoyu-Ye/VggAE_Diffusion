@@ -2,6 +2,8 @@
 """Read-only EMA sampler/generalization/anchor diagnostics; never saves training state."""
 import argparse
 import itertools
+import json
+import hashlib
 import time
 from pathlib import Path
 import torch
@@ -60,6 +62,22 @@ def run(args):
         stats = saved['statistics']; cfg = validate_statistics(stats)
         mode = validate_runtime(stats['representation'])
         identity = saved['contract']['identity']
+        domain_trajectory = args.mode == 'domain_trajectory'
+        reference = None
+        if domain_trajectory:
+            content=Path(args.ae_reference).read_bytes()
+            if hashlib.sha256(content).hexdigest()!=identity.get('ae_reference_sha256'):
+                raise ValueError('reviewed AE reference differs from checkpoint')
+            reference=json.loads(content)
+            if saved['args'].get('memorize_clips',0) or args.clips!=saved['args']['eval_clips']:
+                raise ValueError('domain trajectory requires full original heldout cohort')
+            if saved['args']['sample_steps']!=64 or saved['args']['sample_method']!='euler':
+                raise ValueError('domain trajectory requires original Euler64')
+            if args.seeds!=[int(s) for s in saved['args']['sample_seeds'].split(',')]:
+                raise ValueError('diagnostic seeds differ from training evaluation')
+            replay_minimum=saved['args']['min_ae_psnr']
+            memory_count=0
+            online_state=saved['model']
         if digest(stats) != identity['statistics']: raise ValueError('checkpoint statistics mismatch')
         for split, manifest in [('train', args.manifest), ('eval', args.eval_manifest)]:
             if split == 'eval' and args.alternate_eval_csv_sha256:
@@ -106,11 +124,11 @@ def run(args):
             online_state = saved['model']
         del artifact, saved, state
         st = {k: {n: stats[k][n].to(device).float() for n in ('mean', 'std')} for k in ('cond', 'target')}
-        data = {split: select_samples(path, args.clips, seed) for split, path in
-                [('train', args.manifest), ('eval', args.eval_manifest)]}
+        sources=[('eval',args.eval_manifest)] if domain_trajectory else [('train',args.manifest),('eval',args.eval_manifest)]
+        data = {split: select_samples(path, args.clips, seed) for split,path in sources}
         if args.mode == 'trajectory':
             data['train'] = memory_samples[:args.clips]
-        if {x['video_id'] for x in data['train']} & {x['video_id'] for x in data['eval']}:
+        if {x['video_id'] for x in data.get('train',[])} & {x['video_id'] for x in data['eval']}:
             raise ValueError('train/eval diagnostic overlap')
         if rank == 0:
             atomic_json(out/'config.json', dict(args=vars(args), model=model_args, temporal_norm=mode,
@@ -152,7 +170,7 @@ def run(args):
             if not torch.isfinite(result).all(): raise RuntimeError('nonfinite RGB')
             return result.clamp(0, 1)
         status('ae_gate')
-        psnrs = []
+        psnrs = []; replay_rows=[]
         for index, sample in enumerate(data['eval']):
             if index % world != rank: continue
             batch = collate([sample])
@@ -161,24 +179,34 @@ def run(args):
             raw = batch['rgb'].to(device).float().div(255).permute(0, 1, 3, 4, 2)
             ae = decode(cr.to(device).float(), yr.to(device).float())
             psnrs.append(float(-10*torch.log10((ae-raw).square().mean().clamp_min(1e-12))))
+            replay_rows.append(dict(video_id=sample['video_id'],ae_psnr_full_vs_raw=psnrs[-1]))
         if ddp:
             gathered = [None]*world; dist.all_gather_object(gathered, psnrs)
             psnrs = [v for part in gathered for v in part]
-        mean_psnr, passed = reconstruction_gate(psnrs, 23.5)
-        if rank == 0: atomic_json(out/'ae_gate.json', dict(psnr=mean_psnr, passed=passed, clips=len(psnrs)))
+            gathered=[None]*world; dist.all_gather_object(gathered,replay_rows)
+            replay_rows=[r for part in gathered for r in part]
+        mean_psnr, passed = reconstruction_gate(psnrs, replay_minimum if domain_trajectory else 23.5)
+        reference_check=None
+        if domain_trajectory:
+            from utils.ae_replay_reference import compare_replay
+            reference_check=compare_replay(dict(clips=replay_rows,temporal_norm=mode,
+                ae_signature=identity['representation']['signatures']),reference)
+            passed=passed and reference_check['passed']
+        if rank == 0: atomic_json(out/'ae_gate.json', dict(psnr=mean_psnr, passed=passed, clips=len(psnrs),reference_check=reference_check))
         if not passed: raise RuntimeError('AE gate failed before sampling')
-        if args.mode == 'trajectory':
+        if args.mode in ('trajectory','domain_trajectory'):
             from utils.window_trajectory import run_audit, NODES
             if rank == 0:
                 atomic_json(out/'trajectory_contract.json',dict(nodes=NODES, steps=64,
-                    weights=['online','ema'], memory_count=memory_count, checkpoint_step=args.expected_step,
+                    weights=['ema'] if domain_trajectory else ['online','ema'], memory_count=memory_count, checkpoint_step=args.expected_step,
                     seeds=args.seeds, sampler='production WindowFlow Euler with observer',
                     publication='all metrics and latents before PNG-only previews'))
             run_audit(model=model, flow=flow, online_state=online_state,
-                data={'memorization':data['train'], 'heldout':data['eval']}, memory_count=memory_count,
+                data={'heldout':data['eval']} if domain_trajectory else {'memorization':data['train'], 'heldout':data['eval']}, memory_count=memory_count,
                 model_args=model_args, stats=stats, decode=decode, dtype=dtype, device=device,
                 rank=rank, world=world, ddp=ddp, out=out, seeds=args.seeds,
-                previews=args.previews, status=status)
+                previews=args.previews, status=status, labels=('ema',) if domain_trajectory else ('online','ema'),
+                expanded_previews=domain_trajectory)
             status('completed')
             return
         rows = []
@@ -264,7 +292,8 @@ if __name__ == '__main__':
         p.add_argument('--'+name, required=True)
     p.add_argument('--expected_step', type=int, default=6000)
     p.add_argument('--alternate_eval_csv_sha256', default='', help='Explicit checksum for a new heldout cohort; training statistics remain frozen')
-    p.add_argument('--mode', choices=['standard', 'perturbation', 'subspace', 'trajectory'], default='standard')
+    p.add_argument('--mode', choices=['standard', 'perturbation', 'subspace', 'trajectory','domain_trajectory'], default='standard')
+    p.add_argument('--ae_reference',default='')
     p.add_argument('--clips', type=int, default=16)
     p.add_argument('--previews', type=int, default=4)
     p.add_argument('--seeds', type=int, nargs='+', default=[42, 43])

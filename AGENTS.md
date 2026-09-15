@@ -5,6 +5,10 @@ rules, and safe next steps for future agents.
 
 ## Priority Update (2026-09-09)
 
+User-approved next run: stage47 frozen single-domain EMA6000 trajectory;
+docs/DOMAIN_TRAJECTORY_RUNBOOK.md. Original32heldout×2seeds,1792rows,16grids,
+reference-aware AE gate. No new training; discuss redesign after this result.
+
 2026-09-15: stage46 completed6000, all48 ranks/six exits/sync and1536 evalrows.
 EMA6000 bestobserved RAWL1 .126551 ~copy .126585; visuals still deform. Read
 docs/DOMAIN_SINGLE_REVIEWED_RESULTS.md. AE exactreference passes. Prioritize

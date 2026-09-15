@@ -96,6 +96,7 @@ if [[ "${WINDOW_DIAGNOSTIC_ONLY:-0}" == 1 ]]; then
     --root "${DIAGNOSTIC_CKPT_MIRROR_URL:-${SCALE_MIRROR_ROOT}/${DIAGNOSTIC_SOURCE}/${DIAG_FILE}}"
   read -r -a DIAG_SEEDS <<< "${DIAGNOSTIC_SEEDS:-42 43}"
   DIAG_EXTRA=()
+  if [[ -n "${AE_REFERENCE_FILE:-}" ]]; then DIAG_EXTRA+=(--ae_reference "${AE_REFERENCE_FILE}"); fi
   if [[ -n "${ALTERNATE_EVAL_CSV_SHA256:-}" ]]; then
     DIAG_EXTRA+=(--alternate_eval_csv_sha256 "${ALTERNATE_EVAL_CSV_SHA256}")
   fi
