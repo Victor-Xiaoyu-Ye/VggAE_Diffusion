@@ -5,6 +5,12 @@ rules, and safe next steps for future agents.
 
 ## Priority Update (2026-09-09)
 
+2026-09-15: stage46 completed6000, all48 ranks/six exits/sync and1536 evalrows.
+EMA6000 bestobserved RAWL1 .126551 ~copy .126585; visuals still deform. Read
+docs/DOMAIN_SINGLE_REVIEWED_RESULTS.md. AE exactreference passes. Prioritize
+frozen current-checkpoint one-call/trajectory RGB diagnosis, not longer training
+or aux sweeps. Mixed has not run; no matched domain effect claim yet.
+
 User approved first reviewed single-domain run: stage46, see
 docs/DOMAIN_SINGLE_REVIEWED_RUNBOOK.md. Fresh reviewed_v1 output, reuse v2 cache,
 6000steps48NPUs. Exact32 AE replay reference/tolerance plus22.3 mean minimum

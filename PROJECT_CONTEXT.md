@@ -1577,3 +1577,13 @@ fresh/cache latent and RGB comparisons, per-frame PSNR, progress/throughput,
 and stage31 dual IO. Report completion is not training approval. No training
 threshold changed; preserve v2 caches, do not full-resume nonexistent step0
 checkpoint. Read docs/DOMAIN_AE_REPLAY_RUNBOOK.md. NPU execution pending.
+# 2026-09-15: reviewed single-domain diffusion completed
+
+Stage46 run r7_domain_single_uniform_reviewed_v1 completed6000,48rank finished,
+six exits0/synced receipts, all1536 unique evalrows. AEreference exactpass22.41186.
+Best observed EMA6000 RAWL1 .126551 vs RGBcopy .126585 (15/32 videos better);
+AE RAWL1 .046466. Final previews recognizable but warped/smeared, not desired
+quality. Same-noise u1 x0MSE .343762 vs final .587732; needs decoded one-call/
+trajectory comparison, not proof of solver bug. Mixed not run; do not infer
+causal domain gain from other-cohort scores. See docs/DOMAIN_SINGLE_REVIEWED_RESULTS.md.
+No checkpoint downloaded/internal inspection; preserve final6000 for follow-up.
