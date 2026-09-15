@@ -1,5 +1,12 @@
 # Large-scale training path
 
+Latest (2026-09-15): `48_audit_native_i2v.sh` is an inference-only native Wan
+I2V / frozen R7 roundtrip / reviewed EMA6000 comparison. Start with4clips x2seeds
+and a fresh namespace. Complete I2V-14B-480P weights are required (location
+unconfirmed). See [runbook](../../docs/NATIVE_I2V_AUDIT_RUNBOOK.md) for launch,
+dual IO, resume and interpretation. One leader NPU; no new training launched.
+The historical scale description below is not the current stage48 recipe.
+
 The scale path freezes the representation before the full SpatialVID run.
 It does not decode MP4 or run StreamVGGT inside the diffusion training loop.
 

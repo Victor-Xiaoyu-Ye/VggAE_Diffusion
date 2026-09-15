@@ -343,7 +343,7 @@ class WanI2V:
         del sample_scheduler
         if offload_model:
             gc.collect()
-            torch.cuda.synchronize()
+            torch.npu.synchronize(self.device)
         if dist.is_initialized():
             dist.barrier()
 

@@ -3,6 +3,42 @@
 This document is the durable handoff for VggAE-Diffusion. Keep it current when
 goals, architecture, training order, paths, or important decisions change.
 
+## Native I2V quality control implemented (2026-09-15)
+
+Stage48 is ready in `scripts/scale/48_audit_native_i2v.sh`; see
+`docs/NATIVE_I2V_AUDIT_RUNBOOK.md`. No cluster job has been launched. Start with
+4 of the original ordered32 heldout clips, seeds101/211, fresh namespace
+`r7_native_i2v_roundtrip_smoke_v1`; expand only after inspecting this result.
+Full native Wan2.1-I2V-14B-480P checkpoint location is still unconfirmed. Its
+DiT, VAE, CLIP, T5 and tokenizer assets are mandatory; never fall back to T2V.
+
+This is inference, not a new trainer: native81frame16fps first-frame-only I2V
+with one fixed generic prompt; frozen R7 encode/decode of the first1second;
+existing reviewed single-domain EMA6000 Euler64 on the same cached anchors.
+RAW and RAW-AE are displayed alongside these three arms. Exact32 AE reference,
+legacy normalization, signatures, sample order, source flow and original CPU
+noise-index convention are gated. Native uses its own NPU RNG and full solver.
+Comparison uses9frames0,2,...16 resized518 from tensors, never MP4 decoding.
+Native roundtrip uses its independently encoded native first frame as anchor.
+There is no claim that the native continuation must match the real future.
+
+Leader NPU0 runs prepare/native/replay as separate processes; other ModelArts
+nodes wait via coordinator. Prefer one node for this initial control. Isolated
+runtime restores upstream FP32 modulation, uses real RoPE and valid-length NPU
+fused attention, and stores autocast Linear/Conv weights in BF16 with FP32
+time/head/norm/modulation preserved. Small attention gate runs before loading
+14B. Local CPU tests cannot verify NPU kernel, memory or perceptual quality.
+
+Outputs incrementally dual-write every60seconds and on exit. Each case seals
+file sizes/hashes, with local/current/mirror recovery. RESUME=1 requires the
+same contract, code, clip count and prompt; an uncommitted case repeats. Failed
+preflight before contract creation requires a fresh namespace. Input cache is
+read from persistent owner OBS; no local raw/model download. Saved artifacts
+include full native MP4,9frame tensors, five-arm MP4/grid, generated latents,
+per-case metrics, phase timings, throughput with units, and exit/sync receipts.
+Completion is not quality approval (`quality_passed=null`). 11 focused CPU
+tests passed, including corrupt-copy recovery and518dimension MP4 export.
+
 ## Generation redesign research (2026-09-15)
 
 Read `docs/GENERATION_REDESIGN_RESEARCH.md` for the comprehensive research

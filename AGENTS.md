@@ -5,6 +5,18 @@ rules, and safe next steps for future agents.
 
 ## Priority Update (2026-09-09)
 
+2026-09-15 STAGE48 IMPLEMENTED: scripts/scale/48_audit_native_i2v.sh;
+read docs/NATIVE_I2V_AUDIT_RUNBOOK.md. User approved native I2V / frozen R7
+roundtrip / existing reviewed EMA6000 comparison. First run 4 clips x 2 seeds
+in fresh r7_native_i2v_roundtrip_smoke_v1 namespace, then review before32.
+Full Wan2.1-I2V-14B-480P assets required; current location remains unconfirmed.
+No T2V fallback. One leader NPU, other nodes kept alive by coordinator;
+three processes release native weights before R7 replay. First-frame-only,
+fixed generic prompt, native81/16fps; compare first1second9frames from tensors.
+Dual publication/read recovery with per-case hashes and strict resume contract.
+11 CPU tests passed; NPU memory, compatibility and quality unvalidated.
+No cluster job launched. This supersedes the implementation status below.
+
 2026-09-15 RESEARCH REDESIGN: read docs/GENERATION_REDESIGN_RESEARCH.md.
 Keep first-frame-only I2V as main task; camera trajectory is optional future
 control/diagnostic, not a replacement success criterion. Task heads can audit
