@@ -5,6 +5,22 @@ rules, and safe next steps for future agents.
 
 ## Priority Update (2026-09-09)
 
+2026-09-15 RESEARCH REDESIGN: read docs/GENERATION_REDESIGN_RESEARCH.md.
+Keep first-frame-only I2V as main task; camera trajectory is optional future
+control/diagnostic, not a replacement success criterion. Task heads can audit
+geometry retention but cannot substitute for RGB generation. Proposed next
+order: intact native pretrained I2V quality reference, then one controlled
+scratch VAE/R7 comparison before new representation or scale decisions.
+Native output through frozen R7 encode/decode is a cheap codec-quality control;
+it does not count as R7 diffusion generation or repeat the completed AE audit.
+No new trainer/launcher implemented or launched. R7 is a learned compressed,
+temporally mixed representation, not raw VGGT post-LayerNorm tokens: recent
+Riemannian VGGT results do not justify projecting current R7 onto spheres.
+VideoRAE's 2B/800K/batch256 controlled setting and 11B/5M adapted qualitative
+setting are distinct. Generic geometry alignment/memory/two-stage generation
+is already covered by prior work; no established novelty or unique root cause.
+Stop default small recipe sweeps. Preserve stage47 and all earlier artifacts.
+
 LATEST stage47 completed1792rows/48ranks/6exit0+synced/16grids. Read
 docs/DOMAIN_TRAJECTORY_RESULTS.md. No satisfactory one-call/intermediate result
 found in inspected previews. Recommend stop current-recipe small sweeps and

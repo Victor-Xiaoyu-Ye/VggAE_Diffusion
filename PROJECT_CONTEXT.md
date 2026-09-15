@@ -3,6 +3,48 @@
 This document is the durable handoff for VggAE-Diffusion. Keep it current when
 goals, architecture, training order, paths, or important decisions change.
 
+## Generation redesign research (2026-09-15)
+
+Read `docs/GENERATION_REDESIGN_RESEARCH.md` for the comprehensive research
+report, primary sources, evidence limits, experiment decision table and
+novelty assessment. This is a design recommendation, not implemented training.
+Stage47 completed and supports closing current R7-window small sweeps, not
+rejecting every VGGT-based generator or identifying one unique root cause.
+
+The main task remains first-frame-only plausible video generation. The user
+views trajectories as extra control and does not accept replacing video
+quality with camera-conditioned success. Depth/segmentation/task heads may
+audit information retained by the representation, but do not demonstrate RGB
+generatability. Do not claim deep-feature normalization caused current failure.
+
+Current R7 includes learned spatial compression, 96+96 projection and temporal
+mixing. Raw VGGT post-LayerNorm manifold arguments need verification on actual
+R7 targets before applying them; no inference-only spherical projection change.
+VideoRAE controlled T2V uses 2B/800K steps/global256; its polished qualitative
+setting uses adapted11B/5M video-text samples. V-RAE Cityscapes uses12 historical
+frames, unlike this task. MIRA conditions on actions/history and uses large
+data/model resources; successful papers do not isolate our encoder as cause.
+
+Recommended order: (A) intact native pretrained I2V inference on same first
+frames, with original VAE/heads/conditions/sampler and no future captions;
+then encode/decode aligned generated windows with frozen R7 to separate codec
+expressivity from sampling into its representation (not R7 diffusion success);
+(B) one transparent scratch native-VAE versus existing R7 control, reporting
+different latent shapes/compute rather than asserting perfect one-factor match;
+(C) select a new representation or function-preserving adaptation hypothesis
+based on results. No new launchers, training, or NPU validation in this research.
+Complete native generation differs from previous Wan weight transplant with
+replaced R7 interfaces. Native quality reference is not research novelty.
+
+Generic geometry alignment, latent geometry generation, coverage retrieval,
+confidence residuals and two-stage geometry/appearance systems have direct prior
+work (GLD, Gen3R, Geometry Forcing, Lyra2, CovRAG, TourPhysics, others). Proposed
+conditional geometry representation/efficiency mechanism remains unproven;
+require same-information controls, visual quality and nontrivial geometry gains.
+Keep dual IO, intermediate artifacts, full resume, throughput with explicit units,
+and remote-only raw data work. Mixed training has not run; source-video split
+leakage remains unresolved. No new successful generation baseline is claimed.
+
 ## RAE Generation Root-Cause Review (2026-09-10, latest)
 
 2026-09-11 DOMAIN v1 failed duringAEcache(~20/171rank0,0committed shards):
