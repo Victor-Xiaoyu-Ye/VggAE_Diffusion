@@ -5,6 +5,12 @@ rules, and safe next steps for future agents.
 
 ## Priority Update (2026-09-09)
 
+LATEST stage47 completed1792rows/48ranks/6exit0+synced/16grids. Read
+docs/DOMAIN_TRAJECTORY_RESULTS.md. No satisfactory one-call/intermediate result
+found in inspected previews. Recommend stop current-recipe small sweeps and
+discuss redesign; do not launch another diagnostic by default. Root cause is
+not uniquely identified and VGGT research direction is not disproven.
+
 User-approved next run: stage47 frozen single-domain EMA6000 trajectory;
 docs/DOMAIN_TRAJECTORY_RUNBOOK.md. Original32heldout×2seeds,1792rows,16grids,
 reference-aware AE gate. No new training; discuss redesign after this result.

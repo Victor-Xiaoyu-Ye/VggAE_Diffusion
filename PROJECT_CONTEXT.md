@@ -1579,6 +1579,16 @@ threshold changed; preserve v2 caches, do not full-resume nonexistent step0
 checkpoint. Read docs/DOMAIN_AE_REPLAY_RUNBOOK.md. NPU execution pending.
 # 2026-09-15: reviewed single-domain diffusion completed
 
+FINAL TRAJECTORY COMPLETE: stage47 all1792 rows,48completed,6exit0/synced,
+16grids/previewscomplete. Onecall MSE.343762/L1AE.112238; sampled bestdecoded
+step8u.875 L1AE.108925/RAW.119202; final.587732/.117256/RAW.126551. True-path
+probe at.015625 L1AE.002267, but actualpath remains poor. Inspected3clips
+one-call/.5/.25/final: earlyprediction textured/averaged, intermediates deformed;
+no good hidden video found in inspected previews. step8 not in stored grids;
+its6.18%RAW benefit alone is not quality success. Recommendation: close current
+recipe's quality trial, no more default small sweeps; discuss substantive
+redesign. Not a proof VGGT direction impossible. See DOMAIN_TRAJECTORY_RESULTS.md.
+
 User approved final frozen trajectory trial before discussion. Stage47 uses
 domain_trajectory mode, checkpointfinal internal6000, EMAonly, original32heldout
 and seeds101/211, noiseindex0–31. Reuses production observer and checked reference
