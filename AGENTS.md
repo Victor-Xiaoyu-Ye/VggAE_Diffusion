@@ -5,6 +5,13 @@ rules, and safe next steps for future agents.
 
 ## Priority Update (2026-09-09)
 
+2026-09-16 STAGE48 EXIT RESOLVED: user console tail shows38/40 still advancing,
+then12:50:01 platform controller shutdown externally and SIGTERM to user process
+group, exit-1. Trigger unknown;15s is termination grace, not job wall-time.
+No denoiser hang or publisher failure established. User confirms cluster stopped.
+Read updated docs/NATIVE_I2V_AUDIT_RESULTS.md; same-contract RESUME=1 preserves
+three committed cases. Five native generations plus replay remain.
+
 2026-09-16 STAGE48 PARTIAL: docs/NATIVE_I2V_AUDIT_RESULTS.md. Owner smoke prefix
 has3/8 native receipts; latest status12:49China at fourthcase step37/40, no
 final exit/summary/comparison. User reports finished; asked for actual namespace

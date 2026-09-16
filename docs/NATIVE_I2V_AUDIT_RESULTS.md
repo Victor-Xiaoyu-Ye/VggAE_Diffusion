@@ -1,5 +1,33 @@
 # Stage48 partial audit — 2026-09-16
 
+## Platform termination evidence (later user-provided console tail)
+
+The console tail resolves the termination mechanism. Line1560 shows the fourth
+case advancing to38/40 (later than the last OBS snapshot), with the coordinator
+still reporting leader running at7740seconds. At12:50:01 China time, line1571
+reports `controller is being shutdown externally...`; line1596 explicitly
+records `signal SIGTERM to user process group (pgid: 333)`. Lines1598–1599
+record exit -1. This was platform-initiated termination while generation was
+still progressing, not successful completion or evidence of a denoiser hang.
+
+The15seconds in line1597 is the process termination timeout, not the training
+job wall-time limit. The log says a restart will follow; it does not prove a
+restart occurred. The triggering event (scheduler/platform policy, user action,
+recovery event or another cause) is not identified by this tail. The trailing
+Python threading shutdown traceback follows termination and does not establish
+the initiating fault. Last OBS publication precedes shutdown by roughly27s,
+consistent with the60s incremental publication interval; stale files do not
+establish a pre-existing publisher failure.
+
+User confirms the cluster has stopped. Preserve the original contract/code and
+resume the same4clip namespace with RESUME=1: three committed native cases can
+be reused; the interrupted fourth restarts, leaving five native generations
+plus replay. At observed speed this is approximately2.6hours generation alone.
+Check platform termination/restart events and execution-time policy before
+resubmission. Do not alter model/solver/clip count to address this termination.
+
+## Earlier OBS-only inspection
+
 Checked the owner OBS prefix `output/scale/r7_native_i2v_roundtrip_smoke_v1/`
 twice, most recently about14:50 China time. The intended4clips x2seeds run
 has only3 committed native cases. The alternative default prefix

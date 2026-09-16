@@ -5,6 +5,14 @@ goals, architecture, training order, paths, or important decisions change.
 
 ## Native I2V partial results (2026-09-16)
 
+Later platform tail confirms external controller shutdown and SIGTERM to user
+process group at12:50:01, exit-1, immediately after fourthcase progressed38/40.
+This resolves termination mechanism, not the triggering platform event. The15s
+timeout is termination grace. A restart announcement is not evidence of an
+actual restart. User confirms cluster ended. No denoiser hang or prior sync
+failure established; resume original4clip contract reuses3cases and reruns
+five native generations plus replay (about2.6h generation at observed speed).
+
 See `docs/NATIVE_I2V_AUDIT_RESULTS.md`. At14:50 China time owner smoke output
 contains3/8 native cases; last progress12:49 on fourthcase step37/40, with no
 final exit/summary/R7 comparison. User reported finished; actual namespace or
