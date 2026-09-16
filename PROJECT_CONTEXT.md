@@ -3,6 +3,19 @@
 This document is the durable handoff for VggAE-Diffusion. Keep it current when
 goals, architecture, training order, paths, or important decisions change.
 
+## Native I2V partial results (2026-09-16)
+
+See `docs/NATIVE_I2V_AUDIT_RESULTS.md`. At14:50 China time owner smoke output
+contains3/8 native cases; last progress12:49 on fourthcase step37/40, with no
+final exit/summary/R7 comparison. User reported finished; actual namespace or
+platform tail requested. No observed ending error explains the gap. Incremental
+synced receipt does not prove final completion. No job restarted or submitted.
+Native NPU gate and three native videos succeeded, approximately31min/video,
+38.83GiB cumulative allocation peak. Sampled frames show recognizable sharp
+street structure, limited early motion in one scene and late deformation in
+another. R7 codec/generator diagnosis remains pending. Preserve original code
+and contract for RESUME=1 only after determining whether job ended.
+
 ## Native I2V quality control implemented (2026-09-15)
 
 Stage48 is ready in `scripts/scale/48_audit_native_i2v.sh`; see

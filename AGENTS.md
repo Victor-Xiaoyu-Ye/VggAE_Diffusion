@@ -5,6 +5,14 @@ rules, and safe next steps for future agents.
 
 ## Priority Update (2026-09-09)
 
+2026-09-16 STAGE48 PARTIAL: docs/NATIVE_I2V_AUDIT_RESULTS.md. Owner smoke prefix
+has3/8 native receipts; latest status12:49China at fourthcase step37/40, no
+final exit/summary/comparison. User reports finished; asked for actual namespace
+or console tail. Native sharp street content with limited early motion and some
+late deformation; no R7 roundtrip evidence yet. Native NPU gate passed, about
+31min/video and38.83GiB cumulative allocation peak. Do not claim audit complete
+or identify root cause. Preserve code/config for same-contract resume.
+
 2026-09-15 STAGE48 IMPLEMENTED: scripts/scale/48_audit_native_i2v.sh;
 read docs/NATIVE_I2V_AUDIT_RUNBOOK.md. User approved native I2V / frozen R7
 roundtrip / existing reviewed EMA6000 comparison. First run 4 clips x 2 seeds
