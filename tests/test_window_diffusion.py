@@ -1,5 +1,6 @@
 """CPU contracts and exact interruption replay; synthetic results are not video quality evidence."""
 import contextlib
+import hashlib
 import io
 import json
 from pathlib import Path
@@ -139,7 +140,10 @@ class WindowTests(unittest.TestCase):
     def test_uniform_memory_resume_end_to_end(self):
         self._check_resume(False, memorize=True, uniform=True)
 
-    def _check_resume(self, auxiliary, memorize=False, uniform=False):
+    def test_large_text_resume_end_to_end(self):
+        self._check_resume(False, uniform=True, large=True)
+
+    def _check_resume(self, auxiliary, memorize=False, uniform=False, large=False):
         with tempfile.TemporaryDirectory() as td:
             p = Path(td)
             torch.manual_seed(19)
@@ -169,6 +173,18 @@ class WindowTests(unittest.TestCase):
                 base += ['--memorize_clips','2']
             if uniform:
                 base += ['--time_distribution','uniform','--time_shift','1']
+            if large:
+                text=p/'text';text.mkdir()
+                names=[f'{split}{i}' for split in ('train','eval') for i in range(5)]
+                torch.save(torch.zeros(1,4096),text/'empty_prompt.pt')
+                torch.save(dict(embeddings={name:torch.randn(2,4096) for name in names},
+                    captions={name:'A street scene.' for name in names}),text/'part.pt')
+                manifest=dict(text_len=256,index={name:'part.pt' for name in names},files={
+                    f:hashlib.sha256((text/f).read_bytes()).hexdigest() for f in ('empty_prompt.pt','part.pt')})
+                (text/'index.json').write_text(json.dumps(manifest))
+                (text/'_SUCCESS').write_text(json.dumps(dict(schema='fullhq-text-v1',
+                    index_sha256=hashlib.sha256((text/'index.json').read_bytes()).hexdigest())))
+                base.remove('--no_text');base+=['--large_run','--text_dir',str(text),'--text_cfg','3']
             with contextlib.redirect_stdout(io.StringIO()):
                 run(parse_args(base+['--output_dir',str(p/'full')]))
                 run(parse_args(base+['--output_dir',str(p/'split'),'--stop_after_steps','2']))
@@ -190,6 +206,9 @@ class WindowTests(unittest.TestCase):
                     torch.testing.assert_close(tensor,resumed['optimizer']['state'][key][name],atol=0,rtol=0)
             self.assertEqual(json.loads((p/'split/run_status.json').read_text())['status'],'completed')
             self.assertTrue(list((p/'split/samples').rglob('*.pt')))
+            if large:
+                self.assertFalse(list((p/'split').glob('checkpoint_step*.pt')))
+                self.assertTrue(full['args']['large_run'])
             if memorize:
                 rows = [json.loads(x) for x in (p/'full/eval_samples.jsonl').read_text().splitlines()]
                 self.assertEqual({r['split'] for r in rows}, {'memorization', 'heldout'})

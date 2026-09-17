@@ -191,6 +191,8 @@ class SafeDataset(Dataset):
                 "_error": repr(error),
                 "video_id": entry.get("video_id", ""),
                 "video_path": entry.get("video_path", ""),
+                "window_index": int(index) % self.dataset.clips_per_video,
+                "dataset_index": int(index),
             }
 
 

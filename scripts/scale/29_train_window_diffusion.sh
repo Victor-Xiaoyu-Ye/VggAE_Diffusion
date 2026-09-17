@@ -117,6 +117,10 @@ if [[ "${NO_TEXT:-0}" == 1 ]]; then
   EXTRA+=(--no_text)
 else
   # Sidecars are immutable inputs; use the existing stage 15 if not already built.
+  if [[ "${LARGE_RUN:-0}" == 1 ]]; then
+    : "${TEXT_DIR:?Full-HQ requires its versioned remote text bank}"
+    EXTRA+=(--text_dir "${TEXT_DIR}")
+  else
   TEXT_VERSION="${TEXT_EMBEDDING_VERSION:-umt5xxl_spatialvid_10k_v1}"
   TEXT_LOCAL="${LOCAL_CACHE_ROOT}/text_embeddings/${TEXT_VERSION}"
   "${PYTHON_BIN}" - "${TEXT_DIR:-${PERSISTENT_OBS_ROOT}/text_embeddings/${TEXT_VERSION}}" "${TEXT_LOCAL}" <<'PY'
@@ -131,6 +135,10 @@ for name in ['index.json','empty_prompt.pt',*sorted(set(index.values()))]:
 copy_file(child(src,'_SUCCESS'),str(dst/'_SUCCESS'))
 PY
   EXTRA+=(--text_dir "${TEXT_LOCAL}")
+  fi
+fi
+if [[ "${LARGE_RUN:-0}" == 1 ]]; then
+  EXTRA+=(--large_run --memory_limit_gib "${MEMORY_LIMIT_GIB:-52}" --text_cfg "${TEXT_CFG:-3}")
 fi
 if [[ "${RESUME}" == 1 ]]; then
   RESUME_LOCAL="${LOCAL_CACHE_ROOT}/window_resume/${WINDOW_NAMESPACE}/checkpoint.pt"

@@ -72,7 +72,7 @@ def read_video_frames(video_path, num_frames, target_size=518,
                        temporal_jitter=True, max_start_frac=0.3,
                        stride_jitter_frac=0.15, frame_indices=None,
                        max_frame_span=0, fps=0.0,
-                       clip_duration_seconds=0.0, seek_retries=2):
+                       clip_duration_seconds=0.0, seek_retries=2, strict_frames=False):
     """Read N frames from mp4.
 
     Args:
@@ -104,6 +104,10 @@ def read_video_frames(video_path, num_frames, target_size=518,
     else:
         # SpatialVID metadata can disagree with the container's actual frame
         # count. Clamp precomputed indices to the decoder-visible range.
+        requested = np.asarray(frame_indices, dtype=np.int64)
+        if strict_frames and (np.any(requested < 0) or np.any(requested >= total)):
+            cap.release()
+            raise VideoDecodeError(f'Requested frames outside actual video length: {video_path}')
         indices = np.clip(
             np.asarray(frame_indices, dtype=np.int64), 0, total - 1)
 
@@ -137,6 +141,8 @@ def read_video_frames(video_path, num_frames, target_size=518,
 
     valid_positions = [
         pos for pos, frame in enumerate(frames) if frame is not None]
+    if strict_frames and len(valid_positions) != len(frames):
+        raise VideoDecodeError(f'Incomplete window: {len(valid_positions)}/{len(frames)} readable frames in {video_path}')
     if not valid_positions:
         requested = ",".join(str(int(idx)) for idx in indices)
         raise VideoDecodeError(

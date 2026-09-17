@@ -1,5 +1,10 @@
 # Large-scale training path
 
+Latest (2026-09-17): `49_train_fullhq_ti2v.sh` implements user-approved3x8 NPU
+full-HQ TI2V with frozen t2v2 legacy R7 and1.653B DiT. Read
+[full-HQ runbook](../../docs/FULLHQ_TI2V_RUNBOOK.md) for memory gating, prerequisites,
+bad-data skips, staged/resumed launch and current validation limitations.
+
 Latest (2026-09-15): `48_audit_native_i2v.sh` is an inference-only native Wan
 I2V / frozen R7 roundtrip / reviewed EMA6000 comparison. Start with4clips x2seeds
 and a fresh namespace. Complete I2V-14B-480P weights are required (location

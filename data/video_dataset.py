@@ -31,7 +31,7 @@ class SpatialVidDataset(Dataset):
                  depth_root="", temporal_jitter=True, index_shard_id=0,
                  index_num_shards=1, check_files=True, max_frame_span=0,
                  clip_duration_seconds=0.0, decode_retries=8,
-                 clips_per_video=1):
+                 clips_per_video=1, strict_frames=False):
         if index_num_shards < 1:
             raise ValueError("index_num_shards must be >= 1")
         if not 0 <= index_shard_id < index_num_shards:
@@ -40,6 +40,7 @@ class SpatialVidDataset(Dataset):
                 f"got {index_shard_id}")
 
         self.target_size = target_size
+        self.strict_frames = strict_frames
         self.seq_len = seq_len
         self.num_frames_per_video = num_frames_per_video
         self.max_frame_span = max_frame_span
@@ -153,6 +154,7 @@ class SpatialVidDataset(Dataset):
             frames = read_video_frames(
                 video_path, nf, self.target_size,
                 temporal_jitter=False, frame_indices=indices,
+                strict_frames=self.strict_frames,
             )
         except Exception as exc:
             if isinstance(exc, VideoDecodeError):

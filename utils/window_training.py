@@ -128,8 +128,8 @@ class CaptionBank:
 
 
 @contextlib.contextmanager
-def use_ema(model, ema):
-    backup = {k:v.detach().clone() for k, v in model.state_dict().items()}
+def use_ema(model, ema, cpu_backup=False):
+    backup = {k:(v.detach().cpu().clone() if cpu_backup else v.detach().clone()) for k, v in model.state_dict().items()}
     model.load_state_dict(ema.state_dict(), strict=True)
     try:
         yield
@@ -148,6 +148,8 @@ def resume_contract(args, identity, world):
     # Disabled auxiliary defaults preserve pre-auxiliary full-resume contracts.
     if not getattr(args, 'aux_layer', 0) and not getattr(args, 'aux_weight', 0):
         mutable |= {'aux_layer', 'aux_weight'}
+    if not getattr(args, 'large_run', False):
+        mutable |= {'large_run', 'memory_limit_gib', 'text_cfg'}
     return dict(args={k:v for k, v in vars(args).items() if k not in mutable},
                 identity=identity, world_size=world)
 

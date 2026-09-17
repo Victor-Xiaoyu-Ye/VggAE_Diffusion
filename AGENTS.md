@@ -5,6 +5,14 @@ rules, and safe next steps for future agents.
 
 ## Priority Update (2026-09-09)
 
+2026-09-17 USER-APPROVED FULLHQ SCALE: stage49_train_fullhq_ti2v.sh, exactly3x8
+910B, frozen t2v2 legacy R7, scratch1.653B text+image DiT, all364850 candidate
+HQ training videos after512 reserved IDs. Read docs/FULLHQ_TI2V_RUNBOOK.md.
+Explicit bad-window skip/ledger/5% cap only in opt-in new cache mode. Probe before
+all/train;52GiB allocated gate, no actual NPU validation yet. Text sharded/lazy,
+one T5/node preprocessing; batch1 accum8 global192,100K schedule. Old street eval
+is regression only, not full-domain coverage. Local tests do not establish quality.
+
 2026-09-17 STAGE48 V2: owner smoke_v2 has4/8 native receipts, no replay/final.
 Contract equalsv1; first3case receipt file hashes exactly matchv1, expected
 fixed-seed repeat. Fourthcase finished40/40; no fixed step37/38 failure proven.

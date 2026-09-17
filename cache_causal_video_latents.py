@@ -73,6 +73,8 @@ def parse_args():
     parser.add_argument("--store_i0_rgb", action="store_true")
     parser.add_argument("--store_rgb", action="store_true", help="Keep full raw clip for held-out RGB evaluation")
     parser.add_argument("--independent_anchor", action="store_true", help="Encode condition from the first frame alone")
+    parser.add_argument('--skip_failed_data', action='store_true', help='Record failed source windows without replacement; frozen-cohort default remains strict')
+    parser.add_argument('--max_data_failure_rate', type=float, default=.05)
     parser.add_argument("--window_ae_norm", choices=('legacy','framewise'), default=None,
                         help="Explicit historical codec semantics for versioned window caches")
     parser.add_argument(
@@ -212,6 +214,7 @@ def cache_run_config(
         "samples_per_tar": args.samples_per_tar,
         "clips_per_video": args.clips_per_video,
         "store_i0_rgb": args.store_i0_rgb,
+        **({'skip_failed_data': True, 'max_data_failure_rate': args.max_data_failure_rate} if getattr(args, 'skip_failed_data', False) else {}),
         **({"store_rgb": True} if args.store_rgb else {}),
         **({"independent_anchor": True} if args.independent_anchor else {}),
         **({"window_ae_norm": args.window_ae_norm} if args.window_ae_norm else {}),
@@ -261,6 +264,8 @@ def validate_requested_config(args, config):
 
 def main():
     args = parse_args()
+    if not 0 <= args.max_data_failure_rate < 1:
+        raise ValueError('data failure limit must be in [0,1)')
     if args.csv_sha256:
         with open(args.csv, 'rb') as source:
             if hashlib.sha256(source.read()).hexdigest() != args.csv_sha256:
@@ -357,8 +362,9 @@ def main():
         check_files=args.check_files,
         max_frame_span=args.max_frame_span,
         clip_duration_seconds=config.clip_duration_seconds,
-        decode_retries=args.decode_retries,
+        decode_retries=0 if args.skip_failed_data else args.decode_retries,
         clips_per_video=args.clips_per_video,
+        strict_frames=args.skip_failed_data,
     )
     rank_indices = range(rank, len(dataset), world_size)
     total_rank_items = len(rank_indices)
@@ -473,7 +479,7 @@ def main():
     try:
         with torch.inference_mode():
             for batch in progress:
-                if args.csv_sha256 and (batch['errors'] or batch.get('decode_replacements', 0)):
+                if args.csv_sha256 and not args.skip_failed_data and (batch['errors'] or batch.get('decode_replacements', 0)):
                     # Leave the committed cursor unchanged so a later retry reads
                     # the failed window again instead of accepting a smaller cohort.
                     raise RuntimeError(f"Frozen cohort decode failed: {batch['errors']}")
@@ -489,6 +495,10 @@ def main():
                         batch.get("video_id", [])))
                 if batch["frames"] is None:
                     processed_items += batch["_batch_size"]
+                    if args.skip_failed_data:
+                        print('[cache skipped data] '+json.dumps(batch['errors']), flush=True)
+                        if processed_items >= 100 and len(failed_samples)/processed_items > args.max_data_failure_rate:
+                            raise RuntimeError('data failure rate exceeds configured limit; inspect OBS/decode errors')
                     if writer.archive is None:
                         save_rank_progress()
                     continue
@@ -624,6 +634,8 @@ def main():
             raise RuntimeError("Duplicate tar shard paths in R7 cache")
         target_raw = merge_raw_moments(target_entries)
         cond_raw = merge_raw_moments(cond_entries)
+        if args.skip_failed_data and (not total_samples or total_failed/max(1,total_samples+total_failed) > args.max_data_failure_rate):
+            raise RuntimeError('global source failure fraction exceeds limit')
         expected_count = total_samples * config.latent_grid ** 2
         if not torch.all(target_raw["count"] == expected_count):
             raise RuntimeError("Target moment count does not match sample count")

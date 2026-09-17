@@ -34,6 +34,9 @@ def parse_args(argv=None):
     for k in ('manifest', 'stats', 'eval_manifest', 'eval_stats', 'r7_ckpt', 'output_dir'):
         p.add_argument('--'+k, required=True)
     p.add_argument('--text_dir', default='')
+    p.add_argument('--large_run', action='store_true', help='Bound optimizer/EMA/evaluation memory and retain rolling checkpoints')
+    p.add_argument('--memory_limit_gib', type=float, default=52.)
+    p.add_argument('--text_cfg', type=float, default=1.)
     p.add_argument('--no_text', action='store_true', help='explicit uncaptioned I2V arm')
     p.add_argument('--prediction', choices=('x0', 'velocity'), default='x0')
     p.add_argument('--time_shift', type=float, default=1.)
@@ -77,6 +80,10 @@ def parse_args(argv=None):
 def run(args):
     # Reject contradictory distributions before distributed initialization/staging.
     WindowFlow(args.prediction, args.loss_floor, args.time_shift, args.time_distribution)
+    if not np.isfinite(args.text_cfg) or args.text_cfg < 1 or args.memory_limit_gib <= 0:
+        raise ValueError('invalid text CFG or memory limit')
+    if args.text_cfg != 1 and not args.text_dir:
+        raise ValueError('text CFG requires text conditioning')
     if args.memorize_clips < 0:
         raise ValueError('memorize_clips must be nonnegative')
     if not np.isfinite(args.aux_weight) or args.aux_weight < 0 or bool(args.aux_layer) != bool(args.aux_weight):
@@ -165,7 +172,11 @@ def run(args):
                     'temporal_norm':args.ae_norm}), flush=True)
             del artifact
         st = {k:{n:stats[k][n].to(device).float() for n in ('mean', 'std')} for k in ('cond', 'target')}
-        bank = CaptionBank(args.text_dir) if args.text_dir else None
+        if args.text_dir and args.large_run:
+            from utils.fullhq_text import ShardedCaptionBank
+            bank = ShardedCaptionBank(args.text_dir)
+        else:
+            bank = CaptionBank(args.text_dir) if args.text_dir else None
         identity = dict(representation=stats['representation'], statistics=digest(stats),
             eval_statistics=digest(evstats), train_manifest=train_shards,
             eval_manifest=eval_shards, text_signature=bank.signature if bank else None,
@@ -201,6 +212,9 @@ def run(args):
         flow = WindowFlow(args.prediction, args.loss_floor, args.time_shift, args.time_distribution)
         contract['flow'] = flow.contract()
         optimizer = build_optimizer(core, args.lr, args.wd)
+        if args.large_run:
+            for group in optimizer.param_groups:
+                group['foreach'] = False
         def schedule(s):
             if s < args.warmup_steps:
                 return (s+1)/max(args.warmup_steps, 1)
@@ -211,7 +225,11 @@ def run(args):
         step, consumed, best = 0, 0, float('inf')
         resume_rng = None
         if args.resume:
-            saved = load_artifact(args.resume); validate_resume(saved, contract)
+            # Large full-state checkpoints are tens of GiB. Avoid one BytesIO
+            # copy plus a full CPU tensor allocation on each of eight ranks.
+            saved = (torch.load(args.resume,map_location='cpu',weights_only=False,mmap=True)
+                     if args.large_run else load_artifact(args.resume))
+            validate_resume(saved, contract)
             core.load_state_dict(saved['model']); optimizer.load_state_dict(saved['optimizer'])
             scheduler.load_state_dict(saved['scheduler']); scaler.load_state_dict(saved['scaler'])
             ema.load_state_dict(saved['ema']); ema.load_metadata(saved['ema_metadata']); ema.to(device)
@@ -243,7 +261,17 @@ def run(args):
         evaluation_batches += [('heldout', b) for b in evbatches]
         del evdata
         model = torch.nn.parallel.DistributedDataParallel(core, device_ids=[local],
-            output_device=local, find_unused_parameters=False) if ddp else core
+            output_device=local, find_unused_parameters=False, gradient_as_bucket_view=args.large_run) if ddp else core
+        def memory_check(phase):
+            if not args.large_run or device_type == 'cpu': return
+            backend=getattr(torch,device_type)
+            peak=torch.tensor([backend.max_memory_allocated()/2**30, backend.max_memory_reserved()/2**30],device=device)
+            if ddp: dist.all_reduce(peak,op=dist.ReduceOp.MAX)
+            if rank==0:
+                atomic_json(out/'memory_acceptance.json',dict(phase=phase,step=step,
+                    max_rank_allocated_gib=float(peak[0]),max_rank_reserved_gib=float(peak[1]),limit_gib=args.memory_limit_gib))
+            if float(peak[0])>args.memory_limit_gib:
+                raise RuntimeError('large-run memory budget exceeded; do not silently reduce model or alter resume')
         torch.manual_seed(args.seed+rank)
         if device_type == 'npu': torch.npu.manual_seed_all(args.seed+rank)
         if rank == 0:
@@ -269,7 +297,7 @@ def run(args):
                 return torch.cat((c, z), 1).reshape(c.shape[0], future+1, grid, grid, channels)[..., :3].sigmoid()
             seq = torch.cat((c, z), 1).reshape(c.shape[0], future+1, grid, grid, channels)
             geo, tex = tokenizer.decode(seq)
-            rgb = decoder(geo, tex)[..., :3].float()
+            rgb = decoder(geo, tex, frames_chunk_size=1 if args.large_run else None)[..., :3].float()
             if not torch.isfinite(rgb).all(): raise RuntimeError('nonfinite decoded video')
             return rgb.clamp(0, 1)
 
@@ -330,7 +358,7 @@ def run(args):
             eval_rng = capture_rng_state()
             core.eval(); rows = []; preview_root = out/'samples'/f'step{step:07d}'
             for label in ('online', 'ema'):
-                with use_ema(core, ema) if label == 'ema' else contextlib.nullcontext():
+                with use_ema(core, ema, cpu_backup=args.large_run) if label == 'ema' else contextlib.nullcontext():
                     for index, (split, batch) in enumerate(evaluation_batches):
                         if index % world != rank:
                             continue
@@ -345,9 +373,14 @@ def run(args):
                         for seed in seeds:
                             progress('evaluating', step=step, weights=label, clip=index, sample_seed=seed)
                             noise = torch.randn(y.shape, generator=torch.Generator().manual_seed(seed+1009*index)).to(device)
-                            generated = flow.sample(core, c, noise, args.sample_steps, dtype, text, valid, args.sample_method)
+                            sample_model = core
+                            if bank and args.text_cfg != 1.:
+                                from utils.fullhq_text import TextCFG
+                                sample_model = TextCFG(core, bank.empty, args.text_cfg)
+                            generated = flow.sample(sample_model, c, noise, args.sample_steps, dtype, text, valid, args.sample_method)
                             gen = decode(cr, inverse(generated, st['target']))
                             row = dict(step=step, weights=label, split=split, video_id=batch['video_id'][0], seed=seed,
+                                text_cfg=args.text_cfg, caption=bank.caption(batch['video_id'][0]) if args.large_run and bank else '',
                                 latent_mse=float((generated-y).square().mean()),
                                 rgb_l1_vs_ae=float((gen[:, 1:]-ae[:, 1:]).abs().mean()),
                                 rgb_copy_l1_vs_ae=float((copy[:, 1:]-ae[:, 1:]).abs().mean()),
@@ -432,7 +465,8 @@ def run(args):
                     scheduler=scheduler.state_dict(), scaler=scaler.state_dict(), ema=ema.state_dict(),
                     ema_metadata=ema.metadata(), rng_by_rank=states, consumed_by_rank=cursors,
                     statistics=stats, args=vars(args))
-                atomic_torch_save(payload, str(out/f'checkpoint_{kind}.pt'))
+                if not (args.large_run and kind.startswith('step')):
+                    atomic_torch_save(payload, str(out/f'checkpoint_{kind}.pt'))
                 if kind != 'best_reconstruction':
                     atomic_torch_save(payload, str(out/'checkpoint_latest.pt'))
             if ddp: dist.barrier()
@@ -512,12 +546,14 @@ def run(args):
                 # Durable checkpoint BEFORE potentially expensive RGB evaluation.
                 save(f'step{step:07d}')
                 score = evaluate()
+                memory_check('after_evaluation')
                 flag = torch.tensor([float(rank == 0 and score < best)], device=device)
                 if rank == 0 and score < best: best = score
                 if ddp: dist.broadcast(flag, 0)
                 if bool(flag): save('best_reconstruction')
             elif step % args.save_every == 0:
                 save(f'step{step:07d}')
+            if args.large_run and (step==1 or step % args.log_every==0): memory_check('training')
             progress('training', step=step) if step % args.log_every == 0 else None
         save('final' if step == args.max_steps else 'paused')
         progress('finished', step=step, status='completed' if step == args.max_steps else 'paused')

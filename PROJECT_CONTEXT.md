@@ -1,5 +1,20 @@
 # Project Context
 
+## Full HQ TI2V scale baseline (2026-09-17)
+
+User approved three nodes, fixed AE, larger DiT and all data with bad-data skips.
+Implemented stage49:3x8 910B, frozen R7 t2v2 legacy,1536width/24layers/24heads,
+1,652,968,512 parameters, globalbatch192 (1x8x24),100Ksteps, UMT5 text conditioning.
+Full CSV locally verified:365362 minus512 reserved IDs =364850 candidate videos,
+1459400 windows before remote decode failures. Missing/corrupt windows have explicit
+ledgers and5% cap; no replacement. Text cache sharded/checksummed/lazy, captions
+video-level. Preflight real NPU memory gate52GiB; persistent model state estimate
+30.79GiB/device plus activations/codec/HCCL. CPU EMA backup/mmap resume reduce peaks.
+Rolling checkpoints, intermediate previews, throughput and existing dual run IO.
+See docs/FULLHQ_TI2V_RUNBOOK.md for launch/resume/storage. Actual NPU run and video
+quality pending. Existing street32 AE gate retained, not broadHQ quality coverage.
+This supersedes older next-step recommendations, not their factual experiment results.
+
 This document is the durable handoff for VggAE-Diffusion. Keep it current when
 goals, architecture, training order, paths, or important decisions change.
 
