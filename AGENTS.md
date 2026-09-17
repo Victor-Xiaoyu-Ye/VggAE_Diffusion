@@ -5,6 +5,13 @@ rules, and safe next steps for future agents.
 
 ## Priority Update (2026-09-09)
 
+2026-09-17 STAGE48 V2: owner smoke_v2 has4/8 native receipts, no replay/final.
+Contract equalsv1; first3case receipt file hashes exactly matchv1, expected
+fixed-seed repeat. Fourthcase finished40/40; no fixed step37/38 failure proven.
+Lastcase Sep16 19:25, publisher19:29China. v2 platform tail absent; do not assert
+same SIGTERM trigger. Recommend partial replay of existing4cases (2scenes x2),
+not another full14B rerun. Partial-replay launcher NOTimplemented. Read results.
+
 2026-09-16 STAGE48 EXIT RESOLVED: user console tail shows38/40 still advancing,
 then12:50:01 platform controller shutdown externally and SIGTERM to user process
 group, exit-1. Trigger unknown;15s is termination grace, not job wall-time.

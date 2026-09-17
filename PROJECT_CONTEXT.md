@@ -5,6 +5,15 @@ goals, architecture, training order, paths, or important decisions change.
 
 ## Native I2V partial results (2026-09-16)
 
+Sep17 v2 review: smoke_v2 has4/8 native cases, no R7 replay or final receipts.
+Contract identical to v1; three repeated cases have identical artifact hashes.
+Fourthcase completed40/40, so there is no demonstrated fixed denoising-step
+failure. Lastcase Sep16 19:25:20, publisher19:29:32China. v2 platform shutdown
+tail unavailable; termination cause unknown. Recommend separate explicit
+partial replay of the already available2scenes x2seeds before further native
+generation. Partial-replay launcher not yet implemented; never change clips
+under strict resume. Review docs/NATIVE_I2V_AUDIT_RESULTS.md for exact evidence.
+
 Later platform tail confirms external controller shutdown and SIGTERM to user
 process group at12:50:01, exit-1, immediately after fourthcase progressed38/40.
 This resolves termination mechanism, not the triggering platform event. The15s

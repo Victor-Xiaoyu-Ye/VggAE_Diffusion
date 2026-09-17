@@ -1,5 +1,42 @@
 # Stage48 partial audit — 2026-09-16
 
+## Smoke v2 review — 2026-09-17
+
+User reran in `output/scale/r7_native_i2v_roundtrip_smoke_v2/`. Downloaded small
+logs/contracts/receipts and the one new MP4 to
+`D:/workspace/VggAE_DataAudit/native_i2v_v2_review_20260917/`.
+
+- v2 has4/8 native receipts, versus3/8 in v1. The fourth case
+  `clip001_seed211` completed40/40 and was committed. No comparison outputs,
+  summary, launcher exit or native phase timing exist in the observed listing.
+- Contracts are exactly equal, including code hashes, checkpoint signatures,
+  records, seed list and sampling settings. For each of the first three cases,
+  the receipt file maps (sizes and SHA256 of MP4/inputPNG/windowPT) are exactly
+  equal between runs. Repeated pictures are therefore expected deterministic
+  outputs, not evidence that model changes failed. v2 logs start with8 pending
+  cases and show fresh generation timings, so this was a fresh full rerun.
+- Preparation finished2026-09-16 17:23:37 China time. Last completed case at
+  19:25:20; last successful publication at19:29:32. Thus the publisher continued
+  about4minutes after the last generation status. The current status reports
+  completed_this_attempt=4, not completion of all8 cases.
+- Per-case generation times:26.48,30.15,30.01,30.10minutes. Fourth MP4 was
+  downloaded and checked against its receipt hash. Sampled frames show clear
+  street structure, a walking foreground person and moving vehicles; this is
+  qualitative native-generation evidence only, not a complete motion benchmark.
+- Unlike v1, v2 reached the end of the fourth generation. There is no evidence
+  of a deterministic failure at denoising step37/38. Both observed runs cover
+  roughly two hours of work, which warrants checking platform wall-time/resource
+  policies, but does not establish a timeout. No v2 platform shutdown tail has
+  been supplied, so the v1 SIGTERM finding cannot simply be copied to v2.
+
+The serial all-native-then-all-replay orchestration delays the useful codec
+comparison until all8 expensive native cases finish. This has now yielded no
+R7 comparison twice. Recommend a separately identified partial replay of the
+four already committed v2 cases before any further full native rerun. Such a
+partial result must say2scenes x2seeds, not4scenes x2seeds. A partial-replay
+launcher is not yet implemented; do not change NATIVE_CLIPS under RESUME=1,
+which would violate the existing strict contract. No model code changed here.
+
 ## Platform termination evidence (later user-provided console tail)
 
 The console tail resolves the termination mechanism. Line1560 shows the fourth
