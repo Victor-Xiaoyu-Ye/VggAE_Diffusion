@@ -4,6 +4,13 @@
 Entry: `scripts/scale/49_train_fullhq_ti2v.sh`. Exactly 3 nodes x 8 Ascend 910B.
 CPU tests pass; real NPU memory, HCCL, full-HQ I/O and generation remain untested.
 
+First cluster attempt exposed an Ascend FlashAttention mask shape incompatibility
+([1,1,1,256] was rejected for1296 queries). Attention now uses contiguous[B,1,Q,K]
+boolean masks, preserving valid-token semantics and parameter shapes. This trace
+does not establish OOM. Pull the fix and rerun `FULLHQ_STAGE=probe` on3x8 nodes;
+then run the full pipeline. Do not enable training RESUME solely for this failed
+preflight. No need to delete existing input caches or change the run namespace.
+
 ## Model and data
 
 - Freeze `r7_t2_c192_v2/joint/checkpoint_best.pt`, including historical **legacy**

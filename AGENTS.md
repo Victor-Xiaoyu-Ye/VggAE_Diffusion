@@ -5,6 +5,10 @@ rules, and safe next steps for future agents.
 
 ## Priority Update (2026-09-09)
 
+STAGE49 FIRST CLUSTER FAILURE: FlashAttention rejected broadcast text mask
+[1,1,1,256]; Attention now materializes[B,1,Q,K]. CPU parity tests cover outputs,
+gradients and padded tokens; NPU rerun pending. No evidence of OOM in this trace.
+
 2026-09-17 USER-APPROVED FULLHQ SCALE: stage49_train_fullhq_ti2v.sh, exactly3x8
 910B, frozen t2v2 legacy R7, scratch1.653B text+image DiT, all364850 candidate
 HQ training videos after512 reserved IDs. Read docs/FULLHQ_TI2V_RUNBOOK.md.

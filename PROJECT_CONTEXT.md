@@ -2,6 +2,12 @@
 
 ## Full HQ TI2V scale baseline (2026-09-17)
 
+Cluster first attempt failed in aclnnFlashAttentionScore: mask[1,1,1,256]
+unsupported for B1/H24/Q1296/K256. Fixed Attention to explicitly materialize
+[B,1,Q,K] boolean mask (head broadcast retained). No architecture/weight/data
+change and no OOM evidence in supplied trace. CPU output/gradient/padding parity
+tested; corrected NPU probe still pending. Rerun stage49 probe before full pipeline.
+
 User approved three nodes, fixed AE, larger DiT and all data with bad-data skips.
 Implemented stage49:3x8 910B, frozen R7 t2v2 legacy,1536width/24layers/24heads,
 1,652,968,512 parameters, globalbatch192 (1x8x24),100Ksteps, UMT5 text conditioning.

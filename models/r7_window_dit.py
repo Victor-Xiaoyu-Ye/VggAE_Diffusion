@@ -34,7 +34,11 @@ class Attention(nn.Module):
         b, n, w = x.shape
         q = self.q(x).reshape(b, n, self.heads, self.head_dim).transpose(1, 2)
         k, v = self.kv(context).reshape(b, -1, 2, self.heads, self.head_dim).unbind(2)
-        mask = None if valid is None else valid[:, None, None, :]
+        # Ascend FlashAttention requires an explicit query dimension; its
+        # tiler rejects the otherwise legal SDPA [B,1,1,K] broadcast mask.
+        # Keep heads broadcast, and materialize to avoid zero-stride NPU inputs.
+        mask = (None if valid is None else
+                valid[:, None, None, :].expand(b, 1, n, context.shape[1]).contiguous())
         value = F.scaled_dot_product_attention(q, k.transpose(1, 2), v.transpose(1, 2),
                                                attn_mask=mask, dropout_p=0.)
         return self.out(value.transpose(1, 2).reshape(b, n, w))

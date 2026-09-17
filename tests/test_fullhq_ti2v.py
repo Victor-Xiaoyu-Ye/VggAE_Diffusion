@@ -18,6 +18,38 @@ from models.r7_window_dit import R7WindowDiT
 
 
 class FullHQTests(unittest.TestCase):
+    def test_attention_explicit_query_mask_matches_broadcast_outputs_and_gradients(self):
+        from models.r7_window_dit import Attention
+        from torch.nn import functional as F
+        import copy
+        torch.manual_seed(19)
+        for length in (1, 7, 256):
+            model=Attention(24,3);reference=copy.deepcopy(model)
+            x=torch.randn(2,11,24,requires_grad=True)
+            context=torch.randn(2,length,24,requires_grad=True)
+            xr=x.detach().clone().requires_grad_();cr=context.detach().clone().requires_grad_()
+            valid=torch.ones(2,length,dtype=torch.bool)
+            if length>1:valid[0,length//2:]=False
+            sdpa=F.scaled_dot_product_attention
+            def checked(q,k,v,**kwargs):
+                mask=kwargs['attn_mask']
+                self.assertEqual(mask.shape,(2,1,11,length))
+                self.assertTrue(mask.is_contiguous())
+                torch.testing.assert_close(mask[:,0,0],valid)
+                return sdpa(q,k,v,**kwargs)
+            with patch('models.r7_window_dit.F.scaled_dot_product_attention',side_effect=checked):
+                got=model(x,context,valid)
+            def broadcast(q,k,v,**kwargs):
+                kwargs['attn_mask']=valid[:,None,None,:]
+                return sdpa(q,k,v,**kwargs)
+            with patch('models.r7_window_dit.F.scaled_dot_product_attention',side_effect=broadcast):
+                expected=reference(xr,cr,valid)
+            torch.testing.assert_close(got,expected)
+            got.square().sum().backward();expected.square().sum().backward()
+            torch.testing.assert_close(x.grad,xr.grad);torch.testing.assert_close(context.grad,cr.grad)
+            for p,r in zip(model.parameters(),reference.parameters()):torch.testing.assert_close(p.grad,r.grad)
+            if length>1:self.assertEqual(float(context.grad[0,length//2:].abs().sum()),0.)
+
     def test_all_valid_rows_with_heldout_exclusion_and_failure_ledger(self):
         with tempfile.TemporaryDirectory() as folder:
             p=Path(folder);source=p/'metadata.csv'
