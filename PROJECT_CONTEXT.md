@@ -2,6 +2,17 @@
 
 ## Full HQ TI2V scale baseline (2026-09-17)
 
+Live OBS review Sep17: corrected24-rank memory probe PASSED, max allocation40.6167
+At19:34China log snapshot / subsequent status reads, all24rank receipts running,
+each960successful windows/15shards:23040 durable windows (~1.58%);5failed total.
+No node lag visible at this shard resolution. Rank0 ETA~72.5h if rate persists;
+not a guarantee and not DiT training ETA. No restart needed for logging-only patch.
+GiB/reserved40.8789GiB. Text merge364978 IDs, zero missing captions. Rank0 caching
+946/60809 (~4.36s/window,366.16 latent tokens/s/NPU); DiT output prefix empty, so
+optimization has not started. Rank partition is range(rank,N,24), three nodes x8.
+All future training must retain literal DI_throughput formatting; stage49 text,
+probe, trainer and per-rank durable cache progress now expose it explicitly.
+
 Cluster first attempt failed in aclnnFlashAttentionScore: mask[1,1,1,256]
 unsupported for B1/H24/Q1296/K256. Fixed Attention to explicitly materialize
 [B,1,Q,K] boolean mask (head broadcast retained). No architecture/weight/data

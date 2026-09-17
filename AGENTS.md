@@ -5,6 +5,12 @@ rules, and safe next steps for future agents.
 
 ## Priority Update (2026-09-09)
 
+USER REQUIREMENT: all future related training/preprocessing must log the literal
+`DI_throughput: <value> tokens/s/npu`, following existing cluster log convention.
+Count sequence tokens excluding channels, per active NPU; state measurement scope
+and never multiply by world size for this metric. Keep numeric metric in JSON.
+Stage49 cache now prints every rank at durable shard commits, not just rank0 tqdm.
+
 STAGE49 FIRST CLUSTER FAILURE: FlashAttention rejected broadcast text mask
 [1,1,1,256]; Attention now materializes[B,1,Q,K]. CPU parity tests cover outputs,
 gradients and padded tokens; NPU rerun pending. No evidence of OOM in this trace.

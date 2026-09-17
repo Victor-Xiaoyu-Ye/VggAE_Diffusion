@@ -16,6 +16,7 @@ from utils.moxing_io import read_bytes, copy_file
 from utils.native_audit_io import exists
 from utils.file_signature import sampled_file_signature
 from utils.window_training import digest
+from utils.training import ThroughputMeter
 
 
 def publish(root, staging, name, payload, binary=False):
@@ -68,6 +69,7 @@ def main():
         publish(a.output,a.staging,'_SUCCESS',dict(schema='fullhq-text-v1',index_sha256=checksum,num_videos=len(index)))
         print(f'[fullHQ text] merged {len(index)} IDs, {missing} empty captions',flush=True);return
     own=rows[rank::a.nodes];index={};files={};missing=0;encoder=None
+    throughput_meter=ThroughputMeter()
     for start in range(0,len(own),a.shard_size):
         group=own[start:start+a.shard_size];stem=f'node{rank}/shard{start//a.shard_size:06d}'
         receipt_path=child(a.output,stem+'.json')
@@ -111,6 +113,7 @@ def main():
                     for (vid,_),value in zip(batch,values):
                         if not torch.isfinite(value).all():raise RuntimeError('nonfinite T5 output')
                         tensors[vid]=value.cpu().half()
+                        throughput_meter.update(value.shape[0])
             for r,(cap,error) in zip(group,captions):
                 if not cap:issues.append(dict(video_id=r['id'],error=error))
             file=stem+'.pt';filehash=publish(a.output,a.staging,file,
@@ -121,7 +124,8 @@ def main():
             publish(a.output,a.staging,stem+'.json',receipt)
         index.update(receipt['index']);files.update(receipt['files']);missing+=receipt['missing']
         done=start+len(group)
-        print(f'[fullHQ text] node{rank} {done}/{len(own)} missing={missing}',flush=True)
+        print(f'[fullHQ text] node{rank} {done}/{len(own)} missing={missing} '
+              f'DI_throughput: {throughput_meter.format()} (new text tokens; one active NPU/node)',flush=True)
         if done>=128 and missing/done>a.max_missing_fraction:raise RuntimeError('caption failure fraction too high')
     publish(a.output,a.staging,f'node{rank}/complete.json',dict(identity=identity,index=index,files=files,missing=missing))
 

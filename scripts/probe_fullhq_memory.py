@@ -46,7 +46,8 @@ def main():
         norm=torch.nn.utils.clip_grad_norm_(core.parameters(),1.)
         if not torch.isfinite(norm):raise RuntimeError('nonfinite synthetic training gradients')
         optimizer.step();ema.update(core);torch.npu.synchronize();times.append(time.monotonic()-start)
-        print(f'[fullHQ memory] rank={rank} optimizer_step={step+1}',flush=True)
+        print(f'[fullHQ memory] rank={rank} optimizer_step={step+1} '
+              f'DI_throughput: {2*4*324/times[-1]:.2f} tokens/s/npu (synthetic probe)',flush=True)
     core.eval()
     with torch.no_grad(),use_ema(core,ema,cpu_backup=True):
         with torch.autocast('npu',dtype=torch.bfloat16):

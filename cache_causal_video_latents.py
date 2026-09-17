@@ -443,6 +443,8 @@ def main():
             "successful_samples": sample_index,
             "failed_samples": len(failed_samples),
             "completed_shards": len(writer.paths),
+            "DI_throughput": throughput_meter.rate(),
+            "DI_throughput_unit": "tokens/s/npu",
             "last_shard": writer.paths[-1] if writer.paths else "",
         }
         if error:
@@ -471,6 +473,9 @@ def main():
         write_artifact_text(
             f"status-r{rank:05d}.json",
             json.dumps(status(phase), indent=2, sort_keys=True))
+        print(f'[R7 cache rank={rank}/{world_size}] phase={phase} '
+              f'processed={processed_items}/{total_rank_items} samples={sample_index} '
+              f'failed={len(failed_samples)} DI_throughput: {throughput_meter.format()}', flush=True)
 
     throughput_meter = ThroughputMeter()
     progress = tqdm(

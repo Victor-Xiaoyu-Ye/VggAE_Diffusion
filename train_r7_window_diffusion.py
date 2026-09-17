@@ -540,6 +540,7 @@ def run(args):
                 if device_type != 'cpu':
                     row['peak_memory_gib'] = getattr(torch, device_type).max_memory_allocated()/2**30
                 append_metrics(out/'metrics.jsonl', row); print('[window-train]', row, flush=True)
+                print(f"[window-train step={step}] DI_throughput: {row['DI_throughput']:.2f} tokens/s/npu", flush=True)
                 for k,v in row.items():
                     if k != 'step': writer.add_scalar(k,v,step)
             if step % args.eval_every == 0 or step == stop:

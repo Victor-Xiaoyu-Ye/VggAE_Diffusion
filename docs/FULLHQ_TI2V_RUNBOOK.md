@@ -54,6 +54,17 @@ include all driver/HCCL memory. OOM or threshold failure stops; no automatic siz
 change. Real training repeats memory checks after step1, logs and evaluation.
 The probe is a capacity test, not a quality test or a training-speed estimate.
 
+Sep17 corrected cluster probe passed: max allocated40.6167GiB, reserved40.8789GiB
+across24ranks. Full-data training peak still requires verification. Latent caching
+uses all24NPUs with disjoint global-rank strides; only rank0 has a tqdm bar.
+New logs additionally print every rank at durable shard commits, with numeric
+DI_throughput in status JSON. Console convention is
+`DI_throughput: <value> tokens/s/npu`: cache counts5x324 latent tokens/window;
+training counts4x324 future tokens/window including accumulation; text counts
+newly encoded text tokens on its one active NPU/node (resumed shards not counted).
+These stages have different token units and their rates must not be compared as
+equal workloads. Probe throughput is explicitly synthetic.
+
 ## Launch
 
 Use the existing ModelArts bootstrap/environment and configure exactly3nodes,
