@@ -5,6 +5,13 @@ rules, and safe next steps for future agents.
 
 ## Priority Update (2026-09-09)
 
+Sep18 stage49 caching stopped: latest remote node logs show ranks4/11/16 hit
+prefix failure-rate5% guard near group_0014; torchrun then terminates siblings.
+404s themselves were caught/skipped. Fixed early check to full assigned rank
+budget, preserving final global5% gate and cache identity/cursor compatibility.
+4040committed shards (258560windows) reported across24ranks. Resume same3x8 via
+stage49 all RESUME=0 (DiT not started); do not delete caches or raise limit.
+
 USER REQUIREMENT: all future related training/preprocessing must log the literal
 `DI_throughput: <value> tokens/s/npu`, following existing cluster log convention.
 Count sequence tokens excluding channels, per active NPU; state measurement scope

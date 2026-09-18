@@ -103,6 +103,17 @@ resume still replays its data cursor; at this scale that can take substantial I/
 
 ## Bad data, storage and outputs
 
+Sep18 recovery: ordered source groups produced a missing-object cluster in
+group_0014. The old prefix-based5% guard stopped ranks before seeing the whole
+dataset. Early stopping now uses failures / total assigned rank windows; final
+global5% validation remains. This changes early-stop timing, not accepted data
+or the final threshold. Keep the same cache identity,24ranks and original limit.
+After pulling the fix, rerun the full stage49 command with RESUME=0: committed
+text/latent shards resume automatically; DiT has no checkpoint to resume yet.
+Latest status snapshots reported4040closed shards /258560windows; progress.pt
+is authoritative and any unfinished shard is recomputed. Do not treat stale
+`running` status files as proof of a live job after node exit receipts report1.
+
 - Bad download/decode or invalid requested frame windows are skipped with
   videoID/window/index/error records; no substitute video or missing-frame fill.
   Systemic failures are guarded by default5% failure limit; model/OOM errors stay

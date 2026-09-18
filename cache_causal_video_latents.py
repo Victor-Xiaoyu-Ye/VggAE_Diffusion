@@ -44,6 +44,7 @@ from utils.r7_representation import (
     validate_contract,
 )
 from utils.training import ThroughputMeter, count_latent_tokens
+from utils.cache_failure_budget import failure_budget_exceeded
 
 
 def parse_args():
@@ -502,8 +503,10 @@ def main():
                     processed_items += batch["_batch_size"]
                     if args.skip_failed_data:
                         print('[cache skipped data] '+json.dumps(batch['errors']), flush=True)
-                        if processed_items >= 100 and len(failed_samples)/processed_items > args.max_data_failure_rate:
-                            raise RuntimeError('data failure rate exceeds configured limit; inspect OBS/decode errors')
+                        if failure_budget_exceeded(len(failed_samples), total_rank_items, args.max_data_failure_rate):
+                            raise RuntimeError(
+                                f'data failures {len(failed_samples)}/{total_rank_items} exceed full-rank '
+                                f'budget {args.max_data_failure_rate:.2%}; inspect OBS/decode errors')
                     if writer.archive is None:
                         save_rank_progress()
                     continue

@@ -2,6 +2,18 @@
 
 ## Full HQ TI2V scale baseline (2026-09-17)
 
+Sep18 follow-up supersedes running status below: three node exit receipts1,
+latest torchrun failures07:56:58–07:57:53. Ranks11/16/4 explicitly raise prefix
+failure-rate limit (e.g.571/11410); concentrated group_0014 missing objects.
+User's worker SIGTERM trace alone does not establish original termination cause;
+latest downloaded resumed job shows guard failure followed by sibling shutdown.
+24status snapshots report4040closed shards=258560windows (~17.72%), not including
+aborted partial shards; progress.pt remains authoritative resume cursor. Mixed-age
+status snapshots cannot provide an exact synchronous global failure rate.
+Fixed early stop denominator to total_rank_items (60808/60809), not processed
+prefix. Final aggregate5% gate unchanged; failure ledger/representation/selection
+unchanged, old committed cache resumes. Three budget regression tests pass.
+
 Live OBS review Sep17: corrected24-rank memory probe PASSED, max allocation40.6167
 At19:34China log snapshot / subsequent status reads, all24rank receipts running,
 each960successful windows/15shards:23040 durable windows (~1.58%);5failed total.
