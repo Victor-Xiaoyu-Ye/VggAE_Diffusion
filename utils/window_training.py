@@ -57,6 +57,8 @@ def inverse(x, group):
 
 def collate(batch):
     result = latent_collate_fn(batch)
+    if all('frame_indices' in x for x in batch):
+        result['frame_indices'] = [x['frame_indices'] for x in batch]
     if all('rgb' in x for x in batch):
         result['rgb'] = torch.stack([x['rgb'] for x in batch])
     if all('anchor_relative_l2' in x for x in batch):
@@ -140,7 +142,11 @@ def use_ema(model, ema, cpu_backup=False):
 def resume_contract(args, identity, world):
     # Eval settings are immutable too, so checkpoint selection remains comparable.
     mutable = {'resume', 'output_dir', 'stop_after_steps', 'manifest', 'eval_manifest',
-               'stats', 'eval_stats', 'r7_ckpt', 'text_dir', 'cpu_test', 'ae_reference'}
+               'stats', 'eval_stats', 'r7_ckpt', 'text_dir', 'cpu_test', 'ae_reference', 'camera_bank', 'init_from'}
+    if not getattr(args,'camera_bank',''):
+        mutable |= {'camera_mode','camera_dropout'}
+    if not getattr(args,'init_from',''):
+        mutable |= {'init_step','init_weights'}
     if not getattr(args, 'memorize_clips', 0):
         mutable.add('memorize_clips')
     if getattr(args, 'time_distribution', 'logit_normal_0_1') == 'logit_normal_0_1':

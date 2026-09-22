@@ -1,5 +1,26 @@
 # Project Context
 
+## Camera-conditioned pivot and current scale result (2026-09-22)
+
+Read docs/FULLHQ_RESULTS_AND_CAMERA_PIVOT.md and docs/CAMERA_PILOT_RUNBOOK.md.
+Latest reviewed stage49 snapshot: running at 14490/100K, with 1,440,144 cached
+windows and 19,256 failures (1.3194%), about 1.93 cache-equivalent data passes.
+Best observed EMA RAW L1 is .121146 at 12K, versus copy .126585 and AE .046466;
+14K gives .121737. Reviewed 6K/14K clips 0/3/5/7 still deform and smear. Learning
+continues without a quality breakthrough; this does not prove scaling useless.
+Sampling CFG3 versus one-call CFG1 confounds sampler diagnosis. Broad HQ
+evaluation remains absent.
+
+The user approves camera conditioning and a world-model rethink, prioritizing
+RGB quality. Choose continuous anchor-relative poses/K/time, with WASD as a
+future trajectory interface. Stage50 compares pose/null conditioning from one
+frozen source EMA on 96 audited cached shards: 2000 updates, 24 NPUs, a 2.43M
+camera MLP initialized to zero output, CFG1, 10% camera dropout, plus wrong/null
+evaluation controls. Reuse the AE/latents. The legacy codec jointly mixes time
+and is not yet a causal world state. Actual two-column annotation indexes map
+ordinals to RGB frames; no future-path normalization or metric-scale claim.
+No running cluster job was modified. Camera NPU execution/quality are pending.
+
 ## Full HQ TI2V scale baseline (2026-09-17)
 
 Sep18 follow-up supersedes running status below: three node exit receipts1,

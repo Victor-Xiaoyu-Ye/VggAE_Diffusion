@@ -34,6 +34,12 @@ def parse_args(argv=None):
     for k in ('manifest', 'stats', 'eval_manifest', 'eval_stats', 'r7_ckpt', 'output_dir'):
         p.add_argument('--'+k, required=True)
     p.add_argument('--text_dir', default='')
+    p.add_argument('--camera_bank', default='')
+    p.add_argument('--camera_mode', choices=('pose','null'), default='pose')
+    p.add_argument('--camera_dropout', type=float, default=.1)
+    p.add_argument('--init_from', default='', help='Model-only initialization for a new experiment; not full resume')
+    p.add_argument('--init_step', type=int, default=-1)
+    p.add_argument('--init_weights', choices=('model','ema'), default='ema')
     p.add_argument('--large_run', action='store_true', help='Bound optimizer/EMA/evaluation memory and retain rolling checkpoints')
     p.add_argument('--memory_limit_gib', type=float, default=52.)
     p.add_argument('--text_cfg', type=float, default=1.)
@@ -84,6 +90,10 @@ def run(args):
         raise ValueError('invalid text CFG or memory limit')
     if args.text_cfg != 1 and not args.text_dir:
         raise ValueError('text CFG requires text conditioning')
+    if not 0<=args.camera_dropout<=1 or (args.init_from and args.init_step<0):
+        raise ValueError('invalid camera dropout or initialization step')
+    if args.camera_bank and args.memorize_clips:
+        raise ValueError('camera pilot uses its matched manifest, not memory subset mode')
     if args.memorize_clips < 0:
         raise ValueError('memorize_clips must be nonnegative')
     if not np.isfinite(args.aux_weight) or args.aux_weight < 0 or bool(args.aux_layer) != bool(args.aux_weight):
@@ -202,13 +212,26 @@ def run(args):
             if rank == 0:
                 atomic_json(out/'memorization_subset.json', identity['memorization'])
         contract = resume_contract(args, identity, world)
+        camera_bank = None
+        if args.camera_bank:
+            from utils.camera_training import CameraBank
+            camera_bank=CameraBank(args.camera_bank,1+future*factor)
+            identity['camera_bank_sha256']=camera_bank.signature
+        if args.init_from:
+            identity['initialization_artifact']=sampled_file_signature(args.init_from)
         model_args = dict(channels=channels, grid=grid, future=future, temporal_factor=factor,
                          width=args.width, depth=args.depth, heads=args.heads, text_dim=4096 if bank else 0)
         if args.aux_layer: model_args['aux_layer'] = args.aux_layer
+        if camera_bank: model_args['camera_dim']=14
         # EMA is constructed before DDP's parameter broadcast, so initialize the
         # same model on every rank; rank-specific noise RNG is set below.
         torch.manual_seed(args.seed)
         core = R7WindowDiT(**model_args).to(device)
+        if args.init_from and not args.resume:
+            from utils.camera_training import initialize_from_checkpoint
+            initialization=initialize_from_checkpoint(core,args.init_from,args.init_step,args.init_weights,
+                model_args,stats,identity['representation'].get('window_codec_runtime'),large=args.large_run)
+            if rank==0:atomic_json(out/'initialization.json',initialization)
         flow = WindowFlow(args.prediction, args.loss_floor, args.time_shift, args.time_distribution)
         contract['flow'] = flow.contract()
         optimizer = build_optimizer(core, args.lr, args.wd)
@@ -245,6 +268,9 @@ def run(args):
             dataset = LatentShardDataset(args.manifest, args.shuffle_buffer, args.seed, True, rank, world)
             if len(dataset.shards) < world:
                 raise ValueError('not enough train shards for all ranks')
+        if camera_bank:
+            from utils.camera_training import CameraFilteredDataset
+            dataset=CameraFilteredDataset(dataset,camera_bank.train_keys)
         loader = DataLoader(dataset, batch_size=args.batch_size, num_workers=0, collate_fn=collate,
                             drop_last=True, generator=torch.Generator().manual_seed(args.seed))
         evdata = list(LatentShardDataset(args.eval_manifest, 0, args.seed, False, 0, 1))
@@ -254,6 +280,10 @@ def run(args):
         if bank and eval_ids-set(bank.values):
             raise ValueError('held-out captions missing')
         evbatches = [collate([x]) for x in evdata[:args.eval_clips]]
+        if camera_bank:
+            from utils.camera_training import camera_key
+            if any(camera_key(x) not in camera_bank.eval_keys for x in evdata):
+                raise ValueError('camera bank must cover the unchanged heldout cache')
         if memory_samples is not None and set(identity['memorization']['video_ids']) & eval_ids:
             raise ValueError('memorization subset overlaps heldout IDs')
         evaluation_batches = ([('memorization', collate([x])) for x in memory_samples]
@@ -357,8 +387,9 @@ def run(args):
             evaluation_started = time.perf_counter()
             eval_rng = capture_rng_state()
             core.eval(); rows = []; preview_root = out/'samples'/f'step{step:07d}'
-            for label in ('online', 'ema'):
-                with use_ema(core, ema, cpu_backup=args.large_run) if label == 'ema' else contextlib.nullcontext():
+            labels = ('online','ema','ema_null','ema_wrong') if camera_bank and args.camera_mode=='pose' else ('online','ema')
+            for label in labels:
+                with use_ema(core, ema, cpu_backup=args.large_run) if label.startswith('ema') else contextlib.nullcontext():
                     for index, (split, batch) in enumerate(evaluation_batches):
                         if index % world != rank:
                             continue
@@ -366,6 +397,12 @@ def run(args):
                         cr, yr = cr.to(device).float(), yr.to(device).float()
                         c, y = normalize(cr, st['cond']), normalize(yr, st['target'])
                         text, valid = bank.batch(batch['video_id'], device) if bank else (None, None)
+                        conditioned_core=core
+                        camera_mode = ('null' if label=='ema_null' else 'wrong' if label=='ema_wrong' else args.camera_mode)
+                        if camera_bank:
+                            from utils.camera_training import BoundCameraModel
+                            camera,present=camera_bank.batch(batch,device,camera_mode)
+                            conditioned_core=BoundCameraModel(core,camera,present)
                         ae = decode(cr, yr)
                         raw = batch.get('rgb')
                         raw = raw.to(device).float().div(255).permute(0,1,3,4,2) if raw is not None else None
@@ -373,10 +410,10 @@ def run(args):
                         for seed in seeds:
                             progress('evaluating', step=step, weights=label, clip=index, sample_seed=seed)
                             noise = torch.randn(y.shape, generator=torch.Generator().manual_seed(seed+1009*index)).to(device)
-                            sample_model = core
+                            sample_model = conditioned_core
                             if bank and args.text_cfg != 1.:
                                 from utils.fullhq_text import TextCFG
-                                sample_model = TextCFG(core, bank.empty, args.text_cfg)
+                                sample_model = TextCFG(conditioned_core, bank.empty, args.text_cfg)
                             generated = flow.sample(sample_model, c, noise, args.sample_steps, dtype, text, valid, args.sample_method)
                             gen = decode(cr, inverse(generated, st['target']))
                             row = dict(step=step, weights=label, split=split, video_id=batch['video_id'][0], seed=seed,
@@ -386,6 +423,8 @@ def run(args):
                                 rgb_copy_l1_vs_ae=float((copy[:, 1:]-ae[:, 1:]).abs().mean()),
                                 generated_motion=float(gen.diff(dim=1).abs().mean()),
                                 ae_motion=float(ae.diff(dim=1).abs().mean()))
+                            if camera_bank:
+                                row.update(camera_mode=camera_mode,camera_bank_sha256=camera_bank.signature)
                             if 'anchor_relative_l2' in batch:
                                 row['anchor_relative_l2'] = batch['anchor_relative_l2'][0]
                             if raw is not None:
@@ -406,7 +445,7 @@ def run(args):
                                 u = torch.full((len(y),), value, device=device)
                                 x = (1-value)*y+value*noise
                                 with torch.autocast(device_type, dtype=dtype, enabled=dtype != torch.float32):
-                                    pred = core(x, u, c, text, valid)
+                                    pred = conditioned_core(x, u, c, text, valid)
                                 row[f'x0_mse_u{value:g}'] = float((flow.clean(pred, x, u)-y).square().mean())
                             append_metrics(out/f'eval_samples_rank{rank:03d}.jsonl', row); rows.append(row)
                             if index < args.preview_clips:
@@ -430,7 +469,7 @@ def run(args):
                 if len(rows) != expected_rows or len(keys) != expected_rows:
                     raise ValueError('incomplete/duplicate memorization evaluation matrix')
             summary = {'step':step, 'evaluation_seconds':time.perf_counter()-evaluation_started}
-            for label in ('online', 'ema'):
+            for label in labels:
                 group = [r for r in rows if r['weights'] == label and r['split'] == 'heldout']
                 for key in ('latent_mse','rgb_l1_vs_ae','generated_motion','ae_motion',
                             'rgb_l1_vs_raw','rgb_copy_l1_vs_raw', 'normalized_target_power',
@@ -492,15 +531,19 @@ def run(args):
                 cr, yr = validate_batch(batch, future, grid, channels)
                 c, y = normalize(cr.to(device), st['cond']), normalize(yr.to(device), st['target'])
                 text, valid = bank.batch(batch['video_id'], device, args.text_dropout) if bank else (None, None)
+                camera_kwargs={}
+                if camera_bank:
+                    camera,present=camera_bank.batch(batch,device,args.camera_mode,args.camera_dropout)
+                    camera_kwargs=dict(camera=camera,camera_present=present)
                 noise, u = torch.randn_like(y), flow.times(len(y), device)
                 ue = u[:, None, None, None]; x = (1-ue)*y+ue*noise
                 sync = model.no_sync() if ddp and micro < args.accum_steps-1 else contextlib.nullcontext()
                 with sync:
                     with torch.autocast(device_type, dtype=dtype, enabled=dtype != torch.float32):
                         if args.aux_layer:
-                            prediction, auxiliary = model(x, u, c, text, valid, return_aux=True)
+                            prediction, auxiliary = model(x, u, c, text, valid, return_aux=True,**camera_kwargs)
                         else:
-                            prediction = model(x, u, c, text, valid)
+                            prediction = model(x, u, c, text, valid,**camera_kwargs)
                     main_loss = flow.loss(prediction, y, noise, u)
                     aux_loss = flow.loss(auxiliary, y, noise, u) if args.aux_layer else main_loss.new_zeros(())
                     loss = main_loss + args.aux_weight*aux_loss

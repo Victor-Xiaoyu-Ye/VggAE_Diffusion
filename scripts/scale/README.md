@@ -1,5 +1,10 @@
 # Large-scale training path
 
+Latest (2026-09-22): `50_train_camera_pilot.sh` prepares one frozen source EMA and
+audited96-shard cohort, then runs matched pose/null arms on3x8 NPUs. Reuses R7
+latents; see [camera pilot runbook](../../docs/CAMERA_PILOT_RUNBOOK.md) and
+[current full-HQ results](../../docs/FULLHQ_RESULTS_AND_CAMERA_PIVOT.md).
+
 Latest (2026-09-17): `49_train_fullhq_ti2v.sh` implements user-approved3x8 NPU
 full-HQ TI2V with frozen t2v2 legacy R7 and1.653B DiT. Read
 [full-HQ runbook](../../docs/FULLHQ_TI2V_RUNBOOK.md) for memory gating, prerequisites,

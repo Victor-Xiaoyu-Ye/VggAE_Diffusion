@@ -110,6 +110,12 @@ if [[ "${WINDOW_DIAGNOSTIC_ONLY:-0}" == 1 ]]; then
   exit 0
 fi
 EXTRA=()
+if [[ -n "${CAMERA_BANK:-}" ]]; then
+  EXTRA+=(--camera_bank "${CAMERA_BANK}" --camera_mode "${CAMERA_MODE:-pose}" --camera_dropout "${CAMERA_DROPOUT:-0.1}")
+fi
+if [[ -n "${INIT_FROM:-}" ]]; then
+  EXTRA+=(--init_from "${INIT_FROM}" --init_step "${INIT_STEP:?Explicit initialization step required}" --init_weights "${INIT_WEIGHTS:-ema}")
+fi
 if [[ -n "${AE_REFERENCE_FILE:-}" ]]; then
   EXTRA+=(--ae_reference "${AE_REFERENCE_FILE}")
 fi

@@ -143,7 +143,10 @@ class WindowTests(unittest.TestCase):
     def test_large_text_resume_end_to_end(self):
         self._check_resume(False, uniform=True, large=True)
 
-    def _check_resume(self, auxiliary, memorize=False, uniform=False, large=False):
+    def test_camera_text_resume_end_to_end(self):
+        self._check_resume(False, uniform=True, large=True, camera=True)
+
+    def _check_resume(self, auxiliary, memorize=False, uniform=False, large=False, camera=False):
         with tempfile.TemporaryDirectory() as td:
             p = Path(td)
             torch.manual_seed(19)
@@ -152,7 +155,7 @@ class WindowTests(unittest.TestCase):
                     for i in range(5):
                         b = io.BytesIO()
                         torch.save(dict(cond=torch.randn(1,4,6), target=torch.randn(2,4,6),
-                            video_id=f'{split}{i}', requested_video_id=f'{split}{i}'),b)
+                            video_id=f'{split}{i}', requested_video_id=f'{split}{i}',frame_indices=[0,1,2]),b)
                         data=b.getvalue(); info=tarfile.TarInfo(f'{i}.pt'); info.size=len(data)
                         tar.addfile(info,io.BytesIO(data))
                 (p/f'{split}.txt').write_text(str(p/f'{split}.tar'))
@@ -173,6 +176,11 @@ class WindowTests(unittest.TestCase):
                 base += ['--memorize_clips','2']
             if uniform:
                 base += ['--time_distribution','uniform','--time_shift','1']
+            if camera:
+                torch.save(dict(schema='r7-camera-pilot-bank-v1',
+                    features={f'{split}{i}:0,1,2':torch.randn(3,14) for split in ('train','eval') for i in range(5)},
+                    train_keys=[f'train{i}:0,1,2' for i in range(5)],eval_keys=[f'eval{i}:0,1,2' for i in range(5)]),p/'camera.pt')
+                base+=['--camera_bank',str(p/'camera.pt'),'--camera_mode','pose']
             if large:
                 text=p/'text';text.mkdir()
                 names=[f'{split}{i}' for split in ('train','eval') for i in range(5)]
@@ -186,6 +194,12 @@ class WindowTests(unittest.TestCase):
                     index_sha256=hashlib.sha256((text/'index.json').read_bytes()).hexdigest())))
                 base.remove('--no_text');base+=['--large_run','--text_dir',str(text),'--text_cfg','3']
             with contextlib.redirect_stdout(io.StringIO()):
+                if camera:
+                    parent_args=base.copy()
+                    for flag in ('--camera_bank','--camera_mode'):
+                        index=parent_args.index(flag);del parent_args[index:index+2]
+                    run(parse_args(parent_args+['--output_dir',str(p/'parent'),'--stop_after_steps','1']))
+                    base+=['--init_from',str(p/'parent/checkpoint_latest.pt'),'--init_step','1','--init_weights','ema']
                 run(parse_args(base+['--output_dir',str(p/'full')]))
                 run(parse_args(base+['--output_dir',str(p/'split'),'--stop_after_steps','2']))
                 ckpt=str(p/'split/checkpoint_latest.pt')
@@ -209,6 +223,10 @@ class WindowTests(unittest.TestCase):
             if large:
                 self.assertFalse(list((p/'split').glob('checkpoint_step*.pt')))
                 self.assertTrue(full['args']['large_run'])
+            if camera:
+                rows=[json.loads(x) for x in (p/'full/eval_samples.jsonl').read_text().splitlines()]
+                self.assertEqual({r['camera_mode'] for r in rows},{'pose','null','wrong'})
+                self.assertEqual({r['weights'] for r in rows},{'online','ema','ema_null','ema_wrong'})
             if memorize:
                 rows = [json.loads(x) for x in (p/'full/eval_samples.jsonl').read_text().splitlines()]
                 self.assertEqual({r['split'] for r in rows}, {'memorization', 'heldout'})

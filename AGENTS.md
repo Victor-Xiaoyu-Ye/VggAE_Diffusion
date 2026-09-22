@@ -5,6 +5,19 @@ rules, and safe next steps for future agents.
 
 ## Priority Update (2026-09-09)
 
+2026-09-22: User-approved camera-conditioned pivot. Read
+docs/FULLHQ_RESULTS_AND_CAMERA_PIVOT.md and docs/CAMERA_PILOT_RUNBOOK.md.
+Stage49 was still running at the reviewed step 14490. Best observed RAW L1 at
+12K is .121146, only 4.3% better than repeating the first frame; previews still
+fail the quality objective. Do not claim scaling disproven (1.93 data passes),
+a broken sampler (CFG confound), or an achieved 3D world model.
+Stage50 compares continuous-pose/null conditioning on 96 existing shards from
+one frozen EMA, for 2000 updates on 3x8 NPUs with a fixed AE. Prepare shared,
+immutable inputs once before both arms. No existing cluster job was changed.
+Actual camera indexes map annotation ordinals to original RGB frames; sparse
+pose interpolation is validated locally. Camera NPU execution/quality remain
+pending. Future WASD controls should integrate into a continuous trajectory.
+
 Sep18 stage49 caching stopped: latest remote node logs show ranks4/11/16 hit
 prefix failure-rate5% guard near group_0014; torchrun then terminates siblings.
 404s themselves were caught/skipped. Fixed early check to full assigned rank
