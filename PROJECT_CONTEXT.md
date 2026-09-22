@@ -1,5 +1,18 @@
 # Project Context
 
+## Research discussion: alternative objectives (2026-09-22)
+
+User asks whether the objective itself is wrong and requests divergent pivot
+ideas. Read docs/PROJECT_PIVOT_OPTIONS_20260922.md. Recommendations only: no new
+architecture, experiment, or cluster stop is approved by this discussion.
+Consider short observed history + commanded trajectory + native pretrained RGB
+generation as the quality baseline; do not require R7-only RGB as a premise.
+WorldForge, World in World, Mirage, GIM-World, Closing the Loop, C3, and 3D-Belief
+already overlap with generic VGGT/geometry/memory/uncertainty/revision stories.
+No novel contribution has been established. Real-observation correction that
+propagates across views is only a testable candidate, including comparison with
+3D-Belief. Preserve stage50's bounded matched pilot; no training code changed.
+
 ## Camera-conditioned pivot and current scale result (2026-09-22)
 
 Read docs/FULLHQ_RESULTS_AND_CAMERA_PIVOT.md and docs/CAMERA_PILOT_RUNBOOK.md.
