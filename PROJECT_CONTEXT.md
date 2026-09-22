@@ -1,5 +1,25 @@
 # Project Context
 
+## VGGT-as-RAE research story (2026-09-22, latest discussion)
+
+User specifically asks to expand VGGT as RAE with a defensible story like MIRA.
+Read docs/VGGT_RAE_RESEARCH_STORIES_20260922.md. Keep the primary generated
+representation and RGB decoding VGGT-derived in this research discussion;
+native VAE generation remains a quality reference, not a substitute claim.
+Current C192 R7 need not be the permanent representation. Recommendations only;
+no new architecture/run approved or implemented, and no cluster status refreshed.
+
+GLD directly includes VGGT feature diffusion; OneWorld covers unified 3D RAE;
+3DRAE (Any 3D Scene is Worth 1K Tokens) covers scene latents queried at arbitrary
+cameras. Generic encoder replacement/shared-world/memory is not a new claim.
+3D-Belief already updates observed/imagined states. Candidate project: make
+VGGT-derived representations support reliable content transport and later
+evidence-driven scene correction. First test RGB quality under representation
+operations; then compare local hypothesis revision with full resampling under
+matched observations/compute. Novelty and quality remain unestablished.
+SpatialVID supports restricted static-scene observations, not multi-agent
+counterfactual dynamics. Stage50 and existing runs remain unchanged.
+
 ## Research discussion: alternative objectives (2026-09-22)
 
 User asks whether the objective itself is wrong and requests divergent pivot

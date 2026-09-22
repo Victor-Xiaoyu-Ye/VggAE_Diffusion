@@ -5,6 +5,14 @@ rules, and safe next steps for future agents.
 
 ## Priority Update (2026-09-09)
 
+2026-09-22 latest research discussion: user explicitly asks to expand VGGT as
+RAE, retaining VGGT-derived primary generation/RGB representation. Read
+docs/VGGT_RAE_RESEARCH_STORIES_20260922.md. GLD, OneWorld, 3DRAE and 3D-Belief
+directly overlap generic proposals. Content transport and evidence-driven
+scene revision are testable candidates, not established novelty or approved
+new runs. Existing R7 is not yet a validated operable scene state; do not
+equate preserving VGGT with permanently freezing this codec. Stage50 unchanged.
+
 2026-09-22: User-approved camera-conditioned pivot. Read
 docs/FULLHQ_RESULTS_AND_CAMERA_PIVOT.md and docs/CAMERA_PILOT_RUNBOOK.md.
 Stage49 was still running at the reviewed step 14490. Best observed RAW L1 at
