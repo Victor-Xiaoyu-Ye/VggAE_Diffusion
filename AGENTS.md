@@ -5,6 +5,13 @@ rules, and safe next steps for future agents.
 
 ## Priority Update (2026-09-09)
 
+2026-09-23: read docs/GAE_COMPARISON_AND_COURSE_CORRECTION_20260923.md.
+User challenges failed baseline with GAE2609.24981. Prioritize a successful
+controlled generation reference over new world-model stories. Proposal only,
+no new run. R7 is not RGB-only; source-only safeguards already exist; avoid
+inventing absent losses or a GAE-style clamping bug. Capacity alone is not an
+established explanation (ours1.653B vs GAE controlled~0.93B). Existing jobs unchanged.
+
 2026-09-22 latest research discussion: user explicitly asks to expand VGGT as
 RAE, retaining VGGT-derived primary generation/RGB representation. Read
 docs/VGGT_RAE_RESEARCH_STORIES_20260922.md. GLD, OneWorld, 3DRAE and 3D-Belief

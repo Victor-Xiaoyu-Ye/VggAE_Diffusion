@@ -1,5 +1,23 @@
 # Project Context
 
+## GAE comparison and course correction (2026-09-23)
+
+User challenges our lack of a baseline using arXiv:2609.24981 (GAE). Read
+docs/GAE_COMPARISON_AND_COURSE_CORRECTION_20260923.md. FullHQ DiT is1.653B;
+GAE controlled generator is~0.93B. Do not default to capacity/data/goal failure.
+Prior work on fixed R7 did not establish a matched successful representation
+control despite known latent-structure concerns. Prioritize verifying the
+released GAE pipeline before further research-story expansion (recommendation,
+not a new approved run). GAE uses DA3, so its success is not our VGGT success.
+R7 already has feature/temporal/scale losses; do not say RGB-only. Current
+geo-motion cosine code postdates the historical v2 used by stage49. GAE codec
+latent organization, geometry readout, camera conditioning and T2I co-training
+are distinct factors, not a proven unique cause for our failure. Separate its
+controlled and large-data demo results. Source-only reference safeguards already
+exist here; do not assume GAE's reference-state ablation is our bug.
+Official source read on D at a61ebe542ae777bb6c87d8262e311122f00894e7; no weights
+downloaded or inference/training run. No cluster status refreshed or job changed.
+
 ## VGGT-as-RAE research story (2026-09-22, latest discussion)
 
 User specifically asks to expand VGGT as RAE with a defensible story like MIRA.
