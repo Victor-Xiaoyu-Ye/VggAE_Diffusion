@@ -5,6 +5,26 @@ rules, and safe next steps for future agents.
 
 ## Priority Update (2026-09-09)
 
+2026-09-23 latest: stage51 is IMPLEMENTED. Read
+docs/SCENE_RAE_15DAY_RUNBOOK.md and docs/WAI_TRANSFER_AUDIT_20260923.md.
+User authorizes RGB-only static/dynamic rebuild, 3x8 910B, ~15 days ALL stages,
+quality REPORT-ONLY (supersedes older PSNR/image gates below). New C256/18-grid
+no-time-compression SceneRAE warms spatial modules from best t2v2 R7; frozen
+StreamVGGT, train front/decoder, feature recovery + direct latent relations.
+Scratch831305344-param shared image/video flow; 72hAE/36hcache/24himage/180hvideo
+plus48h reserve. Full-shape24-rank rehearsal precedes automatic production.
+11 CPU tests passed; no NPU/real-RGB/full-asset run has occurred. No quality promise.
+WAI DL3DV dirs do NOT imply RGB:4687usable of10571; merge old6378->8210parents,
+exclude159tiny new sources->8051 first-run scenes. New dynamic audit716scenes:
+Point131train15val (no13test), Spring47 includes10test, DynamicReplica523.
+No missing referenced RGB in these three; metadata-only, no raw downloads.
+User says skip DynamicReplica until original splits exist. Point/Spring included
+in fixed cohort; stereo must split cameras before temporal sampling. ScanNet++
+internal split is NOT verified official benchmark protocol. Stage49/50 unchanged.
+Dual receipt/hash IO, cursors/RNG/optimizer, periodic snapshots, DI_throughput.
+
+Historical design/status follows; it is superseded where it conflicts above.
+
 2026-09-23 user-approved data/representation rebuild: read
 docs/RAE_REBUILD_DATA_AND_TRAINING_20260923.md first. Existing OBS data only;
 no other Re10K/ScanNet++/image-text path available. Full6694-scene metadata audit

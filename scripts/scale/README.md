@@ -1,5 +1,16 @@
 # Large-scale training path
 
+Latest 2026-09-23: `51_train_scene_rae_15day.sh` implements the user-approved
+RGB static/dynamic representation rebuild on3x8 910B: AE -> cache -> image ->
+image/video flow,312h stage budgets +48h reserve. Default `SCENE_STAGE=all`
+runs full-shape rehearsal then production; checkpoints auto-resume, quality is
+report-only. See [stage51 runbook](../../docs/SCENE_RAE_15DAY_RUNBOOK.md) and
+[actual WAI data audit](../../docs/WAI_TRANSFER_AUDIT_20260923.md).11 CPU tests
+passed; actual NPU/assets/streaming and quality remain unvalidated. DynamicReplica
+skipped per user; PointOdyssey and Spring included with held-out protection.
+
+Historical status below is superseded by stage51 where inconsistent.
+
 2026-09-23: static/dynamic RAE rebuild data audit and candidate split are complete;
 see [data and training design](../../docs/RAE_REBUILD_DATA_AND_TRAINING_20260923.md).
 New data tools are CPU metadata tools, NOT a new scale training stage. The new

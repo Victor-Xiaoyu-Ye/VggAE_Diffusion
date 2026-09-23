@@ -1,5 +1,43 @@
 # Project Context
 
+## Scene RAE full pipeline and transferred WAI audit (2026-09-23, latest)
+
+User clarified RGB frames only, 3 nodes/~15days including all stages, tested
+recovery/intermediates/dual IO/DI throughput; poor quality must not block later
+stages. Read docs/SCENE_RAE_15DAY_RUNBOOK.md and docs/WAI_TRANSFER_AUDIT_20260923.md.
+New stage51 implements AE72h -> cache<=36h -> image24h -> video180h, plus48h
+reserve, full-shape24-rank rehearsal first. New SceneRAE C256/18x18/no time
+compression, best t2v2 spatial warm start, frozen StreamVGGT, train front/RGB
+decoder, pooled multi-layer feature recovery and direct latent Gram. Not a
+validated native VGGT geometry-head reconstruction. New scratch DiT831305344
+parameters,768x24 trunk +1536x6 head, x0/logitnormal shift4.5, train-only stats,
+image batch8/video1/accum4; same weights image->video, 1in4 video-stage updates
+are images. No fabricated captions, no R7 temporal-weight reinterpretation.
+
+Metadata-only full WAI audit (D:/workspace/VggAE_DataAudit/wai_20260923): DL10571
+dirs,10462JSON,4687usableRGB scenes/1604402frames;109JSON404,5775empty scenes,
+1968159missing references. Old6378 complete scenes remain useful. Union8210,
+8051selected after159low-res new exclusions. MVS120/12000RGB. ScanNet++1006/
+965727usable RGB after95301bad flags; internal split only, official IDs unavailable.
+New transfer: Point146/273187RGB(131train239022frames,15val34165,no13test);
+DynamicReplica523/337800RGB; Spring47/12000RGB,37GT-train/10test. All716scene
+references present, each camera frame index contiguous, no interpolation flags;
+pixel identity/decode not checked. Converted WAI with derived depth/flow/tracks,
+RGB targets remain images/. Stereo frames interleave left/right: loader separates
+camera, sorts numeric indices, never joins gaps. fps absent for these WAI sources.
+User confirms no DynamicReplica split map: skip it this round. Point131train15val
+andSpring34train3val10test added; other train counts DL7716/Scan962/MVS96/Omni63/
+Spatial8448. Old Spatial512heldout protected. No raw media downloaded locally.
+
+11 CPU tests pass, including real small modules all-stage integration with
+teacher/perceptual/render fixtures,2-rank flow accumulation/publication,latest
+receipt recovery,backup payload,caption subset cache,stereo separation and splits.
+Actual NPU/HCCL/assets/RGB/MoXing writes/quality unvalidated; no cluster launched.
+Old stage49/50 and old artifacts unchanged. GAE code inspected at a61ebe5,
+ideas only, no copied academic-only implementation. New run output namespace
+scene_rae_c256_15day_v1, production/{ae,cache,image,video}, auto same-contract
+resume from hourly checkpoints; quality report-only supersedes earlier gates.
+
 ## User-approved representation/data rebuild (2026-09-23)
 
 Read docs/RAE_REBUILD_DATA_AND_TRAINING_20260923.md. User requests static
