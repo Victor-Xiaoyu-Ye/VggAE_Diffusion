@@ -1,0 +1,37 @@
+{
+  "schema": "rae-rebuild-data-policy-v1",
+  "seed": "vgrae-rebuild-20260923-v1",
+  "open_datasets_root": "obs://yw-ads-training-gy1/data/external/x00445638/data/train_spatial/open_datasets/",
+  "spatialvid_root": "obs://yw-ads-training-gy1/data/external/personal/g00833899/y50046448/dataset/SpatialVID-HQ/",
+  "require_complete_layout_audit": true,
+  "dl3dv": {"val_scenes": 128, "test_scenes": 128},
+  "mvssynth": {"val_scenes": 12, "test_scenes": 12},
+  "omniworld": {"val_scenes": 16, "reserve_entire_uid_with_official_test": true},
+  "spatialvid": {
+    "train_max": 8192,
+    "val_clips": 128,
+    "test_clips": 128,
+    "replay_train_max": 256,
+    "scene_types": ["urban;street scene", "urban;residential street", "urban;city street"],
+    "time_of_day": ["day", "daytime", "daylight", "afternoon", "midday"],
+    "brightness": ["bright"],
+    "aesthetic_min": 4.5,
+    "ocr_max": 0.02,
+    "duration_min_seconds": 4,
+    "fps_min": 8,
+    "short_side_min": 480,
+    "motion_score_range": [1, 8],
+    "dynamic_ratio_range": [0.02, 0.4],
+    "dynamic_high_boundary": 0.15,
+    "dynamic_high_quota": 0.25,
+    "max_turns": 2
+  },
+  "notes": [
+    "This is a metadata selection, not permission to train before RGB/geometry runtime checks.",
+    "dynamicRatio is an annotation proxy, not verified independent object motion.",
+    "All temporal clips and T2I frames inherit their parent split.",
+    "Clip IDs are not verified YouTube source IDs; source-level disjointness remains unknown.",
+    "DL3DV RGB/camera and depth roots are complementary, never independent training examples.",
+    "Missing text is ineligible for T2I; no filename/category-to-caption substitution."
+  ]
+}

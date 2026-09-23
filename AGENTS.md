@@ -5,6 +5,16 @@ rules, and safe next steps for future agents.
 
 ## Priority Update (2026-09-09)
 
+2026-09-23 user-approved data/representation rebuild: read
+docs/RAE_REBUILD_DATA_AND_TRAINING_20260923.md first. Existing OBS data only;
+no other Re10K/ScanNet++/image-text path available. Full6694-scene metadata audit
+and frozen candidate splits completed on D, not RGB decoding/pose/NPU validation.
+New data scripts/policy are implemented; new hierarchy RAE/training launcher is
+still a design. Do not feed candidates to old R7 or claim training is ready.
+Preserve legacy AE quality via paired per-domain gates and TRAIN-only replay;
+new codec then short image generation gate then T2I/video co-training. No new
+cluster run launched; old stage49/50 unchanged. See newest PROJECT_CONTEXT.
+
 2026-09-23: read docs/GAE_COMPARISON_AND_COURSE_CORRECTION_20260923.md.
 User challenges failed baseline with GAE2609.24981. Prioritize a successful
 controlled generation reference over new world-model stories. Proposal only,

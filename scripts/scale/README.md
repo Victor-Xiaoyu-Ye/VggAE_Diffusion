@@ -1,5 +1,11 @@
 # Large-scale training path
 
+2026-09-23: static/dynamic RAE rebuild data audit and candidate split are complete;
+see [data and training design](../../docs/RAE_REBUILD_DATA_AND_TRAINING_20260923.md).
+New data tools are CPU metadata tools, NOT a new scale training stage. The new
+VGGT hierarchy codec, source loaders and cluster decode/pose checks remain to be
+implemented. Keep existing stage49/50 and historical R7 artifacts unchanged.
+
 Latest (2026-09-22): `50_train_camera_pilot.sh` prepares one frozen source EMA and
 audited96-shard cohort, then runs matched pose/null arms on3x8 NPUs. Reuses R7
 latents; see [camera pilot runbook](../../docs/CAMERA_PILOT_RUNBOOK.md) and

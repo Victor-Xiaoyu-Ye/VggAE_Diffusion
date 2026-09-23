@@ -1,5 +1,42 @@
 # Project Context
 
+## User-approved representation/data rebuild (2026-09-23)
+
+Read docs/RAE_REBUILD_DATA_AND_TRAINING_20260923.md. User requests static
+reconstruction + dynamic video mixture, VGGT-RAE quality first, then generation,
+informed by GAE without copying. User confirms no additional Re10K/ScanNet++/
+image-text paths; proceed with available data. Supersedes proposal-only status
+for DATA preparation below; no new AE/DiT run has been launched.
+
+Authorized open_datasets OBS root under data/external/x00445638/data/train_spatial/.
+Full metadata layout audit: DL3DV6378 RGB/camera scene pairs (2162209frames),
+MVS-Synth120x100 RGB/pose/depth, OmniWorld196UID/5073splits/920458RGB names.
+All6694 receipts pass LIST/JSON checks, NOT decode or pose-convention validation.
+DL RGB/camera and depth trees are complementary, not duplicate training data.
+ScanNet here is v2, not ScanNet++; MVS SceneXX folders excluded as different layout.
+
+New tools: scripts/audit_rae_rebuild_metadata.py and prepare_rae_rebuild_data.py;
+policy configs/rae_rebuild_data_v1.json. Frozen metadata outputs only on D:
+D:/workspace/VggAE_DataAudit/rebuild_data_20260923/selection_v1. Train/val/test:
+DL6118/128/132, MVS96/12/12, Omni63/16/117 wholeUIDs, new street8192/128/128,
+plus256 old TRAIN replay. All512 historical eval/test IDs excluded from training.
+Omni official test-bearing UID held out entirely; train657splits vs total5073.
+Spatial dynamicRatio is a proxy; YouTube source grouping unknown. No raw media
+downloaded, no data pushed to git, no remote dataset mutation. All candidate
+rows explicitly training_ready=false; do not feed them to legacy R7 trainer.
+
+Design: train new single/multiframe codec before freezing it; short single-image
+generation gate then sustained T2I+video co-training, not endless T2I pretraining.
+DL/MVS captions unconfirmed; absent text cannot become T2I by using filenames.
+Proposed native per-frame C256 hierarchy codec/no temporal downsample is not yet
+implemented or memory-tested. Current StreamVGGT wrapper instantiates only
+aggregator; frozen original geometry head needs matching weights and replay gate.
+Preserve legacy R7 and paired per-domain reconstruction regression checks. Full
+dual IO/resume/intermediates and literal DI_throughput remain required for later
+NPU work; CPU metadata audit reports records/s. Stage49/50 remain unchanged.
+Validation:7 relevant CPU tests, Python compile, full real-data selection replay
+with identical selection and all output hashes. No cluster decode/model test.
+
 ## GAE comparison and course correction (2026-09-23)
 
 User challenges our lack of a baseline using arXiv:2609.24981 (GAE). Read
