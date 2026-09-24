@@ -1,6 +1,6 @@
 # 三节点 Scene RAE：表示、图像、视频的完整训练
 
-2026-09-23。用户要求只用重建数据中的 RGB，静态与动态混训；3×8 Ascend 910B、约 15 天完成各链路，阶段保存和双读双写；质量门槛不能阻止后续阶段。本文件覆盖早先“设计尚未实现”和“PSNR/T2I 硬门槛”的状态。代码与 CPU 验证完成，**尚未在 NPU 启动，未保证画面质量**。
+2026-09-24 更新。用户要求只用重建数据中的 RGB，静态与动态混训；3×8 Ascend 910B、约 15 天完成各链路，阶段保存和双读双写；质量门槛不能阻止后续阶段。本文件覆盖早先“设计尚未实现”和“PSNR/T2I 硬门槛”的状态。**集群已进入 AE 短跑，第 1 步保存后的 checkpoint 恢复遇到路径类型错误；修复已通过 CPU 回归，完整 NPU 短跑尚待重试，未保证画面质量**。
 
 ## 实际数据与切分
 
@@ -80,6 +80,8 @@ bash /cache/yexiaoyu/VggAE_Diffusion/scripts/scale/51_train_scene_rae_15day.sh
 
 若只想运行这个短跑，使用 `SCENE_STAGE=rehearsal`；后续 `all` 会读取完成标记继续。正常中断重启直接重复原命令，已完成阶段自动跳过。单阶段重试可选 `ae/cache/image/video`。同namespace要求数据/config/world不变；补数据或改模型要新namespace，防止旧latent冒充新表示。
 
+2026-09-24 恢复修复：若日志出现 `TypeError: f must be a string filename in order to use mmap argument`，原因是 `torch_npu` 的 mmap 接口要求字符串，而 `ArtifactStore.load` 传入了 `Path`。修复为 `torch.load(str(path), ...)`，Linux 仍保留 mmap，避免大 checkpoint 的额外整文件读取。统一修复相机路线的同类调用。此改动不改变模型、配置或 checkpoint 身份；三个节点更新到同一修复版本，保持原 namespace 与原配置，重复上述启动命令即可。无需删除已保存的 `rehearsal/ae/checkpoint_latest.pt` 或另起 namespace。代码 SHA 仅记录，不会使这个兼容性修复拒绝旧 checkpoint。堆栈说明报错 ranks 已通过 payload 校验，不能据此推断所有远端副本均完好。
+
 质量不达标不触发停训；坏RGB有限重试并写失败ledger跳过，同步各rank取可计算batch。连续128次全局无可用batch、非有限loss/grad、两个持久化目的地都失败属于无法继续计算/保全状态的错误，不是PSNR门槛。DataLoader硬故障、进程被kill或集群掉电仍可能终止作业；重启恢复最后已提交checkpoint，未提交尾部会重做。
 
 ## 双写双读与输出
@@ -101,6 +103,6 @@ owner镜像：`obs://yw-ads-training-gy1/data/external/personal/g00833899/y50046
 
 ## 已验证与仍待验证
 
-11项CPU测试：小型实际codec/flow跑通RGB→AE→cache→image→video；optimizer/RNG恢复；双进程混合任务/累积/共享目录发布；坏主副本备用读取；新receipt覆盖旧本地optimizer；caption子集复用；直接latent关系梯度；空reference不读anchor内容；相机裁剪/尺度不变性；stereo与时间拆分；父场景/旧512ID保护等。老师特征、LPIPS和视频渲染在集成测试中使用fixture，不冒充真实模型推理。
+12项Scene CPU测试：小型实际codec/flow跑通RGB→AE→cache→image→video；optimizer/RNG恢复；双进程混合任务/累积/共享目录发布；坏主副本备用读取；新receipt覆盖旧本地optimizer；caption子集复用；直接latent关系梯度；空reference不读anchor内容；相机裁剪/尺度不变性；stereo与时间拆分；父场景/旧512ID保护等。新增严格 mmap 文件名接口回归：修复前复现本次 TypeError，修复后读取发布副本并恢复 AdamW，验证下一步参数与不中断训练完全相同。模拟 torch_npu 参数限制，不冒充真实 NPU mmap；另9项相机初始化/发布相关回归通过，共21项。老师特征、LPIPS和视频渲染在集成测试中使用fixture，不冒充真实模型推理。
 
 Python编译、shell语法和diff检查属于静态验证。真实910B峰值显存、HCCL、预训练权重、MoXing写入、实际RGB解码，以及重建/生成质量，由集群rehearsal及后续正式训练验证。本版目标是交付可恢复且可观察的完整实验，不是宣布唯一根因已确定或15天一定得到高质量世界模型。

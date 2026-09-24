@@ -77,6 +77,48 @@ class ScenePipelineTests(unittest.TestCase):
     def setUpClass(cls):
         torch.set_num_threads(2)
 
+    def test_mmap_filename_contract_and_optimizer_recovery(self):
+        # Emulate torch_npu's stricter Linux mmap argument check on CPU.
+        # Patch only scene_run's os binding so Windows pathlib stays native.
+        native_load=torch.load
+        def npu_load(filename, **kwargs):
+            if kwargs.get('mmap') and not isinstance(filename,str):
+                raise TypeError('f must be a string filename in order to use mmap argument')
+            self.assertTrue(kwargs['mmap'])
+            if os.name=='nt':
+                kwargs['mmap']=False  # This is not a real NPU mmap test.
+            return native_load(filename,**kwargs)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            replicas=[str(root/'primary'),str(root/'mirror')]
+            store=ArtifactStore(root/'writer',replicas)
+            model=nn.Linear(3,2)
+            optimizer=torch.optim.AdamW(model.parameters(),lr=.001)
+            x=torch.randn(2,3)
+            def update(net,opt):
+                opt.zero_grad()
+                net(x).square().mean().backward()
+                opt.step()
+            update(model,optimizer)
+            store.save('ae/checkpoint_latest.pt',dict(step=1,model=model.state_dict(),
+                       optimizer=optimizer.state_dict()),'fixture')
+            # A restarted worker must also recover the published file.
+            reader=ArtifactStore(root/'reader',replicas)
+            linux_os=SimpleNamespace(name='posix',getpid=os.getpid,replace=os.replace)
+            with patch('utils.scene_run.os',linux_os), patch('utils.scene_run.torch.load',side_effect=npu_load):
+                saved=reader.load('ae/checkpoint_latest.pt','fixture',required=True)
+            restored=nn.Linear(3,2)
+            restored.load_state_dict(saved['model'])
+            restored_optimizer=torch.optim.AdamW(restored.parameters(),lr=.001)
+            restored_optimizer.load_state_dict(saved['optimizer'])
+            self.assertEqual(saved['step'],1)
+            update(model,optimizer)
+            update(restored,restored_optimizer)
+            for expected,actual in zip(model.parameters(),restored.parameters()):
+                torch.testing.assert_close(actual,expected,rtol=0,atol=0)
+            self.assertTrue(all(state['step'].item()==2 for state in restored_optimizer.state.values()))
+
     def test_direct_relation_gradient(self):
         z=torch.randn(1,2,3,3,4,requires_grad=True)
         loss=relation_loss(z,torch.randn(1,2,3,3,12))

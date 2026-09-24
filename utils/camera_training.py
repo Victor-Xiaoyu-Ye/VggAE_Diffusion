@@ -68,7 +68,7 @@ class BoundCameraModel:
 
 
 def initialize_from_checkpoint(core,path,step,weights,model_args,statistics,runtime,large=False):
-    saved=(torch.load(path,map_location='cpu',weights_only=False,mmap=True) if large else
+    saved=(torch.load(str(path),map_location='cpu',weights_only=False,mmap=True) if large else
            torch.load(path,map_location='cpu',weights_only=False))
     if saved.get('schema')!='r7-window-trainer-v1' or saved.get('step')!=step:
         raise ValueError('initialization checkpoint identity/step mismatch')

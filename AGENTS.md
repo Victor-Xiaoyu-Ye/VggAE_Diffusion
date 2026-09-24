@@ -5,6 +5,16 @@ rules, and safe next steps for future agents.
 
 ## Priority Update (2026-09-09)
 
+2026-09-24 latest: stage51 cluster rehearsal reached AE optimizer step1 and
+checkpoint reload, then torch_npu rejected pathlib.Path with mmap=True.
+All production mmap torch.load call sites now pass str filenames. Keep mmap
+enabled on Linux; do not turn it off to hide the type error on large checkpoints.
+21 relevant CPU tests pass (12 scene +9 camera), including the reproduced
+strict filename failure and exact next optimizer update after remote recovery.
+This emulates the interface, NOT actual NPU mmap. Same namespace/config/world
+can resume the saved rehearsal checkpoint; no output deletion or fresh namespace.
+Full NPU rehearsal/production remains pending. See runbook recovery note.
+
 2026-09-23 latest: stage51 is IMPLEMENTED. Read
 docs/SCENE_RAE_15DAY_RUNBOOK.md and docs/WAI_TRANSFER_AUDIT_20260923.md.
 User authorizes RGB-only static/dynamic rebuild, 3x8 910B, ~15 days ALL stages,

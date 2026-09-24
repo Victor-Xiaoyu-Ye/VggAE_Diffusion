@@ -71,7 +71,7 @@ def freeze(output, roots, sources):
         source_file = output/'source_checkpoint.pt'
         source = stage(source_file, sources)
         source_hash = sha256(source_file)
-        saved = torch.load(source_file, map_location='cpu', weights_only=False, mmap=True)
+        saved = torch.load(str(source_file), map_location='cpu', weights_only=False, mmap=True)
         required = ('schema', 'step', 'model_args', 'statistics', 'contract', 'ema')
         if saved.get('schema') != 'r7-window-trainer-v1' or saved.get('step', 0) < 1:
             raise ValueError('Source checkpoint is not a trained window DiT')

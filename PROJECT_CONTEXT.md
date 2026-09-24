@@ -1,6 +1,29 @@
 # Project Context
 
-## Scene RAE full pipeline and transferred WAI audit (2026-09-23, latest)
+## Scene checkpoint mmap compatibility fix (2026-09-24, latest)
+
+User's cluster trace reached the AE rehearsal's first optimizer update and
+save, then ArtifactStore.load failed in torch_npu serialization: mmap=True
+requires a string filename; the store supplied pathlib.Path. Failing ranks
+had already passed payload size/hash verification. This trace does not prove
+both remote replicas are intact or the remaining stages/quality are validated.
+
+Normalize all three production mmap torch.load filename arguments to str
+(scene store, camera initialization staging, camera trainer initialization).
+Preserve mmap and checkpoint schema/identity. Regression first reproduced
+the exact TypeError, then passed after the fix, including real CPU AdamW
+state recovery to a fresh reader and an identical next update. Total21 tests
+pass:12 scene,3 camera training,6 camera staging. Interface simulation only,
+not a real torch_npu run. Python compile/diff checks also pass.
+
+Re-run stage51 with the SAME original SCENE_NAMESPACE, config, cohort, assets,
+text root and 24-rank topology. The saved rehearsal/ae/checkpoint_latest.pt
+and receipt remain usable; startup restores optimizer/cursors/RNG before
+continuing. SCENE_STAGE=all completes rehearsal then production automatically.
+No new quality gates, budget changes or checkpoint deletion. Cluster retry
+and later-stage NPU validation remain pending; see updated runbook.
+
+## Scene RAE full pipeline and transferred WAI audit (2026-09-23)
 
 User clarified RGB frames only, 3 nodes/~15days including all stages, tested
 recovery/intermediates/dual IO/DI throughput; poor quality must not block later

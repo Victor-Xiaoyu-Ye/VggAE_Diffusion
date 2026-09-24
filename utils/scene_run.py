@@ -152,4 +152,5 @@ class ArtifactStore:
             else:
                 raise RuntimeError(f'Unrecoverable committed artifact {name}: {errors}')
         atomic(self.local/(name+'.json'),receipt)
-        return torch.load(path, map_location='cpu', weights_only=False, mmap=os.name!='nt')
+        # torch_npu's mmap loader requires str, unlike stock PyTorch's Path support.
+        return torch.load(str(path), map_location='cpu', weights_only=False, mmap=os.name!='nt')
