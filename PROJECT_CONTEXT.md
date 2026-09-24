@@ -1,6 +1,39 @@
 # Project Context
 
-## Scene checkpoint mmap compatibility fix (2026-09-24, latest)
+## Scene launcher idle guard (2026-09-24, latest)
+
+User reports cluster reclamation after2h accelerator utilization below2% and
+requests occupation during pipeline idle phases. Code audit of stage51 finds
+CPU/OBS checkpoint staging, hashing/serialization, caption subset extraction,
+latent statistics merge and rank0-only AE/cache/generation evaluation; the other
+23 ranks wait at barriers. Cache encoding itself uses all24 ranks. No measured
+duration/utilization establishes any actual2h violation yet.
+
+New scripts/npu_idle_guard.py starts before ensure_local_checkpoint on each
+node, attached to launcher PID. npu-smi info -m maps runtime-visible logical
+devices to physical card/chip; per-chip AICore telemetry drives independent
+workers. Defaults:poll30s, threshold2%, sustained-low600s,10s matmul per60s.
+Torch/NPU allocation is lazy.2048 FP16 buffers total24MiB/card plus unmeasured
+runtime/workspace overhead; tensors/cache released when real busy telemetry
+resumes, runtime context persists until helper exits. Work cannot stop a pulse
+already in flight; next telemetry pauses it. Unknown telemetry warns and does
+not manufacture low-load evidence. Monitoring failures do not stop training.
+
+Launcher EXIT stops/join helpers; blocked workers have bounded terminate/kill
+cleanup. Linux parent-death kill binds each helper to its owner even if killed
+during a driver call. No detached service or auto-restart of training. Dedicated
+launcher/node*/npu_idle_guard/{supervisor,deviceN}.{json,jsonl} are dual-published
+by existing launcher log watcher. No synthetic tokens enter DI_throughput.
+SCENE_NPU_IDLE_GUARD=0 opts out; tuning vars documented in runbook. Pipeline
+configuration/identity unchanged, same checkpoints and namespace remain valid.
+
+21 CPU tests pass(9guard telemetry/visible mapping/lifecycle+12scene integration),
+Python compile, launcher bash-n and diff checks pass. Official Ascend mapping/
+visible-device docs consulted; no real910B/scheduler test. This mitigates known
+idle paths; not a guarantee of utilization above2% under every scheduler's
+sampling/averaging rule and not a training-progress watchdog.
+
+## Scene checkpoint mmap compatibility fix (2026-09-24)
 
 User's cluster trace reached the AE rehearsal's first optimizer update and
 save, then ArtifactStore.load failed in torch_npu serialization: mmap=True

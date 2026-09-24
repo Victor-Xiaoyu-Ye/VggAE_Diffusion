@@ -28,9 +28,21 @@ IO="${PROJECT}/scripts/window_run_io.py"
 "${PYTHON_BIN}" "${IO}" publish --source "${LOGS}" --root "${PRIMARY}/launcher/node${NODE_RANK}" \
   --root "${MIRROR}/launcher/node${NODE_RANK}" --watch &
 SYNC_PID=$!
+IDLE_GUARD_PID=""
 finish() {
   local code=$?
   trap - EXIT
+  if [[ -n "${IDLE_GUARD_PID}" ]]; then
+    # A failed helper's old PID may be reused during a 15-day job.
+    # Signal only a child that Bash still lists as running.
+    local active_pid
+    for active_pid in $(jobs -pr); do
+      if [[ "${active_pid}" == "${IDLE_GUARD_PID}" ]]; then
+        kill "${IDLE_GUARD_PID}" 2>/dev/null || true
+      fi
+    done
+    wait "${IDLE_GUARD_PID}" 2>/dev/null || true
+  fi
   kill "${SYNC_PID}" 2>/dev/null || true
   wait "${SYNC_PID}" 2>/dev/null || true
   "${PYTHON_BIN}" - "${LOGS}" "${code}" <<'PY'
@@ -45,6 +57,20 @@ PY
 }
 trap finish EXIT
 exec > >(tee -a "${LOGS}/pipeline.log") 2>&1
+# Cover CPU/OBS staging, rank0-only evaluation, save barriers and stage gaps.
+# Independent processes never enter HCCL or contribute to DI_throughput.
+if [[ "${SCENE_NPU_IDLE_GUARD:-1}" == 1 ]]; then
+  OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+    "${PYTHON_BIN}" "${PROJECT}/scripts/npu_idle_guard.py" \
+    --parent-pid "$$" --devices "${NUM_NPUS}" --output "${LOGS}/npu_idle_guard" \
+    --threshold "${SCENE_NPU_IDLE_THRESHOLD:-2}" \
+    --idle-seconds "${SCENE_NPU_IDLE_SECONDS:-600}" \
+    --poll "${SCENE_NPU_IDLE_POLL:-30}" --period "${SCENE_NPU_IDLE_PERIOD:-60}" \
+    --burst-seconds "${SCENE_NPU_IDLE_BURST:-10}" \
+    --matrix-size "${SCENE_NPU_IDLE_MATRIX:-2048}" &
+  IDLE_GUARD_PID=$!
+  echo "NPU idle guard started: pid=${IDLE_GUARD_PID}; logs=${LOGS}/npu_idle_guard"
+fi
 ensure_local_checkpoint "${R7_CKPT}" "${SCALE_REMOTE_ROOT}/r7_t2_c192_v2/joint/checkpoint_best.pt" \
   'spatial R7 warm-start' "${SCALE_MIRROR_ROOT}/r7_t2_c192_v2/joint/checkpoint_best.pt"
 ensure_local_checkpoint "${STREAMVGGT_CKPT}" "${STREAMVGGT_URL:-}" 'StreamVGGT' "${STREAMVGGT_MIRROR_URL:-}"

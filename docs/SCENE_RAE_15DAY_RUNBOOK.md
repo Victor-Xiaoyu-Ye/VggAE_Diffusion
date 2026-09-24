@@ -84,6 +84,41 @@ bash /cache/yexiaoyu/VggAE_Diffusion/scripts/scale/51_train_scene_rae_15day.sh
 
 质量不达标不触发停训；坏RGB有限重试并写失败ledger跳过，同步各rank取可计算batch。连续128次全局无可用batch、非有限loss/grad、两个持久化目的地都失败属于无法继续计算/保全状态的错误，不是PSNR门槛。DataLoader硬故障、进程被kill或集群掉电仍可能终止作业；重启恢复最后已提交checkpoint，未提交尾部会重做。
 
+## 空闲阶段与 NPU 保活
+
+集群规则由用户确认：卡空置约两小时会回收节点。代码审计发现以下可能的低利用率阶段，但**目前没有设备实测证明某段已经连续两小时低于2%**：
+
+| 阶段 | 计算情况 |
+|---|---|
+| 启动权重下载、校验、反序列化 | CPU/OBS 为主，NPU 可能全空闲 |
+| AE 初始对照与周期/最终评估 | rank0 编码解码，其余23卡等待 |
+| latent cache 主体 | 24 ranks 都运行 encoder；下载、解码、caption 子集提取和分片双写会插入等待 |
+| cache 验证与最终统计汇总 | 验证由rank0编码；汇总是CPU，其他ranks等待 |
+| 图像/视频生成评估 | rank0执行32步采样与解码，其余23卡等待 |
+| checkpoint 保存、双写双读、阶段切换 | CPU/网络为主，其他ranks在同步点等待 |
+
+51号启动器默认在权重下载**之前**启动 `scripts/npu_idle_guard.py`，每节点覆盖本作业8个本地device。独立进程读取 `npu-smi` 的每芯片 AICore 利用率；连续低于2%达600秒，才初始化小型FP16矩阵负载，之后每60秒最多运行10秒。启动日志打印 `[NPU idle guard]`。检测到利用率恢复即暂停后续负载并释放矩阵/allocator缓存；已经发出的短负载不能瞬间撤回，首次运行时初始化/编译也可能额外耗时。
+
+保活在独立进程中运行，不参与HCCL，不读写模型/optimizer/RNG，**不计入 `DI_throughput`**。训练wall-time吞吐仍反映实际等待与争用。默认3个2048×2048 FP16矩阵为24MiB/卡，另有运行时和workspace开销；释放矩阵后运行时context仍驻留，不能宣称全部只占24MiB。首次保活前只运行CPU监控，不初始化NPU context。
+
+设备编号依据官方 [npu-smi映射说明](https://www.hiascend.com/document/detail/zh/Atlas%20200I%20A2/2520/re/blackboxlog/logreference_0016.html) 和 [ASCEND_RT_VISIBLE_DEVICES语义](https://www.hiascend.com/doc_center/source/zh/canncommercial/80RC3/apiref/envvar/envref_07_0028.html) 处理，不能把torch本地索引直接当物理卡号。利用率查询无法解析/超时会记warning，不把未知当0盲目加负载；保活自身异常只报警，不制造新的停训门槛。
+
+若训练明显在计算、接口却持续返回0，先关闭保活并核实平台监控：官方[芯片统计接口说明](https://support.huawei.com/enterprise/en/doc/EDOC1100288560/5418d81e/querying-the-statistics-of-a-chip)指出部分算力分配容器或profiling模式下返回的0不具备真实利用率含义；脚本仅凭合法数值无法识别这种情况。
+
+| 环境变量 | 默认 | 含义 |
+|---|---:|---|
+| `SCENE_NPU_IDLE_GUARD` | 1 | 0关闭，1启用 |
+| `SCENE_NPU_IDLE_THRESHOLD` | 2 | AICore百分比阈值 |
+| `SCENE_NPU_IDLE_SECONDS` | 600 | 连续低于阈值多久才启动 |
+| `SCENE_NPU_IDLE_POLL` | 30 | 监测间隔，秒 |
+| `SCENE_NPU_IDLE_PERIOD` | 60 | 保活负载两次启动最短间隔，秒 |
+| `SCENE_NPU_IDLE_BURST` | 10 | 单次负载目标时长，秒 |
+| `SCENE_NPU_IDLE_MATRIX` | 2048 | 方阵边长，支持128–4096 |
+
+正常完成/失败走启动器EXIT清理；Linux下每层辅助进程设置父进程死亡信号，即使启动器被SIGKILL，也不留下持续占卡进程。保活不重启训练、不掩盖训练报错，也不是判断训练是否卡死的watchdog。它覆盖51号入口内部的空闲；平台在执行51号脚本前安装环境/拉代码的时间不在覆盖范围。
+
+日志位于 `launcher/node*/npu_idle_guard/`，每卡 `deviceN.json` 为当前状态、`.jsonl` 为历史，`supervisor.json` 记录映射与参数；随现有启动日志双写。看见启动PID只代表进程已启动，须检查每卡状态有有效utilization、空闲时有pulse/cooldown且无error，才能确认实际运行。已通过9项CPU决策/进程清理测试和12项Scene回归，**910B矩阵执行、驱动开销与平台回收采样口径尚未实测，不能保证任何采样窗口都超过2%**。沿用原namespace和原启动命令，默认生效。
+
 ## 双写双读与输出
 
 owner镜像：`obs://yw-ads-training-gy1/data/external/personal/g00833899/y50046448/output/scale/scene_rae_c256_15day_v1/`，同时写平台OUTPUT_URL的对应目录。节点临时目录位于 `/cache/yexiaoyu/vggae_runtime/outputs/scale/scene_rae_c256_15day_v1/`。RGB按需缓存每节点200GiB，可用`SCENE_RGB_CACHE_GB`调整，不整库下载。

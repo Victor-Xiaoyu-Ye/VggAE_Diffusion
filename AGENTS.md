@@ -5,6 +5,19 @@ rules, and safe next steps for future agents.
 
 ## Priority Update (2026-09-09)
 
+2026-09-24 idle guard: user reports cluster reclaim after2h below2% utilization.
+Stage51 now starts scripts/npu_idle_guard.py BEFORE checkpoint staging, per node.
+Default per-device AICore<2% for600s ->10s FP16 matmul per60s, poll30s; normal
+load pauses it. No torch/HBM allocation before first pulse. Job-visible logical
+IDs map through npu-smi -m and ASCEND_RT_VISIBLE_DEVICES; unknown is NOT zero.
+Stop with launcher EXIT; Linux parent-death SIGKILL prevents orphan helpers.
+Logs under launcher/node*/npu_idle_guard share existing dual publication.
+Guard work must NEVER contribute to DI_throughput. It is not a progress/hang
+watchdog or a guarantee against cluster reclamation; driver footprint and NPU
+behavior need real validation.21 CPU tests(9guard+12scene), compile/bash/diff pass.
+SCENE_NPU_IDLE_GUARD=0 disables. Future active training launchers should preserve
+job-scoped cleanup, visible-device limits and separate guard accounting.
+
 2026-09-24 latest: stage51 cluster rehearsal reached AE optimizer step1 and
 checkpoint reload, then torch_npu rejected pathlib.Path with mmap=True.
 All production mmap torch.load call sites now pass str filenames. Keep mmap
