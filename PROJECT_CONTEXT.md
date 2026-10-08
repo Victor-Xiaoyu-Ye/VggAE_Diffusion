@@ -1,6 +1,25 @@
 # Project Context
 
-## Scene launcher idle guard (2026-09-24, latest)
+## Scene RAE complete run reviewed (2026-10-08, latest)
+
+Read docs/SCENE_RAE_RESULT_REVIEW_20261008.md before planning another run.
+Stage51 production on3x8 NPU completed AE step9126,69,800 cache windows,
+image step16394 and video step137104. Three node logs say pipeline finished;
+final video MP4s 27/27 decode. Old9/24 launcher exit.json remained stale, so
+do not cite it as this run's exit status. AE domain mean PSNR25.872dB and
+same-case +1.429dB vs old R7: representation RGB quality improved. Image
+free generation still mosaic/ghosted at early and final eval. Video future
+frames have scene structure sometimes but often collapse into tiled textures;
+its first output frame is a copied clean anchor, not a generated result.
+Video eval mean RAW L1 minimum .1637 at step9185, final .1732 vs frozen-frame
+copy .1347 (only3/27 below copy); sample L1 alone is not visual quality.
+Late video loss rises substantially. Only4/27 eval cases carry captions and
+16/27 camera; geometry-aware control has not been demonstrated. Hold off on
+another long scale run until existing-checkpoint denoising/sampling/latent
+diagnostics explain the image-stage failure. OBS output remains in the same
+scene_rae_c256_15day_v1 namespace; see review doc for paths and limits.
+
+## Scene launcher idle guard (2026-09-24)
 
 User reports cluster reclamation after2h accelerator utilization below2% and
 requests occupation during pipeline idle phases. Code audit of stage51 finds

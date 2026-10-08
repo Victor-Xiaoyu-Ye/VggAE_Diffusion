@@ -3,6 +3,21 @@
 Read this file first. It defines the active project context, current goals,
 rules, and safe next steps for future agents.
 
+## Priority Update (2026-10-08)
+
+2026-10-08 latest: stage51 3x8 full production completed (AE9126, cache69800,
+image16394, video137104). Read docs/SCENE_RAE_RESULT_REVIEW_20261008.md.
+AE PSNR25.872dB mean-domain, same-case +1.429dB vs old R7; image diffusion
+still generates mosaic/ghosted scenes, and video future frames deteriorate.
+Video sample frame0 is the clean anchor inserted by code, not generated.
+Video eval L1 best at step9185 .1637 and final .1732, copy baseline .1347;
+visual quality cannot be decided by single-target pixel L1 alone. Existing
+checkpoint at9185 remains; no validated geometry-aware generation. Four of27
+fixed eval cases have captions,16of27 camera. Don't launch another 15-day
+scale run on the strength of reconstruction PSNR; diagnose single-image free
+sampling, latent distribution/decoder sensitivity, EMA and solver using saved
+checkpoints first. Launcher exit.json is stale from9/24 despite complete marks.
+
 ## Priority Update (2026-09-09)
 
 2026-09-24 idle guard: user reports cluster reclaim after2h below2% utilization.
