@@ -263,7 +263,7 @@ class ScenePipelineTests(unittest.TestCase):
             cohort=dict(seed='test',records=records)
             cfg=json.loads(Path('configs/scene_15day_v1.json').read_text())
             cfg.update(size=28,grid=2,views=3,channels=16,workers=0,ae_steps=2,image_steps=2,
-                video_steps=2,ae_accum=1,flow_accum=1,eval_per_domain=1,log_every=1,shard_samples=2,
+                video_steps=2,ae_accum=1,flow_accum=1,eval_per_domain=1,log_every=10,shard_samples=2,
                 cache_windows=1,flow=dict(width=24,depth=1,head_width=48,head_depth=1,heads=4,text_dim=4096))
             rc=R7Config(target_size=28,input_grid=2,latent_grid=2,levels=(0,1,2,3),token_dim=12,
                 geo_dim=8,tex_dim=8,tex_base_ch=8,decoder_base_dim=16,decoder_num_resblocks=1,
@@ -288,10 +288,33 @@ class ScenePipelineTests(unittest.TestCase):
                     result=store.json(phase+'/complete.json',True)
                     self.assertEqual(result['step'],2)
                     self.assertTrue(store.json(phase+'/resume_rehearsal.json')['optimizer_restored'])
+                    checkpoint=store.load(result['selected'],result['identity'],required=True)
+                    self.assertTrue(all(v.dtype==torch.float32 for v in checkpoint['ema'].values()))
+                    self.assertEqual(checkpoint['ema_metadata']['dtype'],'torch.float32')
                 self.assertEqual(store.json('ae/complete.json')['quality_policy'],'report_only')
                 manifest=store.json('cache/complete.json')
                 self.assertEqual(len(manifest['mean']),16)
                 self.assertTrue(all(v>0 for v in manifest['std']))
+                online=SceneFlow(**checkpoint['model_args'])
+                online.load_state_dict(checkpoint['model'])
+                online.train()
+                before={name:value.clone() for name,value in online.state_dict().items()}
+                eval_samples=store.load('cache/eval.pt',manifest['identity'],required=True)['samples']
+                pipeline.eval_flow(online,None,pipeline.read_rae(store,torch.device('cpu'))[0],
+                    eval_samples,torch.tensor(manifest['mean']),torch.tensor(manifest['std']),
+                    store,'video',2,torch.device('cpu'),weight_source='online')
+                self.assertTrue(online.training)
+                for name,value in before.items():
+                    torch.testing.assert_close(online.state_dict()[name],value,rtol=0,atol=0)
+                self.assertEqual(store.json('video/eval/step0000002_online.json')['weight_source'],'online')
+                self.assertEqual(store.json('video/eval/step0000002.json')['weight_source'],'ema')
+                self.assertTrue((store.local/'video/samples/step0000002_online_00.mp4').is_file())
+                self.assertTrue((store.local/'video/samples/step0000002_00.mp4').is_file())
+                metrics=[json.loads(line) for line in (store.local/'metrics-r000.jsonl').read_text().splitlines()]
+                # Even a short run with sparse logging must expose both task
+                # objectives; the production 10/4 intervals used to hide images.
+                self.assertEqual({row['task'] for row in metrics if row['stage']=='video'},
+                                 {'image','video'})
             if pipeline.WRITER is not None:
                 pipeline.WRITER.close();pipeline.WRITER=None
 

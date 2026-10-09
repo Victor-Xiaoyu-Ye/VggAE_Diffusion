@@ -563,14 +563,23 @@ def cache(a, cfg, cohort, store, identity, device, rank, world):
 
 
 @torch.no_grad()
-def eval_flow(model, ema, rae, samples, mean, std, store, stage, step, device):
+def eval_flow(model, ema, rae, samples, mean, std, store, stage, step, device, weight_source='ema'):
+    if weight_source not in ('ema','online'):
+        raise ValueError('weight_source must be ema or online')
+    if weight_source=='ema' and ema is None:
+        raise ValueError('EMA evaluation requires an EMA instance')
     # Copy only on rank0; other ranks wait outside. Restore train weights afterwards.
-    previous = {k:v.detach().cpu().clone() for k,v in model.state_dict().items()}
-    ema.copy_to(model)
+    previous = None
+    was_training = model.training
+    if weight_source=='ema':
+        previous = {k:v.detach().cpu().clone() for k,v in model.state_dict().items()}
+        ema.copy_to(model)
+    # Keep historical EMA paths intact; online diagnostics cannot overwrite them.
+    suffix = '' if weight_source=='ema' else '_online'
     model.eval()
     rows, files = [], []
     for i, sample in enumerate(samples):
-        print(f'[flow validation] stage={stage} step={step} case={i+1}/{len(samples)} id={sample["id"]}',flush=True)
+        print(f'[flow validation] stage={stage} weights={weight_source} step={step} case={i+1}/{len(samples)} id={sample["id"]}',flush=True)
         anchor = (sample['anchor'].unsqueeze(0).to(device).float()-mean)/std
         text = sample['text'].unsqueeze(0).to(device).float()
         valid = torch.ones(text.shape[:2], device=device, dtype=torch.bool)
@@ -600,7 +609,7 @@ def eval_flow(model, ema, rae, samples, mean, std, store, stage, step, device):
             ae_rgb = rae.decode(clean.unsqueeze(0).to(device).float().reshape(1,-1,rae.grid,rae.grid,rae.channels))[0].float()
         if image_task:
             raw, ae_rgb = raw[:1], ae_rgb[:1]
-        name = f'{stage}/samples/step{step:07d}_{i:02d}.mp4'
+        name = f'{stage}/samples/step{step:07d}{suffix}_{i:02d}.mp4'
         files.extend(preview(store,name,torch.cat((raw,ae_rgb,rgb),2)))
         score=slice(None) if image_task else slice(1,None)
         row = dict(id=sample['id'], dataset=sample['dataset'],
@@ -610,12 +619,14 @@ def eval_flow(model, ema, rae, samples, mean, std, store, stage, step, device):
             metric_scope='single generated image' if image_task else 'future frames only',
             has_caption=sample['has_caption'], camera_present=bool(rays is not None and rays[...,7].any()))
         rows.append(row)
-    name = f'{stage}/eval/step{step:07d}.json'
+    name = f'{stage}/eval/step{step:07d}{suffix}.json'
     atomic(store.local/name, dict(samples=rows, step=step, quality_policy='report_only', cfg=1,
+        weight_source=weight_source, ema_metadata=ema.metadata() if weight_source=='ema' else None,
         columns=['RAW','AE','GENERATED'], note='RGB quality and temporal behavior require visual review'))
     store.publish([*files,name])
-    model.load_state_dict(previous)
-    model.train()
+    if previous is not None:
+        model.load_state_dict(previous)
+    model.train(was_training)
     return rows
 
 
@@ -635,7 +646,9 @@ def train_flow(a,cfg,cohort,store,identity,device,rank,world):
         weights = store.load(previous['selected'],previous['identity'],required=True)
         model.load_state_dict(weights['model'])
     core = wrap(model,device,world)
-    ema = EMA(model,decay=.9995,dtype=torch.bfloat16,warmup=True)
+    # Long-horizon EMA updates round away in BF16 even though online parameters
+    # train in FP32. Autocast remains BF16; only EMA accumulation changes.
+    ema = EMA(model,decay=.9995,dtype=torch.float32,warmup=True)
     optimizer = torch.optim.AdamW(model.parameters(),lr=cfg['lr_flow'],betas=(.9,.95),weight_decay=0.)
     step, cursor, spent = 0,0,0.
     if saved:
@@ -655,6 +668,7 @@ def train_flow(a,cfg,cohort,store,identity,device,rank,world):
     rae = read_rae(store,device)[0] if rank==0 else None
     last_eval = last_save = start = time.monotonic()
     tokens, exposures = 0,Counter()
+    last_logged_task_step = {}
     if rank==0:
         store.write_json(stage+'/model.json',dict(parameters=sum(p.numel() for p in model.parameters()),
             model=model_args,flow=flow.contract(), time_shift_basis='one view: grid^2*channels',
@@ -727,11 +741,15 @@ def train_flow(a,cfg,cohort,store,identity,device,rank,world):
             if rank==0:
                 store.write_json(stage+'/resume_rehearsal.json',dict(step=step,optimizer_restored=True,cursors=recovered['cursors']))
             del recovered
-        if step%cfg['log_every']==0:
+        task='image' if image_task else 'video'
+        # A global interval of 10 aliases the 4-step image schedule and used to
+        # omit every image update during video training. Track each task's clock.
+        if task not in last_logged_task_step or step-last_logged_task_step[task]>=cfg['log_every']:
             metrics(store,dict(stage=stage,step=step,loss=losses,lr=lr,source_samples=dict(exposures),
-                task='image' if image_task else 'video',DI_throughput=tokens/max(time.monotonic()-start,1e-6),
+                task=task,DI_throughput=tokens/max(time.monotonic()-start,1e-6),
                 scope='noisy target tokens per active NPU; wall time',elapsed_hours=budget.elapsed()/3600,
                 peak_allocated_gib=memory_gib(device)),rank)
+            last_logged_task_step[task]=step
         ev=any_rank(time.monotonic()-last_eval>=cfg['eval_seconds'],device)
         sv=any_rank(time.monotonic()-last_save>=cfg['save_seconds'],device)
         if ev:

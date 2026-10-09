@@ -2,6 +2,7 @@ import json
 import os
 import random
 import time
+import warnings
 
 import numpy as np
 import torch
@@ -16,6 +17,7 @@ class EMA:
         self.dtype = dtype
         self.warmup = bool(warmup)
         self.num_updates = 0
+        self.precision_migrations = []
         self.shadow = {}
         for k, v in model.state_dict().items():
             if v.is_floating_point():
@@ -42,10 +44,30 @@ class EMA:
         # samplers load checkpoint["ema"] directly into the model.
         return self.shadow
     def load_state_dict(self, state_dict):
-        self.shadow = state_dict
+        # Keep the requested accumulation precision on resume. Sharing the saved
+        # tensors would also let later updates modify an in-memory checkpoint.
+        self.shadow = {}
+        self.precision_migrations = []
+        for name, value in state_dict.items():
+            target_dtype = self.dtype if self.dtype is not None else value.dtype
+            self.shadow[name] = value.detach().to(dtype=target_dtype).clone()
+            if (value.is_floating_point() and
+                    torch.finfo(value.dtype).eps > torch.finfo(target_dtype).eps):
+                migration = dict(source_dtype=str(value.dtype), target_dtype=str(target_dtype),
+                                 history_recovered=False)
+                if migration not in self.precision_migrations:
+                    self.precision_migrations.append(migration)
+                    warnings.warn(
+                        f"EMA restored from {value.dtype} into {target_dtype}; "
+                        "this prevents future low-precision accumulation but cannot "
+                        "recover lost EMA history. Saved shadow values are preserved, "
+                        "not reset to online weights.", RuntimeWarning, stacklevel=2)
     def metadata(self):
         return {"num_updates": self.num_updates, "warmup": self.warmup,
-                "decay": self.decay}
+                "decay": self.decay,
+                "dtype": str(self.dtype) if self.dtype is not None else None,
+                "shadow_dtypes": sorted({str(v.dtype) for v in self.shadow.values()}),
+                "precision_migrations": [dict(item) for item in self.precision_migrations]}
     def load_metadata(self, metadata):
         if not metadata:
             return
@@ -57,6 +79,11 @@ class EMA:
                 f"decay/warmup={saved_decay}/{saved_warmup} != "
                 f"{self.decay}/{self.warmup}")
         self.num_updates = int(metadata.get("num_updates", 0))
+        # Old checkpoints have no dtype fields. The actual tensor dtype above
+        # is authoritative; retain any earlier migration when resaving later.
+        for migration in metadata.get("precision_migrations", []):
+            if migration not in self.precision_migrations:
+                self.precision_migrations.append(dict(migration))
     def copy_to(self, model):
         parameters = dict(model.named_parameters())
         for name, value in self.shadow.items():

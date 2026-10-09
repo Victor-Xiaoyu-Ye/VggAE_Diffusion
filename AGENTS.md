@@ -3,7 +3,26 @@
 Read this file first. It defines the active project context, current goals,
 rules, and safe next steps for future agents.
 
-## Priority Update (2026-10-08)
+## Priority Update (2026-10-09)
+
+CRITICAL correction to the review below: stage51 used BF16 EMA at decay .9995,
+while old Window trainer used FP32. Actual PyTorch reproduction confirms small
+EMA updates freeze; OBS range reads of6 real checkpoints (5.53MB, no full payload)
+confirm image input/widen sampled EMA values100% unchanged from10490->16394
+while online changes, and video output LayerNorm EMA1536values unchanged from
+9185->137104 while online changes. ALL old scene previews used this EMA.
+Do NOT infer online image/video failure or VGGT infeasibility from those previews.
+image->video warm start uses model, not EMA; raw weights remain worth sampling.
+Read corrected docs/SCENE_RAE_RESULT_REVIEW_20261008.md first. Fix uses FP32 EMA,
+dtype-respecting clone-on-load with low-precision history warning/provenance;
+upcasting cannot recover lost history and must not silently reset old shadows.
+eval_flow has explicit online mode with separate output names, no new launcher
+or cluster replay yet. Image co-training loss logging was hidden by10/4 aliasing
+and is repaired. Late recorded video loss increase is real online loss, not
+mixed-task logging; root cause and online RGB still unverified. Actual new cache
+69,800 vs old FullHQ1,440,144; video-only reuse141, not519 (mixed draws).
+
+## Priority Update (2026-10-08, interpretation corrected above)
 
 2026-10-08 latest: stage51 3x8 full production completed (AE9126, cache69800,
 image16394, video137104). Read docs/SCENE_RAE_RESULT_REVIEW_20261008.md.

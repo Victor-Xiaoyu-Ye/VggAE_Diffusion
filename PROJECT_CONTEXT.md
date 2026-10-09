@@ -1,6 +1,40 @@
 # Project Context
 
-## Scene RAE complete run reviewed (2026-10-08, latest)
+## Scene RAE regression audit: confirmed EMA precision bug (2026-10-09, latest)
+
+Read corrected docs/SCENE_RAE_RESULT_REVIEW_20261008.md. Stage51 newly chose BF16
+EMA with .9995 decay; old Window trainer used FP32. Real PyTorch2.7.1 CPU reproduction
+shows mature shadow1 stays1 through10000 updates toward online1.5; FP32 reaches
+1.49646. Six OBS checkpoint ZIP/range reads totaling5,533,942bytes confirm actual
+online FloatStorage vs EMA BFloat16Storage: sampled image input/widen EMA remains
+100% unchanged10490->16394 while online changes; video output LayerNorm1536 EMA
+values unchanged9185->137104 and output-head sample94.35% unchanged. This is
+selected-tensor evidence, not a whole-model freezing percentage. All scene RGB
+evals used EMA, so previous inference that online image DiT failed was unjustified.
+Image->video loads raw model; no evidence EMA corrupted online training weights.
+Prioritize saved online image/video inference against legacy EMA, then sampler
+and latent diagnostics. No NPU replay or new training launched by this audit.
+
+Implemented minimal repair: Scene FP32 EMA; load_state_dict respects configured
+dtype, clones snapshot, records precision_migrations/history_recovered=False and
+warns when restoring lower precision. Old shadow and update count retained; casting
+cannot recover past updates. eval_flow(weight_source='online') writes independent
+_online previews/metrics and preserves default EMA names; this is a function
+entry, not a new launch script or automatic re-evaluation of complete phases.
+Task-local logging fixes10/4 phase alias that hid image loss in video training.
+All old13710 video log records truly task=video; late online loss rise is real.
+Validation:29 CPU tests pass (5 EMA,12 Scene,12 Window), plus py_compile/diff.
+These cover precision recovery, independent online output and dual-task logging;
+they do not establish raw model generation quality or Ascend replay success.
+
+Other changes are confounds, not proven causes: new.831B vs FullHQ1.653B; future
+8x324x256 vs4x324x192 (2.667x variables); cache69,800 vs1,440,144 (20.63x fewer),
+seven domains with static multiview/time semantics mixed, most text/pose absent.
+Video-only draws~9.87M or141/window, not519 (image+video combined). Old32eval IDs
+and new27have no overlap; oldCFG3/Euler64 vs newCFG1/Euler32. Do not quantify
+quality regression by comparing their raw L1 values directly. Preserve all artifacts.
+
+## Scene RAE complete run reviewed (2026-10-08, interpretation corrected above)
 
 Read docs/SCENE_RAE_RESULT_REVIEW_20261008.md before planning another run.
 Stage51 production on3x8 NPU completed AE step9126,69,800 cache windows,
