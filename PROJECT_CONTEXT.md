@@ -1,6 +1,35 @@
 # Project Context
 
-## Scene RAE regression audit: confirmed EMA precision bug (2026-10-09, latest)
+## Saved Scene raw/EMA replay launcher (2026-10-09, latest)
+
+Stage52 and audit_scene_flow_weights.py now expose read-only saved-checkpoint
+inference; see docs/SCENE_FLOW_WEIGHT_AUDIT_RUNBOOK.md. Existing3x8 ModelArts
+setup runs the same launcher on all nodes. Source is stage51 production;
+output uses scene_rae_raw_ema_audit_v1, never the training namespace.
+Default all27 cached eval cases, image final16394 and video9185/71609/final137104,
+each online model versus legacy EMA:216 outputs. Keep Euler32/CFG1 and original
+case-index seeds to isolate weights. Loading BF16 EMA values into FP32 inference
+does not recover lost EMA history. No optimizer/encoder/raw data or retraining.
+
+Source contract, AE/cache identities and checkpoint SHA pin each audit. Only
+node-local leader downloads/hashes; workers read one shared staged checkpoint.
+Rank-sharded case/arm jobs commit preview, normalized latent/trace, metrics and
+hash receipt immediately to both roots; verified cases skip and heal replicas
+on resume, including after world-size changes. Changed sampling settings use
+a fresh namespace. Private flow files removed after readers finish; original
+source files untouched. Per-case failures continue, final partial exits nonzero;
+quality is report-only. DI_throughput counts denoiser tokens per worker over job
+wall time including staging/IO, excludes idle-guard compute. Guard is job-scoped;
+launcher drains logs and records exit before final dual publication.
+
+Validation:8 CPU tests include exact image/video sampler parity for both arms,
+no anchor leakage for image, source integrity, per-case resume/mirror repair,
+and real2-rank Gloo with node leader-only staging. Launcher stub success/failure
+and shutdown-order checks, py_compile, bash syntax and diff checks pass.
+Actual910B/HCCL/Linux mmap and real saved-weight quality remain to be tested;
+no cluster execution was started from the local workstation.
+
+## Scene RAE regression audit: confirmed EMA precision bug (2026-10-09)
 
 Read corrected docs/SCENE_RAE_RESULT_REVIEW_20261008.md. Stage51 newly chose BF16
 EMA with .9995 decay; old Window trainer used FP32. Real PyTorch2.7.1 CPU reproduction
@@ -19,8 +48,8 @@ Implemented minimal repair: Scene FP32 EMA; load_state_dict respects configured
 dtype, clones snapshot, records precision_migrations/history_recovered=False and
 warns when restoring lower precision. Old shadow and update count retained; casting
 cannot recover past updates. eval_flow(weight_source='online') writes independent
-_online previews/metrics and preserves default EMA names; this is a function
-entry, not a new launch script or automatic re-evaluation of complete phases.
+_online previews/metrics and preserves default EMA names. Stage52 above now
+provides the separate launch script; completed training phases do not auto-replay.
 Task-local logging fixes10/4 phase alias that hid image loss in video training.
 All old13710 video log records truly task=video; late online loss rise is real.
 Validation:29 CPU tests pass (5 EMA,12 Scene,12 Window), plus py_compile/diff.

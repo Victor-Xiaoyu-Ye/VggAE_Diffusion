@@ -3,7 +3,24 @@
 Read this file first. It defines the active project context, current goals,
 rules, and safe next steps for future agents.
 
-## Priority Update (2026-10-09)
+## Priority Update (2026-10-09, saved-weight replay ready)
+
+Stage52 is implemented: scripts/scale/52_audit_scene_flow_weights.sh. Read
+docs/SCENE_FLOW_WEIGHT_AUDIT_RUNBOOK.md. Run on existing3x8 setup; no training.
+Source scene_rae_c256_15day_v1/production remains read-only. New output namespace
+scene_rae_raw_ema_audit_v1. Default27 fixed cases x4 saved checkpoints x2 arms:
+image final, video9185/71609/final; online model versus original legacy EMA.
+Euler32/CFG1/seed101+original index match old evaluation; old EMA is not repaired.
+Per-node leader stages one checkpoint, workers share files; no encoder/raw data.
+Per-case receipts, dual publication/recovery, latent traces, previews, DI_throughput
+and job-scoped idle guard. Same command resumes; new sampling settings need a
+new namespace. Private flow staging removed after all readers finish.
+Eight CPU tests pass, including exact sampler parity and actual2-rank Gloo
+staging/sharding, mirror repair and unchanged source hashes. Launcher stub tests,
+compile/bash/diff checks pass. NPU/HCCL/mmap and raw RGB quality remain untested.
+Do not restart completed stage51 all to attempt historical preview repair.
+
+## Priority Update (2026-10-09, EMA diagnosis)
 
 CRITICAL correction to the review below: stage51 used BF16 EMA at decay .9995,
 while old Window trainer used FP32. Actual PyTorch reproduction confirms small
@@ -16,8 +33,8 @@ image->video warm start uses model, not EMA; raw weights remain worth sampling.
 Read corrected docs/SCENE_RAE_RESULT_REVIEW_20261008.md first. Fix uses FP32 EMA,
 dtype-respecting clone-on-load with low-precision history warning/provenance;
 upcasting cannot recover lost history and must not silently reset old shadows.
-eval_flow has explicit online mode with separate output names, no new launcher
-or cluster replay yet. Image co-training loss logging was hidden by10/4 aliasing
+eval_flow has explicit online mode with separate output names; stage52 above
+now exposes saved-weight replay, not yet run on cluster. Image co-training loss logging was hidden by10/4 aliasing
 and is repaired. Late recorded video loss increase is real online loss, not
 mixed-task logging; root cause and online RGB still unverified. Actual new cache
 69,800 vs old FullHQ1,440,144; video-only reuse141, not519 (mixed draws).
