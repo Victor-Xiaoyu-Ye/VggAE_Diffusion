@@ -71,6 +71,20 @@ class IdlePolicy:
         return now-self.low_since >= self.idle_seconds and now-self.last_pulse >= self.period
 
 
+class ShutdownRequest:
+    """Signal handlers must not acquire multiprocessing.Event's non-reentrant lock.
+
+    A signal can interrupt Event.wait while that lock is held. Calling set from
+    the handler would then deadlock the supervisor and every waiting worker.
+    Let the main loop perform the shared Event update at a normal Python point.
+    """
+    def __init__(self):
+        self.requested = False
+
+    def __call__(self, _signum, _frame):
+        self.requested = True
+
+
 def bind_parent(parent_pid):
     """Parent death also terminates blocked driver calls on Linux (no orphans)."""
     if sys.platform.startswith('linux'):
@@ -215,8 +229,9 @@ def main():
     bind_parent(options.parent_pid)
     context = mp.get_context('spawn')
     stop = context.Event()
-    signal.signal(signal.SIGTERM, lambda *_: stop.set())
-    signal.signal(signal.SIGINT, lambda *_: stop.set())
+    shutdown = ShutdownRequest()
+    signal.signal(signal.SIGTERM, shutdown)
+    signal.signal(signal.SIGINT, shutdown)
     reporter = Reporter(options.output, 'supervisor')
     workers, disabled = [], set()
     failed_setup = False
@@ -228,7 +243,7 @@ def main():
             process.start()
             workers.append(process)
         last_report = 0.
-        while not stop.wait(1):
+        while not shutdown.requested and not stop.wait(1):
             if os.getppid() != options.parent_pid:
                 break
             failed = {i for i, p in enumerate(workers) if p.exitcode is not None}

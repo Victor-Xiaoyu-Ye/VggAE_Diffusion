@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source "${SCRIPT_DIR}/../spatialvid_config.sh"
 source "${SCRIPT_DIR}/../lib/modelarts.sh"
+source "${SCRIPT_DIR}/../lib/job_cleanup.sh"
 export PYTHONPATH="${PROJECT}${PYTHONPATH:+:${PYTHONPATH}}"
 export MASTER_PORT="${MASTER_PORT:-29952}" HCCL_EXEC_TIMEOUT="${HCCL_EXEC_TIMEOUT:-7200}"
 export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 TOKENIZERS_PARALLELISM=false
@@ -36,17 +37,6 @@ SYNC_PID=""
 IDLE_GUARD_PID=""
 TEE_PID=""
 
-stop_child() {
-  local target=$1 active_pid
-  [[ -n "${target}" ]] || return 0
-  # Never signal an old helper PID that may have been reused by another process.
-  for active_pid in $(jobs -pr); do
-    if [[ "${active_pid}" == "${target}" ]]; then
-      kill "${target}" 2>/dev/null || true
-    fi
-  done
-  wait "${target}" 2>/dev/null || true
-}
 write_exit() {
   "${PYTHON_BIN}" - "${LOGS}" "$1" "$2" <<'PY'
 import sys, time
@@ -66,9 +56,10 @@ finish() {
   local code=$? publication_code
   trap - EXIT INT TERM
   set +e
+  echo "[launcher cleanup] node=${NODE_RANK}, task_exit_code=${code}"
   # Wait for the guard's terminal status before the final dual publication.
-  stop_child "${IDLE_GUARD_PID}"
-  stop_child "${SYNC_PID}"
+  stop_job_child "${IDLE_GUARD_PID}" 'NPU idle guard' || { [[ "${code}" != 0 ]] || code=70; }
+  stop_job_child "${SYNC_PID}" 'log publisher' || { [[ "${code}" != 0 ]] || code=70; }
   echo "Scene replay launcher finished: node=${NODE_RANK}, exit_code=${code}"
   # Close and drain tee so the final pipeline tail is part of the snapshot.
   exec 1>&3 2>&4

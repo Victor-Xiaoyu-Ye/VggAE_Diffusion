@@ -1,6 +1,42 @@
 # Project Context
 
-## Saved Scene raw/EMA replay launcher (2026-10-09, latest)
+## Scene raw/EMA replay reviewed (2026-10-12, latest)
+
+Read docs/SCENE_RAW_EMA_RESULTS_20261012.md. stage52 completed216/216 with no
+case errors.216 metrics and216 previews match receipt hashes; all MP4s decode.
+108 legacy EMA cases exactly reproduce previous RAW/AE/copy metrics. Sampling
+completed on3x8; launcher cleanup hung afterward, no exit receipts. User reports
+idle reclamation after2h; log publisher continued~2h after all generation finished.
+Potential guard signal-handler Event reentrancy deadlock reproduced locally;
+no cluster stack to uniquely establish it. No need rerun to fill missing cases.
+Fix: signal sets plain flag, shared Event updated in normal cleanup;51/52 helper
+TERM wait bounded30s then KILL3s, current-shell job PID protection retained.
+22 CPU tests pass (10guard/4launcher/8audit), compile and shell checks; cluster
+shutdown fix untested. Guard never pulsed in this short run (max low553s<600s),
+so do not misreport failed occupation during normal sampling.
+
+Video online RAW L1:9185 .16530,71609 .14500,137104 .26728. Corresponding EMA:
+.16373/.16783/.17317.71609 online beats EMA24/27, but copy baseline .13471 beats
+it17/27; pixel L1 is not a generative pass/fail metric. Visuals show better mid-run
+structure and some recognizable short I2V, with remaining motion/shape failures.
+Final online all27 worse than mid-run; visible color blobs/grid artifacts in
+future frames, while anchor/AE remain normal. Both EMA evaluation defect and
+late online degradation are real. Do not infer the whole run never learned.
+Image online still blurred/structurally unreliable despite improvement over EMA.
+
+Generated latent std mid1.0283->final.7950; seven saved cases first-u1 x0 MSE
+.29683->.56587, so failure is already in first network prediction, not only solver
+accumulation. Old log loss increases after125k while LR monotonically decreases;
+rank0 local losses only, no grad-norm or image-task logs. Specific optimization
+cause unknown. Added rank1/8 logs confirm same late rise; all step IDs align,
+maximum relative LR difference<.000073%, not evidence of significant rank drift.
+71609 model is best of3 tested candidates, not all saved snapshots;
+prefer inspect later pre-degradation raw snapshots before choosing continuation.
+Available snapshots110603/124641/126964 bracket the rising-loss onset.
+No new training or checkpoint download. Local small audit files live on D under
+VggAE_DataAudit/scene_replay_20261012. Preserve sources, use separate output paths.
+
+## Saved Scene raw/EMA replay launcher (2026-10-09)
 
 Stage52 and audit_scene_flow_weights.py now expose read-only saved-checkpoint
 inference; see docs/SCENE_FLOW_WEIGHT_AUDIT_RUNBOOK.md. Existing3x8 ModelArts

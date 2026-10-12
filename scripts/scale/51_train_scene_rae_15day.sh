@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source "${SCRIPT_DIR}/../spatialvid_config.sh"
 source "${SCRIPT_DIR}/../lib/modelarts.sh"
+source "${SCRIPT_DIR}/../lib/job_cleanup.sh"
 export PYTHONPATH="${PROJECT}${PYTHONPATH:+:${PYTHONPATH}}"
 export MASTER_PORT="${MASTER_PORT:-29951}" HCCL_EXEC_TIMEOUT="${HCCL_EXEC_TIMEOUT:-7200}"
 export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 TOKENIZERS_PARALLELISM=false
@@ -31,20 +32,11 @@ SYNC_PID=$!
 IDLE_GUARD_PID=""
 finish() {
   local code=$?
-  trap - EXIT
-  if [[ -n "${IDLE_GUARD_PID}" ]]; then
-    # A failed helper's old PID may be reused during a 15-day job.
-    # Signal only a child that Bash still lists as running.
-    local active_pid
-    for active_pid in $(jobs -pr); do
-      if [[ "${active_pid}" == "${IDLE_GUARD_PID}" ]]; then
-        kill "${IDLE_GUARD_PID}" 2>/dev/null || true
-      fi
-    done
-    wait "${IDLE_GUARD_PID}" 2>/dev/null || true
-  fi
-  kill "${SYNC_PID}" 2>/dev/null || true
-  wait "${SYNC_PID}" 2>/dev/null || true
+  trap - EXIT INT TERM
+  set +e
+  echo "[launcher cleanup] node=${NODE_RANK}, task_exit_code=${code}"
+  stop_job_child "${IDLE_GUARD_PID}" 'NPU idle guard' || { [[ "${code}" != 0 ]] || code=70; }
+  stop_job_child "${SYNC_PID}" 'log publisher' || { [[ "${code}" != 0 ]] || code=70; }
   "${PYTHON_BIN}" - "${LOGS}" "${code}" <<'PY'
 import sys,time
 from pathlib import Path
@@ -56,6 +48,8 @@ PY
   exit "${code}"
 }
 trap finish EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 exec > >(tee -a "${LOGS}/pipeline.log") 2>&1
 # Cover CPU/OBS staging, rank0-only evaluation, save barriers and stage gaps.
 # Independent processes never enter HCCL or contribute to DI_throughput.

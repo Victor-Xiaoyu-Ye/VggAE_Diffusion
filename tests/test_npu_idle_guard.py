@@ -3,6 +3,7 @@ import multiprocessing as mp
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -129,6 +130,26 @@ class NPUIdleGuardTests(unittest.TestCase):
         finally:
             stop_workers(workers, stop, grace=.1)
         self.assertTrue(all(not process.is_alive() for process in workers))
+
+    def test_signal_interrupting_event_lock_does_not_deadlock_shutdown(self):
+        # Old handler (lambda *_: stop.set()) hangs at raise_signal here. Use a
+        # subprocess so a regression is bounded rather than hanging the suite.
+        code = '''import multiprocessing as mp, signal
+from scripts.npu_idle_guard import ShutdownRequest
+stop = mp.get_context('spawn').Event()
+shutdown = ShutdownRequest()
+signal.signal(signal.SIGTERM, shutdown)
+with stop._cond:
+    signal.raise_signal(signal.SIGTERM)
+assert shutdown.requested
+assert not stop.is_set()
+stop.set()
+assert stop.is_set()
+print('clean shutdown')
+'''
+        result = subprocess.run([sys.executable, '-c', code], capture_output=True,
+                                text=True, timeout=10, check=True)
+        self.assertIn('clean shutdown', result.stdout)
 
 
 if __name__ == '__main__':

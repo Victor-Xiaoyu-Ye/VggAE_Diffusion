@@ -3,6 +3,28 @@
 Read this file first. It defines the active project context, current goals,
 rules, and safe next steps for future agents.
 
+## Priority Update (2026-10-12, replay results reviewed)
+
+Stage52 completed216/216, zero case errors; all216 MP4 hashes/decode verified.
+Read docs/SCENE_RAW_EMA_RESULTS_20261012.md. All108 legacy EMA evals reproduce
+old metrics exactly. Video71609 online is clearly better than its oldEMA;
+RAW L1 .14500 vs .16783,24/27 improved. Some short I2V scenes are recognizable,
+but motion/complex geometry still fail. Final137104 online collapses to blobs
+and grid texture: L1 .26728,27/27 worse than71609. Do not resume final for quality.
+Only3 video checkpoints compared;71609 is a candidate, not global best. Image
+online reduces fragmentation but remains poor. EMA bug is NOT sole failure.
+Seven saved traces show final regression already at first u1 prediction.
+
+All3 launchers reached replay-completed then hung in cleanup; no exit.json,
+guard logs stopped, log publisher continued~2h. User's idle reclamation happened
+after useful sampling completed. Do not ask for rerun to obtain missing samples.
+SIGTERM Event.set reentrancy deadlock reproduced locally; cluster has no stack,
+so describe it as consistent with logs, not uniquely stack-confirmed.
+Fixed guard handler to plain flag and added bounded helper cleanup to51/52.
+22 CPU tests pass, including actual shell launcher lifecycle; cluster fix pending.
+Rank0/1/8 losses all rise late; LR relative difference<.000073%, no major drift.
+No new training launched. Preserve original artifacts and later healthy snapshots.
+
 ## Priority Update (2026-10-09, saved-weight replay ready)
 
 Stage52 is implemented: scripts/scale/52_audit_scene_flow_weights.sh. Read

@@ -1,5 +1,7 @@
 # Scene RAE 三节点完整训练结果（2026-10-08）
 
+2026-10-12补充：原始权重重采样已完成216/216。中期71,609 online明显优于旧EMA，最终137,104 online严重退化；此前不能判定的原始网络质量已有直接证据。详见[配对重采样结果](SCENE_RAW_EMA_RESULTS_20261012.md)，以下保留原始审计与更正过程。
+
 ## 2026-10-09 重要更正：低精度 EMA 使生成评估失真
 
 重新审计发现**确定的数值实现错误**：本轮 `train_scene_pipeline.py` 将 EMA shadow 设为 BF16，`utils/training.py` 在 shadow 精度内分别执行 `mul_(decay).add_(value, alpha=1-decay)`，decay 为 0.9995。旧 `train_r7_window_diffusion.py` 使用 FP32 EMA。本轮所有 image/video 预览都先 `ema.copy_to(model)`，没有原始 online 权重的生成对照。
