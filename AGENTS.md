@@ -3,6 +3,27 @@
 Read this file first. It defines the active project context, current goals,
 rules, and safe next steps for future agents.
 
+## Priority Update (2026-10-12, data and methods reassessment)
+
+Read docs/DATA_AND_DIFFUSION_REASSESSMENT_20261012.md for latest user concern
+about worse quality, mixed data and recent research. Actual cache is complete
+for selected17450train sources x4 =69800windows, NOT full SpatialVID-HQ.
+SpatialVID8448=8192street+256replay. Domain weights also oversample tiny sets.
+AE online sampling differs from frozen flow windows. temporal_valid is used
+by AE but omitted from cache; flow lacks task/physical-time conditioning.
+This is a task-definition risk, NOT proof static multiview is inherently bad
+or that mixed data uniquely caused late raw collapse. Conditions are sparse.
+OldFullHQ had1.440M successful windows,1.653B and4futureC192; Scene0.831B with
+8futureC256 has2.667x target elements and20.63x fewer windows. Eval IDs differ.
+Do not call mid-raw vs oldEMA improvement proof of beating old best videos.
+Survey throughOct12 includes GRACE(Oct7), DuoMatching(Oct2),4Director(Oct1),
+PerF(Sep28), SAF(Sep29), diffusibility(Sep23), RAEs and interface adaptation.
+Already tried x0/shift/DDT and oldaux; no magical missing sampler established.
+Proposed short matched domain/representation tests and teacher/latent bridges
+are research proposals ONLY; no architecture/config/training changed here.
+Preserve current AE, healthy raw snapshots and known native Wan reference.
+Persistent latent3D memory already appears in Mirage/PERSIST; novelty unproven.
+
 ## Priority Update (2026-10-12, replay results reviewed)
 
 Stage52 completed216/216, zero case errors; all216 MP4 hashes/decode verified.

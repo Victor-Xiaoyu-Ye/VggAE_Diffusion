@@ -1,6 +1,32 @@
 # Project Context
 
-## Scene raw/EMA replay reviewed (2026-10-12, latest)
+## Data and recent-method reassessment (2026-10-12, latest)
+
+Read docs/DATA_AND_DIFFUSION_REASSESSMENT_20261012.md. User says current results
+look worse and asks whether data are too mixed/full, plus a fresh methods survey.
+Actual production cache covers all selected17450train sources x4=69800windows;
+it is NOT full HQ. SpatialVID uses8192street+256replay. Other sources: DL3DV7716,
+ScanNet962,MVS96,Omni63,Point131,Spring34. DynamicReplica intentionally skipped.
+AE samples online; diffusion sees fixed windows, image stream fixed anchors.
+57.5% sampling weight belongs to sources marked temporal_valid=False in loader;
+cache drops this distinction and no fps/delta-time/task condition reaches flow.
+Do not say all such frames are unordered, or static multiview itself is invalid.
+Text/pose sparsity and tiny-domain repeat exposure make task ambiguity plausible.
+This does not identify cause of125k+ raw collapse; separate stability issue.
+Old1.440M windows/1.653B vs new69800/0.831B; new prediction elements2.667x larger.
+Different heldout IDs/samplers prevent strict old-new metric comparisons.
+
+Survey verified primary papers throughOct12: GRACE, DuoMatching,4Director,
+PerF, SAF, latent diffusibility; contextual RAEs, FreqWarm, EDM2, DFoT, iMF,
+DC-VideoGen, Mirage/PERSIST. Already adopted x0/shift/wide head; oldaux tried.
+Recent work motivates generator-compatible latent interfaces and external
+frame-quality priors, not automatic quality gains from loading Wan weights.
+Proposed narrow-task/mixed/old-AE short comparisons, interface bridges and
+correctable geometric state remain proposals, NOT implemented or launched.
+Official Wan/GAE weights are external references, not matched causal AE controls.
+Existing native Wan four-case evidence need not be regenerated from scratch.
+
+## Scene raw/EMA replay reviewed (2026-10-12)
 
 Read docs/SCENE_RAW_EMA_RESULTS_20261012.md. stage52 completed216/216 with no
 case errors.216 metrics and216 previews match receipt hashes; all MP4s decode.
