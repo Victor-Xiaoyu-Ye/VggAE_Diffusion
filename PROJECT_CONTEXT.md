@@ -1,5 +1,48 @@
 # Project Context
 
+## Paper-oriented research plan (2026-10-13, latest)
+
+User requests a complete work plan, realistic outcome expectations, evidence
+needed for a paper, and a separate data preparation list. Delivered
+docs/PAPER_RESEARCH_PLAN_20261013.md and docs/DATA_PREPARATION_REQUEST_20261013.md.
+No model/trainer/launcher was changed or run. This is a proposed next-round
+plan, not a claim the new pipeline is runnable. It preserves3x8/15days as an
+8640NPUh cluster envelope with24h rehearsal,72h pilots,144h paired main arms,
+72h focused ablations,48h eval/reserve. CPU implementation/metadata work first.
+Current51 needs new orchestration for3independent8-card pilots; topology-change
+warm start is not exact resume. Full new NPU shapes and cleanup remain untested.
+Currentflow cosine LR follows wall-clock budget while EMA followsstep. New
+matchedarms need update/exposure-based LR/warmup and matchedEMA; this change
+is planned, not implemented. Sameglobalbatch alone is insufficient control.
+
+Research question: does geometric pretraining improve real dynamic RGB video
+generation/efficiency while preserving measurable geometry? Existence of VGGT
+RGB denoising is already covered by GLD/LRFM/GAE, so not enough paper novelty.
+First stable short real-street I2V with current frozenSceneAE, then same-target
+1vs4history controls and pixel/semantic codec baselines; then at most one
+mechanism supported by cheap probes. No mandatoryT2I gate or immediate7-domain
+remix. Camera conditioning remains separate controlled task, not proof of
+autonomous future prediction. Long memory/interaction deferred until evidence.
+
+New architecture audit: actualStreamVGGT global attention is frame-causal.
+Future perturbation should not affect observed prefix; verify onNPU, do not
+assume a bidirectional set-encoder bug. Causal-prefix target dependencies are
+valid joint modelling; fixed-history+one-target encoding is only a candidate
+if context probes justify it. New context changes cache/stat/codec contract.
+CurrentC256 includes a learned rawRGB texture branch, so not tokens-onlyVGGT;
+no native geometry heads wired. Independent RGB geometry metrics can be used,
+but geometry-native latent claims need verified native head/feature interfaces.
+
+Historical data exposure must be audited before sealing newtest: current8192
+street cannot be repartitioned into unseenAE test. Trackcodec warm-start data,
+flow data and near-duplicate parents. Fixed100%-dataAE plusflow25/50/100%
+only measuresflow data efficiency; end-to-end claims needcodec exposure control.
+Currentassets suffice forpilot. User preparation prioritizesSpatialVID
+annotationframe-index/time/camera/parent mapping, DL3DV camera-to-currentRGB
+matching, andsmallGT/splits forheldoutgeometry. Posearray index!=rawframeindex;
+do notinventfps or replace missingpose withidentity. LargeRGB staysonOBS/D
+temporarymetadataonly. DynamicReplica stillskipped. No new data downloaded.
+
 ## Data and recent-method reassessment (2026-10-12, latest)
 
 Read docs/DATA_AND_DIFFUSION_REASSESSMENT_20261012.md. User says current results

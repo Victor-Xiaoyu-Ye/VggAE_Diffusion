@@ -3,6 +3,36 @@
 Read this file first. It defines the active project context, current goals,
 rules, and safe next steps for future agents.
 
+## Priority Update (2026-10-13, paper plan and data preparation)
+
+Read docs/PAPER_RESEARCH_PLAN_20261013.md and the separate actionable
+docs/DATA_PREPARATION_REQUEST_20261013.md. These are PLANS ONLY; no new launcher,
+history interface, codec baseline, training or cluster validation was completed.
+Priority: stable narrow-domain short I2V -> matched representation controls ->
+evidence-supported method. Current work is insufficient for a strong method
+paper; VGGT RGB diffusion alone is not novel (GLD/LRFM/GAE precedents).
+15-day3x8 envelope=8640NPUh, split into rehearsal, pilots, paired main runs,
+ablations and evaluation. Current51 locks3x8; three independent8-card pilots
+need new orchestration. 8->24 is not exact resume. Do not launch51 as this plan.
+Currentflow LR is wall-clock-budget based; matched experiments must implement
+update/exposure-based LR/warmup and matched EMA, not only match global batch.
+Current StreamVGGT IS frame-causal (aggregator global mask); no established
+future-to-past leakage. Prefix invariance is a contract test. Fixed-observed-
+context target encoding is a conditional hypothesis, not a decided innovation.
+Current C256 includes learned rawRGB texture encoder; NOT VGGT tokens-only.
+No original geometry heads are wired; pooled feature recovery is not native
+geometry readout. Preserve this distinction in paper claims and experiments.
+A/B history ablations must share future target encoding, normalization and
+decoder contract. New test splits must exclude relevant codec/warm-start train
+parents, not re-split the already-trained8192street set. Fixed-full-data codec
+with25/50/100% flow subsets measures FLOW data efficiency, not end-to-end.
+Data P0: SpatialVID annotation indexes/time/poses/K + parent mapping. P1: DL3DV
+cameras matching current RGB version; existing dataset official splits and
+small geometry eval subset. No large local raw downloads or extra mixed RGB
+required. Spatial pose[k] is annotation-indexed, not raw RGB frame k; actual
+timestamps required. DynamicReplica remains skipped. Quality checks guide
+research allocation, not automated blockers for subsequent valid stages.
+
 ## Priority Update (2026-10-12, data and methods reassessment)
 
 Read docs/DATA_AND_DIFFUSION_REASSESSMENT_20261012.md for latest user concern
