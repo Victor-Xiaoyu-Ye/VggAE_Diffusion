@@ -1,5 +1,13 @@
 # Large-scale training path
 
+Latest 2026-10-16: `53_train_scene_prefix_48h.sh` runs a3x8 two-day quality
+adaptation: frozenC256, sourcevideo71609 online, street8192only, observed4 ->
+future5 inoriginal8positions; freshAdam/FP32EMA. No AEtraining/trainRGBcache.
+Defaultall runs2updatepreflight then newprocessresume.46htotal/38htrain cap;
+newnamespace `scene_street_prefix4_48h_v1`. See [stage53 runbook](../../docs/SCENE_PREFIX_48H_RUNBOOK.md).
+CPU/Gloo andactualBashstub validationpassed; NPU andRGBquality pending.
+This is short-history continuation (~0.625s future), not single-image I2V.
+
 Latest 2026-09-23: `51_train_scene_rae_15day.sh` implements the user-approved
 RGB static/dynamic representation rebuild on3x8 910B: AE -> cache -> image ->
 image/video flow,312h stage budgets +48h reserve. Default `SCENE_STAGE=all`

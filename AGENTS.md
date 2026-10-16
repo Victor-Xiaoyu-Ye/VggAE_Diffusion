@@ -3,6 +3,28 @@
 Read this file first. It defines the active project context, current goals,
 rules, and safe next steps for future agents.
 
+## Priority Update (2026-10-16, two-day prefix quality run)
+
+Stage53 is implemented: scripts/scale/53_train_scene_prefix_48h.sh; read
+docs/SCENE_PREFIX_48H_RUNBOOK.md. User now has TWO DAYS, prior3x8 topology.
+Freeze productionSceneAE C256/statistics; warm start video71609 ONLINE only.
+Fresh Adam/FP32EMA; exclude all auxiliary domains and256replay by audited IDs:
+8192street x4 originalwindows. Four observed frames -> five future frames,
+about0.625s at nominal8fps; NOT single-image I2V or long-video success.
+Keep original8SceneFlow positions, concatenate cleanz1:4 + noisyfuture5.
+No futureGT/text/rays in conditions; sourceStreamVGGT causal-prefix test onNPU.
+24ranks filter2184oldshards once; preserve normalization, skip/log bad inputs.
+Expand originalstreet val4 to<=64 oncluster; source online baseline and new
+online/EMA paired videos. No claim data efficiency or isolated causal ablation.
+Newnamespace scene_street_prefix4_48h_v1; old production read-only. 46h total,
+38h train cap,2h finaleval reserve inside46 plus2h outer margin; step-basedLR.
+Hourlylatest/weights,4hourfullsnapshot,2hour8case eval;64case2seed finalbudget
+permits. Per-casehash/dualread-write; perrankRNG/cursor/badbank exactresume.
+Defaultall does2updates preflight then newprocessresume, no quality gate.
+Idle guard coversCPU/IO, excludedfromDI; boundedlaunchercleanup retained.
+CPU/Gloo and actualBashstub checks pass; NPU/fullshape/quality remain pending.
+This implements the quality pilot only, not all Oct13 paper-plan experiments.
+
 ## Priority Update (2026-10-13, paper plan and data preparation)
 
 Read docs/PAPER_RESEARCH_PLAN_20261013.md and the separate actionable

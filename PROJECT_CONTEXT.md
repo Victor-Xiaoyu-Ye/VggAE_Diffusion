@@ -1,5 +1,30 @@
 # Project Context
 
+## Two day quality experiment (2026-10-16, latest)
+
+User has48h for experiments. Implemented stage53 with existing3x8 topology;
+see docs/SCENE_PREFIX_48H_RUNBOOK.md. Fixed productionSceneAE C256 and source
+normalization; start video weights_step0071609.pt ONLINE. NewAdamW andFP32EMA,
+update-based LR1e-5->2e-6/30kupdates, warmup200,accum4,gradientclip1.
+Select original8192street IDs from auditedrole manifests, exclude256replay and
+sixotherdomains; repackage existing32768windows, no trainRGBreencoding.
+Original8modelslots remain: observedz1..3 + noisyz4..8; z0memory. Onlyfuture5
+getsflowloss/ODEupdates. No text/futurecamera. Approximately0.625s forecast,
+NOT single-frameI2V, longvideo or a proof of geometricmethod. Context/rank and
+sourceexposure differences mean this is a qualityadaptation, not causalablation.
+Oncluster prefix-invariance check;64originalvalstreet devcases attempted with
+badRGB skip. Source71609 sameprefix baseline,2hour8case online/EMA evaluation,
+64x2seed final evaluation withinbudget, reportpartial iftime exhausted.
+46h total includespreparation,38h traincap,2h evalreserve inside46;2h external
+margin. Preflight2updates automatically resumes innewtorchrunprocess. Full
+recovery includesoptimizer/EMA/perrankRNG/cursors/badshards andelapsedledger.
+Hourlylatest+weights,4hfullsnapshot;dualpublication/receiptSHA/recovery. Local
+snapshots bounded onlyafterbothrootsaccept; preserveallremote/sourceartifacts.
+Job-scopedidle guard activebeforestaging;DI excludesguard;boundedTERM/KILLexit.
+Newnamespace scene_street_prefix4_48h_v1. LocalCPU/Gloo,mirrorrecovery andBash
+stubtests pass; actualAscendshape/memory/HCCL/IO andquality checkedbythisrun.
+Stage53 is implemented, cluster has NOT been launched fromthisworkstation.
+
 ## Paper-oriented research plan (2026-10-13, latest)
 
 User requests a complete work plan, realistic outcome expectations, evidence
