@@ -3,6 +3,28 @@
 Read this file first. It defines the active project context, current goals,
 rules, and safe next steps for future agents.
 
+## Priority Update (2026-10-19, fixed-window scope clarified by user)
+
+The primary goal is high-quality fixed-window video diffusion in a VGGT-derived
+feature space. Long video / generated-context rollout is a supplementary
+experiment after fixed-window quality succeeds, not the next main milestone.
+The current four-observed / five-generated setting is a diagnostic baseline;
+do not silently treat its history length as the final task specification.
+For the present RGB/history-conditioned task, no new human depth, segmentation,
+detection, pose, action or caption labels are required. RGB supplies targets;
+frozen encoders supply feature/latent supervision. Existing CSV fields select
+data and frame/split metadata organize it; they are not generation conditions.
+SceneAE uses RGB/perceptual and teacher feature/relation supervision, with RGB
+temporal differences where valid. Stage53 ignores captions/rays and uses only
+observed-prefix latents as conditions. Historical mixed-flow runs could consume
+optional text/camera fields; distinguish them from this current run.
+Missing poses are not a blocker for fixed-window quality. Small existing GT
+subsets or clearly labelled pseudo-labels may support later geometry evaluation;
+camera-controlled generation would separately require aligned controls.
+Prioritize useful window coverage, continuity, duplicate checks, representation
+diagnostics and matched fixed-target experiments. Do not ask the user for bulk
+manual annotation or long-return videos. Read the updated data/plan priorities.
+
 ## Priority Update (2026-10-19, stage53 results reviewed)
 
 Stage53 completed 31,069 updates / 38.383 hours; all three nodes exited 0,

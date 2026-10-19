@@ -2,7 +2,11 @@
 
 日期：2026-10-13。对应 [论文研究计划](PAPER_RESEARCH_PLAN_20261013.md)。
 
-**当前不缺“再来几套RGB”，最缺现有RGB与时间、相机、来源分组的可靠对应。现有资产足够启动短视频基线，数据补充不应成为无限等待。** 本单只要求RGB帧/视频与必要元数据；训练目标仍是视频，不要求改成重建点云。
+**2026-10-19 用户明确主目标：先获得 VGGT 派生特征域中的高质量固定窗口视频。长视频只作为后续补充实验。** 本文原先涉及长期回访、轨迹和全量相机对齐的内容，不再作为当前主任务的数据准备要求。
+
+当前 RGB/历史条件生成无需新增人工 depth、pose、分割、检测、动作或 caption 标注。已有 RGB 是 AE 重建和视频监督，冻结编码器产生 feature/latent 目标；CSV 元数据用于筛选，帧索引和 split 用于组织数据。本轮 stage53 不把文本或相机字段输入生成器。首先利用现有 RGB 做窗口覆盖、连续性、重复和质量检查；无法取得原始父来源或精确 PTS 时保留已知信息和不确定性，不编造标注，也不阻塞合法的固定采样任务。
+
+相机/深度等额外标注仅在后续几何评估或明确加入控制的实验中按需使用。可优先复用小型现有 GT 子集；模型估计的伪标签必须与真实 GT 分开。当前不要求用户给全部训练视频补标注，也不要求新增长视频或点云。
 
 RGB继续放OBS。这里只检查目录、清单和小型annotation，必要临时文件放D盘；不把完整raw数据集下载到本机。
 
@@ -33,14 +37,15 @@ RGB继续放OBS。这里只检查目录、清单和小型annotation，必要临�
 
 | 优先级 | 数据 | 请补什么 | 不需要做什么 |
 |---|---|---|---|
-| **P0** | 当前SpatialVID-HQ街景及同域扩展 | 原CSV；`indexes.txt`、`poses.npy`、`intrinsics.npy`、`caption.json`所在路径与对应表；父视频/YouTube来源映射；缺失清单 | 不重新拉全量RGB，不为I2V手写caption |
+| **P0** | 当前SpatialVID-HQ街景及同域扩展 | 已有原CSV、RGB索引和缺失清单；父视频/YouTube来源映射若现成则提供，否则由我们先做近重复检查并披露限制 | 不重新拉全量RGB，不手写caption，不要求新增人工标注 |
+| 可选 | SpatialVID几何标注 | 若已有，提供`indexes.txt`、`poses.npy`、`intrinsics.npy`及对应说明；后续需要几何评估/控制时再适配 | 缺失不阻塞固定窗口RGB生成；不要求全量补标 |
 | **P1** | 当前DL3DV | **与手头RGB处理版本匹配的**相机、原始frame-ID映射、resize/crop说明、scene split；优先旧6,118 train RGB-only部分 | 不假设另一套DL3DV相机可直接配当前帧；不重搬已有RGB |
 | **P1** | ScanNet++v2 | 官方scene split；DSLR原图/去畸变版本、匹配相机与畸变参数；少量GT几何评估对应 | 不把照片顺序当fps；暂不要求所有点云 |
 | **P2** | PointOdyssey | 保留原131/15/13 split；已有train131/val15足够开发，论文test若可取得再补13条及tracks/visibility/camera | 不重搬train；不要求先补全test才能启动 |
 | **P2** | Spring | 原scene/左右camera/frame映射和可用GT；项目34/3/10与官方split对应 | 不索要官方未公开test GT，不把左右相机交错为时间序列 |
 | 暂缓 | DynamicReplica、更多合成/重建库 | DynamicReplica原split找到后再议 | 用户已同意跳过，无需阻止其他训练 |
 
-**现在最有价值的交付只有三项**：SpatialVID annotation+父来源映射；DL3DV相机与现有RGB版本的对应；ScanNet/Point/Spring原split和少量验证GT。其余按实验缺口补。
+**当前用户只需提供已有而尚未共享的索引/说明文件；没有更多标注也可以继续主任务。** RGB覆盖、窗口级质量/运动代理、近重复筛查由我们在集群侧计算。DL3DV相机对应、ScanNet/Point/Spring原split和少量GT属于可选的后续几何证据准备，不要求现在补齐。
 
 每个来源先提供20–50条有代表性的元数据记录和小annotation路径，确认适配后再导出全清单。无需先人工清洗全部数据，我们负责批量核验和坏样本记录。
 
