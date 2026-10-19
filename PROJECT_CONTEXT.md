@@ -1,5 +1,30 @@
 # Project Context
 
+## Prefix quality results (2026-10-19, latest)
+
+Stage53 completed successfully: 31,069 updates, 38.383 hours, 24 ranks and
+three node exits of 0. All 32,768 street windows and 672 evaluation cases are
+complete; receipts/sizes agree, and 227 preview MP4 hashes/decodes were checked.
+Read docs/SCENE_PREFIX_RESULTS_20261019.md. Most street scenes now preserve
+recognizable structures and short motion. The current reference is step31069
+FP32 EMA, with comparable online results. This remains four observed frames
+to five future frames (~0.625s), not single-image I2V or a long world model.
+Same new task RAW L1: source .21735 -> final EMA .08913 / online .08940;
+AE .04381, COPY .10496. EMA beats COPY on 51/64 cases and source on 64/64,
+averaging seeds within each case. The source was unadapted to the prefix
+interface: no claim of 59% improvement over historical 1->8 or single-factor
+attribution. No late collapse or idle reclamation; the fixed eight-case trend
+improved mostly before step1845, then approached a plateau.
+Remaining failures include near-field occlusion/parallax, people, detail and
+seed sensitivity. Case041 AE brightness is already wrong (L1 .29821 vs
+generation .34676); separate codec and flow errors. This review changed no
+architecture, data or launcher. Proposed next work: matched history ablation
+with identical future targets, generated-history rollouts respecting fresh
+RGB encoder context, and a targeted AE exposure audit. Geometry contributions
+and long horizons remain untested. Validation IDs are held out; physical
+parent deduplication remains unknown. Evidence and previews:
+D:/workspace/VggAE_DataAudit/scene_prefix_20261019.
+
 ## Two day quality experiment (2026-10-16, latest)
 
 User has48h for experiments. Implemented stage53 with existing3x8 topology;

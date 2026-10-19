@@ -3,6 +3,32 @@
 Read this file first. It defines the active project context, current goals,
 rules, and safe next steps for future agents.
 
+## Priority Update (2026-10-19, stage53 results reviewed)
+
+Stage53 completed 31,069 updates / 38.383 hours; all three nodes exited 0,
+without idle reclamation. Read docs/SCENE_PREFIX_RESULTS_20261019.md.
+All 32,768 windows / 2,184 shards and 672 evaluation cases are complete.
+Verified hashes and decoded 227 MP4 previews; viewed all 64 seed101 final
+frames, 12 case timelines and three additional seed202 comparisons.
+Final FP32 EMA is the current street 4->5 reference; online is comparable.
+Same new task: source71609 RAW L1 .21735 -> online .08940 / EMA .08913;
+AE .04381, COPY .10496. EMA beats COPY on 51/64 cases after averaging seeds.
+Source is unadapted 4->5, not legacy 1->8: no claim of 59% historical
+perceptual improvement or single-factor attribution. C256 includes an RGB
+texture branch. Geometry, control and long rollouts remain unvalidated.
+No late collapse; four rank logs stable, max gradient norm .638. Fixed eight
+cases: source .20890 -> step1845 EMA .10881 -> final .10028; most improvement
+occurred early, followed by a plateau. Do not compare the eight-case monitor
+mean with the final 64-case mean. Near occlusion, parallax, pedestrians and
+detail still fail; case036 is seed-sensitive. Case041 AE itself brightens
+the image (L1 .29821 vs final EMA .34676), so this is not diffusion-only.
+Prefix probe future RMS 0 / prefix-length RMS .003985; held-out IDs are clean,
+but physical parent deduplication remains unproven. Retain this baseline;
+proposed next work is matched history controls and generated-context rollouts,
+not blind training extension or AE replacement. This turn reviewed results only.
+Evidence: D:/workspace/VggAE_DataAudit/scene_prefix_20261019. No large weights
+or raw dataset files were downloaded.
+
 ## Priority Update (2026-10-16, two-day prefix quality run)
 
 Stage53 is implemented: scripts/scale/53_train_scene_prefix_48h.sh; read
