@@ -39,6 +39,21 @@ def record_progress(store, budget, **fields):
     store.write_json('progress.json', dict(previous, total_spent=budget.elapsed(), **fields))
 
 
+def labelled_preview(frames, columns, history):
+    """Burn column/phase labels into new diagnostic previews, not metric tensors."""
+    import cv2
+    data=(frames.detach().cpu().float().clamp(0,1).numpy()*255).round().astype(np.uint8)
+    width=data.shape[2]//len(columns)
+    labelled=np.zeros((len(data),data.shape[1]+32,data.shape[2],3),dtype=np.uint8)
+    labelled[:,32:]=data
+    for i,frame in enumerate(labelled):
+        phase='OBSERVED' if i<history else 'FUTURE'
+        for j,column in enumerate(columns):
+            cv2.putText(frame,f'{column} | f{i} {phase}',(j*width+5,21),
+                cv2.FONT_HERSHEY_SIMPLEX,.48,(255,255,255),1,cv2.LINE_AA)
+    return torch.from_numpy(labelled).float()/255.
+
+
 def trim_local_snapshots(store, keep=2):
     """Bound private disk use only after both durable destinations accepted save."""
     status = store.json(store.status_name) or {}
@@ -277,7 +292,7 @@ def prepare_evaluation(source, store, plan, cfg, cohort, selection, encoder_path
 
 def evaluate(model, ema, rae, samples, mean, std, store, plan, cfg, device,
              rank, world, step, *, full=False, baseline=False, budget=None):
-    label='source71609' if baseline else f'step{step:07d}'
+    label=cfg.get('source_label','source71609') if baseline else f'step{step:07d}'
     selected=samples if full else samples[:cfg['monitor_cases']]
     seeds=cfg['eval_seeds'] if full else cfg['eval_seeds'][:1]
     arms=['online'] if baseline else ['online','ema']
@@ -303,6 +318,10 @@ def evaluate(model, ema, rae, samples, mean, std, store, plan, cfg, device,
                     except (OSError,ValueError,RuntimeError) as exc:
                         print(f'[prefix eval] recomputing {prefix}: {exc}',flush=True)
                         receipt=None
+                    needs_oracle=full and index in cfg.get('oracle_cases',[]) and seed==seeds[0]
+                    if receipt and (receipt['metadata'].get('preview_status')!='completed' or
+                        (needs_oracle and receipt['metadata'].get('oracle_preview_status')!='completed')):
+                        receipt=None  # Repair failed media, including final-only oracle diagnostics.
                     if receipt:
                         store.publish([*receipt['files'],prefix+'.done.json'])
                         rows.append(receipt['metadata'])
@@ -312,8 +331,25 @@ def evaluate(model, ema, rae, samples, mean, std, store, plan, cfg, device,
                         row,frames,z=sample_case(model,rae,sample,mean,std,device,
                             history=cfg['history'],steps=cfg['sample_steps'],seed=seed)
                         row.update(step=step,weights=arm,case_index=index,source=label)
-                        files=preview(store,prefix+'.mp4',frames)
+                        display=labelled_preview(frames,['RAW','AE','GENERATED '+arm,'COPY'],cfg['history']) \
+                            if cfg.get('label_previews') else frames
+                        files=preview(store,prefix+'.mp4',display)
                         row['preview_status']='completed' if prefix+'.mp4' in files else 'failed'
+                        if cfg.get('convergence') and seed==seeds[0]:
+                            from utils.scene_motion_eval import probe_case
+                            row['denoising_probe']=probe_case(model,rae,sample,mean,std,device,
+                                history=cfg['history'],seed=303)
+                        if needs_oracle:
+                            from utils.scene_motion_eval import oracle_branches
+                            diagnostic,oracle_rgb=oracle_branches(rae,sample,z,device,history=cfg['history'])
+                            row['gt_assisted_diagnostic']=diagnostic
+                            if cfg.get('label_previews'):
+                                oracle_rgb=labelled_preview(oracle_rgb,
+                                    ['RAW','AE','GENERATED','GT GEO + PRED TEX','PRED GEO + GT TEX'],cfg['history'])
+                            oracle_file=prefix+'_GT_ASSISTED_ORACLE.mp4'
+                            oracle_files=preview(store,oracle_file,oracle_rgb)
+                            row['oracle_preview_status']='completed' if oracle_file in oracle_files else 'failed'
+                            files+=oracle_files
                         store.save(prefix+'.pt',dict(latent=z,frame_ids=sample['frame_ids'],
                             history=cfg['history'],seed=seed),plan['identity'])
                         store.write_json(prefix+'.json',row)
@@ -326,30 +362,42 @@ def evaluate(model, ema, rae, samples, mean, std, store, plan, cfg, device,
                         store.write_json(prefix+'.error.json',row); rows.append(row)
                     metrics(store,dict(stage='eval',step=step,case=index,weights=arm,
                         DI_throughput=cfg['sample_steps']*(cfg['views']-cfg['history'])*model.grid**2/max(time.monotonic()-start,1e-6),
-                        scope='future denoiser tokens; sampling plus decode/publication wall time'),rank)
+                        scope='future sampler tokens/npu; wall time includes decode, probes, oracles and publication'),rank)
             finally:
                 if previous is not None:
                     model.load_state_dict(previous); previous=None
         gathered=gather(rows,world)
+        all_rows=[row for batch in gathered for row in batch]
+        probe_summary={}
+        if cfg.get('convergence'):
+            for arm in arms:
+                probes=[r['denoising_probe'] for r in all_rows if r.get('weights')==arm
+                    and 'error' not in r and 'denoising_probe' in r]
+                if len(probes)==len(selected) and len(selected)>0:
+                    probe_summary[arm]={key:sum(float(r[key]) for r in probes)/len(probes)
+                        for key in ('probe_global_mse','probe_change_mse')}
+                    probe_summary[arm]['cases']=len(probes)
         if rank==0:
-            all_rows=[row for batch in gathered for row in batch]
             expected=len(selected)*len(seeds)*len(arms)
             store.write_json(f'eval/{label}/summary.json',dict(samples=all_rows,step=step,
                 expected=expected,completed=sum('error' not in r for r in all_rows),
                 previews=sum(r.get('preview_status')=='completed' for r in all_rows),
                 status='completed' if len(all_rows)==expected and not any(
-                    'error' in r or r.get('preview_status')!='completed' for r in all_rows) else 'partial',
+                    'error' in r or r.get('preview_status')!='completed' or
+                    r.get('oracle_preview_status','completed')!='completed' for r in all_rows) else 'partial',
                 full=full,quality_policy='report_only',history=cfg['history'],future=cfg['views']-cfg['history'],
+                denoising_probe=probe_summary,
                 note='Source and new weights use identical prefix/noise. Observed frames are not generated.'))
     finally:
         if previous is not None:
             model.load_state_dict(previous)
         model.train(was_training); restore_rng_state(rng)
     barrier()
+    return probe_summary
 
 
 def train(a,cfg,plan,source,store,manifest,selection,rae_path,weights_path,eval_path,
-          budget,device,rank,world):
+          budget,device,rank,world,*,data_store=None):
     identity=plan['identity']
     latest='train/checkpoint_latest.pt'
     if rank==0:
@@ -378,6 +426,10 @@ def train(a,cfg,plan,source,store,manifest,selection,rae_path,weights_path,eval_
         del warm
     optimizer=torch.optim.AdamW(model.parameters(),lr=cfg['lr'],betas=(.9,.95),weight_decay=0.)
     ema=EMA(model,decay=.9995,dtype=torch.float32,warmup=True)
+    tracker=None
+    if cfg.get('convergence'):
+        from utils.scene_motion_objective import PlateauTracker
+        tracker=PlateauTracker(**cfg['convergence'])
     step=cursor=0; train_spent=0.
     saved_rng=saved_bank=None
     if saved:
@@ -390,9 +442,11 @@ def train(a,cfg,plan,source,store,manifest,selection,rae_path,weights_path,eval_
         progress=store.json('progress.json') or {}
         train_spent=max(train_spent,progress.get('train_spent',0.))
         budget.spent=max(budget.spent,saved.get('total_spent',0.))
+        if tracker is not None and saved.get('convergence_state'):
+            tracker.load_state_dict(saved['convergence_state'])
     del saved
     core=wrap(model,device,world)
-    bank=FilteredLatentSamples(store,manifest,selection,seed=cfg['seed'],
+    bank=FilteredLatentSamples(data_store or store,manifest,selection,seed=cfg['seed'],
         on_bad_shard=lambda row:append_metrics(str(store.local/f'train/bad-r{rank:03d}.jsonl'),row))
     if saved_bank is not None:
         bank.load_state_dict(saved_bank)
@@ -409,18 +463,38 @@ def train(a,cfg,plan,source,store,manifest,selection,rae_path,weights_path,eval_
             history=cfg['history'],generated_frames=cfg['views']-cfg['history'],
             decoder_temporal_blocks=getattr(rae.config,'decoder_temporal_blocks',None),
             schedule='update-based; wall time only stops resource use'))
-    if not store.json('eval/source71609/summary.json'):
-        if step:
-            raise RuntimeError('Source baseline receipt missing on trained resume; do not relabel new weights')
-        evaluate(model,ema,rae,samples,mean,std,store,plan,cfg,device,rank,world,0,full=True,baseline=True,budget=budget)
+    baseline_label=cfg.get('source_label','source71609')
+    baseline_summary=store.json(f'eval/{baseline_label}/summary.json')
+    if not baseline_summary or (tracker is not None and baseline_summary.get('status')!='completed'):
+        original=None
+        try:
+            if step:
+                if tracker is None:
+                    raise RuntimeError('Source baseline receipt missing on trained resume; do not relabel new weights')
+                original={k:v.detach().cpu().clone() for k,v in model.state_dict().items()}
+                warm=load_staged(weights_path)
+                model.load_state_dict(warm['model'],strict=True); del warm
+            evaluate(model,ema,rae,samples,mean,std,store,plan,cfg,device,rank,world,0,
+                full=True,baseline=True,budget=budget)
+        finally:
+            if original is not None:
+                model.load_state_dict(original)
     if saved_rng is not None:
         # Model/codec constructors and DDP setup consume RNG. Restore only once
         # all initialization has finished, immediately before the next update.
         restore_rng_state(saved_rng)
-    train_clock=StageBudget(cfg['train_hours']*3600,train_spent)
+    train_clock=StageBudget(cfg['train_hours']*3600 if cfg['train_hours'] else float('inf'),train_spent)
     start=last_save=last_eval=last_weights=last_full=time.monotonic()
     tokens=processed=0
     flow=WindowFlow(time_shift=max(1.,math.sqrt(model.grid**2*model.channels/4096)))
+    stop_reason='step_cap'
+    stopped=store.json('train/stopped.json') if tracker is not None else None
+    if stopped and (stopped['identity']!=identity or stopped['step']!=step):
+        raise ValueError('Training stop decision does not match recovered checkpoint')
+    if stopped:
+        stop_reason=stopped['stop_reason']
+    elif tracker is not None and tracker.converged:
+        stop_reason='optimization_plateau_requires_visual_review'
 
     def save(*,final=False,periodic=True,full_snapshot=False):
         nonlocal last_weights,last_full
@@ -431,6 +505,8 @@ def train(a,cfg,plan,source,store,manifest,selection,rae_path,weights_path,eval_
                 optimizer=optimizer.state_dict(),ema=ema.state_dict(),ema_metadata=ema.metadata(),
                 step=step,cursors=cursors,rng=rng,bank_states=bank_states,
                 train_spent=train_clock.elapsed(),total_spent=budget.elapsed())
+            if tracker is not None:
+                payload['convergence_state']=tracker.state_dict()
             with heartbeat('saving complete training recovery point',rank):
                 store.save(latest,payload,identity)
                 if full_snapshot or final:
@@ -455,8 +531,15 @@ def train(a,cfg,plan,source,store,manifest,selection,rae_path,weights_path,eval_
             store.write_json('preflight_complete.json',dict(step=step,identity=identity))
         return
     while step<cfg['max_steps']:
+        if stopped:
+            stop_reason=stopped['stop_reason']
+            break
+        if tracker is not None and tracker.state_dict().get('converged',False):
+            stop_reason='optimization_plateau_requires_visual_review'
+            break
         stop=budget.elapsed()>=budget.seconds-cfg['reserve_hours']*3600 or budget.interrupted or train_clock.due()
         if any_rank(stop,device):
+            stop_reason='interrupted' if budget.interrupted else 'resource_cap'
             break
         optimizer.zero_grad(set_to_none=True)
         total_loss=plain=0.; noise_bins=[0.,0.,0.]; noise_counts=[0,0,0]
@@ -469,7 +552,14 @@ def train(a,cfg,plan,source,store,manifest,selection,rae_path,weights_path,eval_
             sync=core.no_sync() if world>1 and micro+1<cfg['accum'] else contextlib.nullcontext()
             with sync,amp(device):
                 prediction=PrefixFlowNet(core,batch.known)(noisy,u,batch.anchor)
-                loss=flow.loss(prediction,batch.target,noise,u)
+                motion_metrics={}
+                if cfg.get('motion_objective') is not None:
+                    from utils.scene_motion_objective import motion_weighted_x0_loss
+                    last=batch.known[:,-1:] if batch.known.shape[1] else batch.anchor
+                    loss,motion_metrics=motion_weighted_x0_loss(prediction,batch.target,last,u,
+                        loss_floor=flow.loss_floor,**cfg['motion_objective'])
+                else:
+                    loss=flow.loss(prediction,batch.target,noise,u)
                 if any_rank(not torch.isfinite(loss).item(),device):
                     raise RuntimeError('Nonfinite prefix flow loss')
                 (loss/cfg['accum']).backward()
@@ -498,23 +588,41 @@ def train(a,cfg,plan,source,store,manifest,selection,rae_path,weights_path,eval_
                 scope='generated future tokens/npu; wall time including IO/save/eval, excludes guard',
                 train_hours=train_clock.elapsed()/3600,total_hours=budget.elapsed()/3600,
                 peak_allocated_gib=memory_gib(device)),rank)
+            if motion_metrics:
+                metrics(store,dict(stage='motion_objective',step=step,**{
+                    k:float(v) for k,v in motion_metrics.items()},
+                    DI_throughput=tokens/max(time.monotonic()-start,1e-6)),rank)
         if a.stage=='preflight' and step>=2:
             save(periodic=False,full_snapshot=True)
             if rank==0:
                 store.write_json('preflight_complete.json',dict(step=step,identity=identity,
                     note='Full shape optimizer/save complete; launcher starts new process for exact resume'))
             return
-        ev=any_rank(time.monotonic()-last_eval>=cfg['eval_seconds'],device)
+        ev=any_rank(step%cfg['eval_every_steps']==0 if cfg.get('eval_every_steps') else
+            time.monotonic()-last_eval>=cfg['eval_seconds'],device)
         sv=any_rank(time.monotonic()-last_save>=cfg['save_seconds'],device)
         if ev:
-            evaluate(model,ema,rae, samples,mean,std,store,plan,cfg,device,rank,world,step,budget=budget)
+            probe=evaluate(model,ema,rae, samples,mean,std,store,plan,cfg,device,rank,world,step,budget=budget)
+            if tracker is not None and 'ema' in probe:
+                convergence=tracker.update(step,dict(x0_mse=probe['ema']['probe_global_mse'],
+                    changed_region_x0_mse=probe['ema']['probe_change_mse']))
+                if rank==0:
+                    store.write_json('train/convergence.json',convergence)
+                    print('[optimization convergence] '+json.dumps(convergence),flush=True)
             last_eval=time.monotonic()
         if sv or ev:
-            save(periodic=time.monotonic()-last_weights>=cfg['weights_seconds'],
+            save(periodic=ev or time.monotonic()-last_weights>=cfg['weights_seconds'],
                 full_snapshot=time.monotonic()-last_full>=cfg['full_snapshot_seconds'])
             last_save=time.monotonic()
+        if tracker is not None and ev and 'ema' in probe and convergence.get('converged',False):
+            stop_reason='optimization_plateau_requires_visual_review'
+            break
     save(final=True,full_snapshot=True)
     if not any_rank(budget.interrupted,device):
+        if rank==0 and tracker is not None:
+            store.write_json('train/stopped.json',dict(identity=identity,step=step,stop_reason=stop_reason,
+                note='Optimizer finished; incomplete evaluation can resume without more updates.'))
+        barrier()
         evaluate(model,ema,rae,samples,mean,std,store,plan,cfg,device,rank,world,step,full=True,budget=budget)
         if rank==0:
             record_progress(store,budget,step=step,train_spent=train_clock.elapsed(),phase='finished')
@@ -522,6 +630,7 @@ def train(a,cfg,plan,source,store,manifest,selection,rae_path,weights_path,eval_
             store.write_json('complete.json',dict(identity=identity,step=step,total_spent=budget.elapsed(),
                 train_spent=train_clock.elapsed(),quality_policy='report_only',
                 evaluation_status=evaluation['status'],
+                stop_reason=stop_reason,
                 selected='not automatically selected; inspect online/EMA intermediate videos'))
     else:
         raise SystemExit(75)

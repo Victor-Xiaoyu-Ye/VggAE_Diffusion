@@ -87,26 +87,30 @@ if [[ "${SCENE_NPU_IDLE_GUARD:-1}" == 1 ]]; then
 fi
 # Used only for prefix-contract verification and additional heldout RGB encoding.
 # No historical R7 checkpoint, text encoder, Wan generator or raw train data.
-ensure_local_checkpoint "${STREAMVGGT_CKPT}" "${STREAMVGGT_URL:-}" 'StreamVGGT' "${STREAMVGGT_MIRROR_URL:-}"
+if [[ "${SCENE_PREFIX_NEEDS_ENCODER:-1}" == 1 ]]; then
+  ensure_local_checkpoint "${STREAMVGGT_CKPT}" "${STREAMVGGT_URL:-}" 'StreamVGGT' "${STREAMVGGT_MIRROR_URL:-}"
+fi
+SOURCE_SUFFIX="${SCENE_PREFIX_SOURCE_SUFFIX-production}"
+ENTRYPOINT="${SCENE_PREFIX_ENTRYPOINT:-train_scene_prefix.py}"
 ARGS=(--config "${SCENE_PREFIX_CONFIG:-${PROJECT}/configs/scene_prefix_48h_v1.json}"
   --cohort "${PROJECT}/configs/scene_cohort_v1.json"
   --selection "${PROJECT}/configs/scene_street_ids_v1.json"
   --encoder "${STREAMVGGT_CKPT}"
-  --source-local "${SCALE_ROOT}/${SOURCE_NAMESPACE}/production"
-  --source-root "${SCALE_REMOTE_ROOT}/${SOURCE_NAMESPACE}/production"
-  --source-root "${SCALE_MIRROR_ROOT}/${SOURCE_NAMESPACE}/production"
+  --source-local "${SCALE_ROOT}/${SOURCE_NAMESPACE}${SOURCE_SUFFIX:+/${SOURCE_SUFFIX}}"
+  --source-root "${SCALE_REMOTE_ROOT}/${SOURCE_NAMESPACE}${SOURCE_SUFFIX:+/${SOURCE_SUFFIX}}"
+  --source-root "${SCALE_MIRROR_ROOT}/${SOURCE_NAMESPACE}${SOURCE_SUFFIX:+/${SOURCE_SUFFIX}}"
   --output "${OUT}" --root "${PRIMARY}" --root "${MIRROR}")
-echo "Prefix quality run: ${SOURCE_NAMESPACE}/video online71609 -> ${NAMESPACE}"
+echo "Prefix quality run: ${SOURCE_NAMESPACE} -> ${NAMESPACE}; entry=${ENTRYPOINT}"
 echo 'Observed frames0..3; generated frames4..8; no text or future camera conditions.'
 if [[ "${STAGE}" == all || "${STAGE}" == preflight ]]; then
-  STAGE_LOG_FILE="" run_torchrun "${PROJECT}/train_scene_prefix.py" "${ARGS[@]}" \
+  STAGE_LOG_FILE="" run_torchrun "${PROJECT}/${ENTRYPOINT}" "${ARGS[@]}" \
     --stage preflight --startup-seconds "$(( $(date +%s)-PREFIX_STARTED ))"
   PREFIX_STARTED=$(date +%s)
 fi
 if [[ "${STAGE}" == all || "${STAGE}" == train ]]; then
   # A genuinely new process restores optimizer/FP32 EMA/RNG/cursors after the
   # full-shape preflight. Poor sample quality never blocks this next phase.
-  STAGE_LOG_FILE="" run_torchrun "${PROJECT}/train_scene_prefix.py" "${ARGS[@]}" \
+  STAGE_LOG_FILE="" run_torchrun "${PROJECT}/${ENTRYPOINT}" "${ARGS[@]}" \
     --stage train --startup-seconds "$(( $(date +%s)-PREFIX_STARTED ))"
 fi
 echo "Scene prefix run complete: ${MIRROR}/eval/"

@@ -3,6 +3,33 @@
 Read this file first. It defines the active project context, current goals,
 rules, and safe next steps for future agents.
 
+## Priority Update (2026-10-19, convergence-based motion comparison)
+
+User retains 3x8 Ascend but now requests duration based on convergence, not a
+two-day cutoff. Stage54 is implemented; read docs/SCENE_MOTION_CONVERGENCE_RUNBOOK.md.
+Launch scripts/scale/54_train_scene_motion_converge.sh: sequential control/motion,
+both fresh AdamW/FP32EMA from stage53 step31069 ONLINE, frozen production C256
+AE and original stats, same 32768 street windows read directly from stage53.
+Only change is bounded detached log-latent-temporal-change weighting of x0 loss;
+strength0 exactly recovers old loss/gradient. This is NOT foreground/flow GT,
+can respond to camera/context changes, and changes the regression objective.
+No new annotations, encoder, raw download, cache, camera conditions or rollout.
+Every1000 updates save paired online/EMA samples; 16 fixed dev probes monitor
+global/high-change unweighted x0 MSE at four fixed noise levels. At least4000
+steps and4 checks without >.2% improvement stops on optimization plateau.
+This is NOT visual quality success. Hours0 disables time cutoff;40000step cap
+remains explicitly reported as cap. Compare equal-step snapshots separately
+from independently stopped endpoints. Final64cases x2seeds; selected7cases
+have explicitly named GT_ASSISTED_ORACLE branch-swap videos, NOT generation.
+Partial media retries without further updates after train/stopped.json; source
+baseline repairs use source weights. Double IO, hourly/full snapshots, DI and
+idle guard retained. CPU/Gloo/shell tests pass; real NPU/quality still pending.
+Local selected-person timelines show errors beyond AE from first future frame;
+more RGB motion can accompany worse output. No unique causal root yet established.
+Future camera design: continuous relative poses/rays; WASD frontend integrates
+a defined path. Controls may reduce camera uncertainty, not determine object
+motion. Implementation and geometry claims remain pending, no promised cure.
+
 ## Priority Update (2026-10-19, fixed-window scope clarified by user)
 
 The primary goal is high-quality fixed-window video diffusion in a VGGT-derived
