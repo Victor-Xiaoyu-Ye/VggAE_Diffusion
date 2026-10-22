@@ -207,8 +207,9 @@ class TrackTeacherTests(unittest.TestCase):
             self.assertEqual(hashlib.sha256(data).hexdigest(), item['upstream_sha256'], rel)
 
     def test_real_stream_camera_head_is_causal_and_cpu_dpt_positions_match(self):
-        from third_party.streamvggt_trackmask.heads.camera_head import CameraHead
-        from third_party.streamvggt_trackmask.heads.dpt_head import DPTHead
+        from utils.scene_trackmask_vendor import import_stream_vendor
+        CameraHead = import_stream_vendor('heads.camera_head').CameraHead
+        DPTHead = import_stream_vendor('heads.dpt_head').DPTHead
         from utils.scene_trackmask_stream import DeviceCompatibleDPTHead
         torch.manual_seed(13)
         head = CameraHead(dim_in=32, trunk_depth=1, num_heads=4).eval()
@@ -226,7 +227,8 @@ class TrackTeacherTests(unittest.TestCase):
         torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
     def test_real_tracker_full_sequence_updates_future_but_single_frame_locks_query(self):
-        from third_party.streamvggt_trackmask.heads.track_modules.base_track_predictor import BaseTrackerPredictor
+        from utils.scene_trackmask_vendor import import_stream_vendor
+        BaseTrackerPredictor = import_stream_vendor('heads.track_modules.base_track_predictor').BaseTrackerPredictor
         torch.manual_seed(17)
         tracker = BaseTrackerPredictor(latent_dim=16, hidden_size=32, depth=1,
                                        corr_levels=1, corr_radius=1, use_spaceatt=False).eval()

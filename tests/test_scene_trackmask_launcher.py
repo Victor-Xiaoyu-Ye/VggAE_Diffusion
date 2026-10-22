@@ -155,7 +155,7 @@ esac
             elapsed = time.monotonic()-started
             default_namespace = ('scene_trackmask_stage54_v1' if
                                  env.get('SCENE_TRACKMASK_TEACHER_KIND') == 'vggt' else
-                                 'scene_trackmask_stream_stage54_v1')
+                                 'scene_trackmask_stream_stage54_v2')
             namespace = env.get('SCENE_TRACKMASK_NAMESPACE', default_namespace)
             logs = root/f'output/{namespace}/launcher/node{node_rank}'
             self.assertTrue((logs/'exit.json').is_file(), result.stdout+result.stderr)
@@ -280,7 +280,7 @@ esac
         self.assertEqual(run['result'].returncode, 0, run['result'].stdout+run['result'].stderr)
         self.assertNotIn('official-preparation', run['order'])
         self.assertIn('checkpoint-staging', run['order'])
-        self.assertIn('/output/scene_trackmask_stream_stage54_v1\n', run['arguments'])
+        self.assertIn('/output/scene_trackmask_stream_stage54_v2\n', run['arguments'])
         self.assertIn('Ignoring VGGT_TRACKMASK_DOWNLOAD_OFFICIAL', run['log'])
 
     def test_stream_default_urls_and_code_override_are_passed_literally(self):

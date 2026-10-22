@@ -11,10 +11,14 @@ import torch
 from torch import nn
 
 from streamvggt.models.aggregator import Aggregator
-from third_party.streamvggt_trackmask.heads.camera_head import CameraHead
-from third_party.streamvggt_trackmask.heads.dpt_head import DPTHead
-from third_party.streamvggt_trackmask.heads.track_head import TrackHead
-from third_party.streamvggt_trackmask.heads.utils import create_uv_grid, position_grid_to_embed
+from utils.scene_trackmask_vendor import import_stream_vendor
+
+CameraHead = import_stream_vendor('heads.camera_head').CameraHead
+DPTHead = import_stream_vendor('heads.dpt_head').DPTHead
+TrackHead = import_stream_vendor('heads.track_head').TrackHead
+_head_utils = import_stream_vendor('heads.utils')
+create_uv_grid = _head_utils.create_uv_grid
+position_grid_to_embed = _head_utils.position_grid_to_embed
 
 
 @lru_cache(maxsize=8)

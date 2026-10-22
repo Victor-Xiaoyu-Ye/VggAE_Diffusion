@@ -1,5 +1,18 @@
 # Project Context
 
+## Cluster Stream head import repair (2026-10-22)
+
+Stage55 failed before checkpoint loading: generic third_party namespace imports
+can be shadowed by installed/preloaded packages with that name. Loader now binds
+the exact bundled source directory to a private package, preserving foreign
+third_party and supporting unrelated cwd. Missing bundled files produce an
+explicit code-update instruction. Loader is in source identity. Default results
+move to scene_trackmask_stream_stage54_v2 because the failedv1 run already saved
+an old code contract. Reuse existing Stream weights, no public downloads.
+76 diagnostic regressions pass including external/preloaded package collision
+and unrelatedcwd imports. Cluster source upload completeness and realNPU remain
+unverified; missing files now have explicit diagnostic paths.
+
 ## StreamVGGT trackmask reuse (2026-10-22, latest decision)
 
 User requested reusing the existing StreamVGGT checkpoint and will not download

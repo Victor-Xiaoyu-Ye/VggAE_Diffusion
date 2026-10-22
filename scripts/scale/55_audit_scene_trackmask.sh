@@ -16,7 +16,7 @@ configure_modelarts_distributed
 SOURCE_NAMESPACE="${SCENE_TRACKMASK_SOURCE_NAMESPACE:-scene_street_motion_converge_v1_control}"
 TEACHER_KIND="${SCENE_TRACKMASK_TEACHER_KIND:-streamvggt}"
 case "${TEACHER_KIND}" in
-  streamvggt) DEFAULT_NAMESPACE='scene_trackmask_stream_stage54_v1' ;;
+  streamvggt) DEFAULT_NAMESPACE='scene_trackmask_stream_stage54_v2' ;;
   vggt) DEFAULT_NAMESPACE='scene_trackmask_stage54_v1' ;;
   *) echo 'SCENE_TRACKMASK_TEACHER_KIND must be streamvggt or vggt.' >&2; exit 2 ;;
 esac

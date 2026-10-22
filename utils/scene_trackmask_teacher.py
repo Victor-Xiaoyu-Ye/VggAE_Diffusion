@@ -39,8 +39,11 @@ def teacher_source_identity(backend, code_root=None):
         if code_root is not None:
             raise ValueError('StreamVGGT uses the repository backbone and pinned heads; '
                              'a teacher-code override is not supported')
+        from utils.scene_trackmask_vendor import validate_stream_vendor_sources
+        validate_stream_vendor_sources(STREAM_VENDORED_ROOT)
         roots = [project / 'streamvggt', STREAM_VENDORED_ROOT]
         files.append(project / 'utils' / 'scene_trackmask_stream.py')
+        files.append(project / 'utils' / 'scene_trackmask_vendor.py')
         commit = STREAM_UPSTREAM_COMMIT
     elif backend == 'vggt':
         root = Path(code_root or VENDORED_ROOT).resolve()
@@ -66,8 +69,9 @@ def teacher_source_identity(backend, code_root=None):
 def import_streamvggt_teacher(code_root=None):
     provenance = teacher_source_identity('streamvggt', code_root)
     from utils.scene_trackmask_stream import StreamVGGTTrackModel
-    from third_party.streamvggt_trackmask.utils.pose_enc import pose_encoding_to_extri_intri
-    return StreamVGGTTrackModel, pose_encoding_to_extri_intri, provenance
+    from utils.scene_trackmask_vendor import import_stream_vendor
+    pose_decoder = import_stream_vendor('utils.pose_enc').pose_encoding_to_extri_intri
+    return StreamVGGTTrackModel, pose_decoder, provenance
 
 
 def import_official_vggt(code_root=None):

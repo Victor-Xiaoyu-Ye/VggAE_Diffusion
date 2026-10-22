@@ -3,6 +3,20 @@
 Read this file first. It defines the active project context, current goals,
 rules, and safe next steps for future agents.
 
+## Priority Update (2026-10-22, cluster Stream head imports repaired)
+
+User's stage55 setup failed importing third_party.streamvggt_trackmask before
+checkpoint loading. A foreign regular/preloaded third_party package reproduces
+the same failure despite repository-first PYTHONPATH. Stream vendor sources now
+load from the exact repository directory under a private namespace via
+utils/scene_trackmask_vendor.py; foreign third_party is untouched. Missing code
+files are explicitly reported, not mistaken for missing weights. Full source
+identity includes the loader. Default output is scene_trackmask_stream_stage54_v2
+to avoid the old failed run's incompatible contract; explicitly override any
+inherited v1 namespace. Same existing Stream checkpoint; no new model download.
+76 diagnostic regressions pass, including subprocess imports with installed and
+preloaded foreign third_party packages from unrelated cwd; no real NPU forward.
+
 ## Priority Update (2026-10-22, reuse StreamVGGT for trackmask)
 
 User decided NOT to download original VGGT. Stage55 now defaults to

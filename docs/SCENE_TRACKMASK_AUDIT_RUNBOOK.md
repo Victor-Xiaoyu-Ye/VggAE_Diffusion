@@ -5,6 +5,22 @@
 最新决定：默认复用以前训练的完整 StreamVGGT checkpoint，用户无需下载原版 VGGT。
 真实 StreamVGGT/NPU 前向和 mask 质量仍须集群验证；本地逻辑测试通过不代表生成改善。
 
+2026-10-22 集群导入修复：某些依赖提供同名普通 `third_party` 包，会遮蔽仓库的隐式命名空间，
+即使仓库在 PYTHONPATH 首位也可能出现 `No module named 'third_party.streamvggt_trackmask'`。
+现按本仓库文件路径在私有命名空间加载任务头，保留其他依赖的同名包；不依赖当前工作目录。
+若实际缺少源码文件，启动会列出缺少路径并要求更新完整仓库代码，不要求下载新权重。
+默认结果目录改为 `scene_trackmask_stream_stage54_v2`，避免本次失败作业留下的旧代码契约阻止重跑。
+若启动环境曾手动设置旧namespace，重跑时显式指定v2：
+
+```bash
+SCENE_TRACKMASK_NAMESPACE=scene_trackmask_stream_stage54_v2 \
+bash scripts/scale/55_audit_scene_trackmask.sh
+```
+
+本次导入修复的76项诊断回归测试通过；新增独立子进程覆盖“后续路径中安装普通third_party”、
+“提前加载外部third_party”、仓库外cwd与缺源码提示，并确认外部同名包保持原样。
+检查只导入完整任务头类与pose解码器，不构造大模型或加载真实权重；910B完整前向仍待重跑。
+
 ## 要回答的问题
 
 1. 原始二维位移会把相机移动下的建筑标为动态；加入相机与深度解释后，误判能否减少？
@@ -95,7 +111,7 @@ bash scripts/scale/55_audit_scene_trackmask.sh
 
 | 环境变量 | 默认 / 用途 |
 |---|---|
-| `SCENE_TRACKMASK_NAMESPACE` | `scene_trackmask_stream_stage54_v1`，新诊断结果命名空间 |
+| `SCENE_TRACKMASK_NAMESPACE` | `scene_trackmask_stream_stage54_v2`，修复后的诊断结果命名空间 |
 | `SCENE_TRACKMASK_TEACHER_KIND` | `streamvggt`；原版对照需显式 `vggt` |
 | `SCENE_TRACKMASK_SOURCE_NAMESPACE` | `scene_street_motion_converge_v1_control` |
 | `SCENE_TRACKMASK_SOURCE_LOCAL` | 本节点源run目录，可指向用户已准备的下载结果 |
@@ -113,7 +129,7 @@ bash scripts/scale/55_audit_scene_trackmask.sh
 
 ## 保存、恢复和查看
 
-输出写入 ModelArts OUTPUT_URL，并镜像到owner的 `output/scale/scene_trackmask_stream_stage54_v1/`。
+输出写入 ModelArts OUTPUT_URL，并镜像到owner的 `output/scale/scene_trackmask_stream_stage54_v2/`。
 每case在教师推理后先保存并双写原始轨迹、深度、相机、置信度和校验收据，然后再计算mask/渲染。
 渲染中断可以复用教师NPZ；缺失或损坏本地文件可从另一输出副本恢复。源码、配置、教师与输入签名进入恢复身份。
 更改阈值、模型或代码时使用新namespace，避免把旧mask解释成新算法结果。
