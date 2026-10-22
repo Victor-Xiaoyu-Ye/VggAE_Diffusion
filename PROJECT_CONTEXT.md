@@ -2,6 +2,11 @@
 
 ## Trackmask diagnostic, not a new training method (2026-10-22)
 
+Cluster has no public network access (user clarification). User will download
+the official checkpoint externally and provide local/OBS assets. Cluster
+launch uses VGGT_TRACKMASK_DOWNLOAD_OFFICIAL=0; public downloader is only an
+optional preparation tool for a separately connected machine.
+
 User approved testing the idea and explicitly prioritizes quality over keeping
 VGGT tracking. Stage55 is implemented; see docs/SCENE_TRACKMASK_AUDIT_RUNBOOK.md.
 Use existing stage54 control6000EMA64preview cases (lossy RAW/AE/GEN columns),

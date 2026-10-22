@@ -58,18 +58,16 @@ mask 即使可靠，也不能直接给出未来人物位置、速度和动作。
 可以用1个节点，也可沿用3节点。每节点1个NPU0教师进程，按case编号分片，无HCCL集体通信。
 其余已分配设备仍由既有idle guard覆盖，但这些工作不计入DI。这个小诊断不需要三节点训练预算。
 
-首次无官方权重、且集群能够访问Hugging Face时：
+用户已明确集群不能访问公网。请在有网络的机器下载官方完整权重，再上传集群可访问的OBS，
+或由作业准备阶段复制到各节点本地。同一份权重供所有节点使用，不需要分别下载不同模型。
+
+唯一必需模型文件：[官方 model.safetensors](https://huggingface.co/facebook/VGGT-1B/resolve/860abec7937da0a4c03c41d3c269c366e82abdf9/model.safetensors)，
+5,026,367,224字节，SHA256为 `f164acf60724910d8fe1578bb499d800850c7bb0948db7555c413f9fbe60467e`。
+模型Python代码已随项目附带；无需再下载`model.pt`或整个Hugging Face仓库。
+集群使用本地/OBS模式，禁止开启公网下载：
 
 ```bash
-VGGT_TRACKMASK_DOWNLOAD_OFFICIAL=1 \
-bash scripts/scale/55_audit_scene_trackmask.sh
-```
-
-下载器使用固定revision、大小和SHA256，支持Range续传，下载在idle guard启动之后执行。
-每个未准备权重的节点会下载约5.03GB；有完整校验文件则复用。不在本机运行这条下载命令。
-如果集群不能访问Hugging Face，使用已有的完整官方权重路径或主备OBS来源：
-
-```bash
+VGGT_TRACKMASK_DOWNLOAD_OFFICIAL=0 \
 VGGT_TRACKMASK_CHECKPOINT=/cache/yexiaoyu/vggae_ref/VGGT-1B/model.safetensors \
 VGGT_TRACKMASK_CHECKPOINT_URL='<已有官方VGGT权重的OBS地址>' \
 VGGT_TRACKMASK_CHECKPOINT_MIRROR_URL='<可选备用地址>' \

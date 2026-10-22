@@ -5,6 +5,10 @@ rules, and safe next steps for future agents.
 
 ## Priority Update (2026-10-22, trackmask diagnostic implemented)
 
+User clarified the cluster has NO public network access. User will download
+official VGGT weights elsewhere and stage via local/OBS. Always use
+VGGT_TRACKMASK_DOWNLOAD_OFFICIAL=0 on this cluster; do not recommend HF downloads there.
+
 User approved a small test of VGGT track-derived dynamic masks, and explicitly
 allows replacing this approach if it does not improve results. Read
 docs/SCENE_TRACKMASK_AUDIT_RUNBOOK.md. Stage55 audits existing stage54 control
