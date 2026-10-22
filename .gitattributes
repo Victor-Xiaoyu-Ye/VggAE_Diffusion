@@ -1,0 +1,4 @@
+# Preserve the pinned upstream diagnostic source/license verbatim, including
+# its existing whitespace. Authored project files retain normal diff checks.
+third_party/vggt_trackmask/LICENSE.txt -text -whitespace
+third_party/vggt_trackmask/vggt/** -text -whitespace

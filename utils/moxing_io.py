@@ -82,7 +82,8 @@ def copy_directory(source, destination):
 
 def read_text(path):
     if not is_remote_path(path):
-        with open(path) as handle:
+        # Match remote UTF-8 decoding and atomic JSON writers on Windows too.
+        with open(path, encoding='utf-8') as handle:
             return handle.read()
     payload = _mox().file.read(path, binary=False)
     return payload.decode("utf-8") if isinstance(payload, bytes) else payload

@@ -1,5 +1,58 @@
 # Project Context
 
+## Trackmask diagnostic, not a new training method (2026-10-22)
+
+User approved testing the idea and explicitly prioritizes quality over keeping
+VGGT tracking. Stage55 is implemented; see docs/SCENE_TRACKMASK_AUDIT_RUNBOOK.md.
+Use existing stage54 control6000EMA64preview cases (lossy RAW/AE/GEN columns),
+strip32pxheader withoutresize. No rawdataset or productionweights needed.
+Separate pinned official full-head VGGT produces camera/depth/2Dtracks; our
+productionStreamVGGT has onlyaggregator. Official source vendored withlicense,
+checkpoint5.03GB onlyexplicitcluster download; no compatibleweights/accelerator
+available locally.64inputpairs checked; realteacher/NPU/maskquality stillpending.
+Camera-compensated sparse residual includes independent reverse-depth projection;
+localizedbadquerydepth falsepositive was reproduced and changedtoUNKNOWN.
+Confidence/occlusion/globalcamera failure, shortpersistence and uncoveredpixels
+remainUNKNOWN; correlatedteachererrors stillpossible. Notsemanticsegmentation.
+Full9frame and observed4frame teacher calls separate, no futuremaskcondition.
+Per-case teacherNPZ savedbeforeanalysis/render; hashes, dualread/write andresume.
+DI usefulteacherframes/second plus allocated-device average; guardexcluded.
+One worker pernode, noHCCL; 1or3nodes supported. Prepdownloads underidleguard.
+Localmath/fake-teacher/media/Bash tests are not realgeometry-quality evidence.
+Ifteacher unreliable, compare independenttracking/flow; ifmask reliablebutRGB
+poor, revisit motioncorrespondence, futuretexture anddecoder sensitivities.
+ProductionAE/DiT/configs unchanged; no dynamicembedding orattentionmask trained.
+
+## Stage54 reviewed from local results (2026-10-22)
+
+Read docs/SCENE_MOTION_RESULTS_20261022.md. User downloaded control/motion to
+D:/中转站; review did not access OBS or weights. Both arms completed6000updates
+on24ranks, ~7.98h each,6node exits0.1088case receipts complete;3306non-PT
+attachments matchSHA/size;1130MP4 fully decode. No numerical/IO/badshard/idle
+reclamation evidence. DI last100 records control1429.96/motion1417.55 tokens/s/NPU;
+maxloggedallocated25.397GiB. Weight contents/exactrestart not locallyverified.
+Final64cases x2seeds RAW L1: source31069online .08940048;controlonline/EMA
+.08942967/.08890248;motion .08982384/.08926629. Motion EMA is .409% worse than
+control, wins16/64cases, despite .288% better high-change supervisedprobe and
+2.75% better RGB-change-amplitude error. These proxies do not prove motion
+correctness; visual people/occlusion errors persist. No quality breakthrough.
+Botharms EMA probe best2000 on16fixedcases, then4stale checks;6000 is supervised
+plateau,not proof all possibletraining converged. Finalsummary expands16->64;
+filtermatchedcases. Keepstage53 FP32EMA reference,control6000EMA candidate;
+do notpromote motionor select2000 globallyfromonly16cases. No newtrainer.
+Oracle7cases controlEMA GEN=.122837,GTgeo+predtex=.122626,predgeo+GTtex=.072095,
+AE=.072219;all28arm/weight/case combinations favor GTtexture replacement.
+Same sourcepattern and excludingexposurecase041 preservefinding. GTlatent
+hybrids are future-assisted diagnostics,notgenerationorGTdepth/pose. Geo changes
+pixels but little netRAW L1 gain;accuracyvsdecoder sensitivityvsredundancy remain
+unresolved. Do notclaim VGGT unused. Texture can encode spatialshape;fullzteacher
+recovery/relation do notforcegeo contribution. Nextproposed cheapdiagnostic:
+geo mean/zero/shuffle and standardizednoisecurves onclean+sampledstates, with
+symmetrictexturecontrol and exactdecoded/local metrics; decidearchitectureonly
+afterward. Avoidmoremotionweightcoefficients. No maskAE/control implemented.
+Evidence D:/workspace/VggAE_DataAudit/scene_motion_20261022. OBS availability is
+still unknown; manuallydownloaded files do not implybucketrecovery.
+
 ## Convergence-based dynamic-detail comparison (2026-10-19)
 
 User changed duration from about two days to convergence, retaining3nodes x8.

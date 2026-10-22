@@ -3,6 +3,50 @@
 Read this file first. It defines the active project context, current goals,
 rules, and safe next steps for future agents.
 
+## Priority Update (2026-10-22, trackmask diagnostic implemented)
+
+User approved a small test of VGGT track-derived dynamic masks, and explicitly
+allows replacing this approach if it does not improve results. Read
+docs/SCENE_TRACKMASK_AUDIT_RUNBOOK.md. Stage55 audits existing stage54 control
+EMA64cases using lossy RAW/AE/GENERATED preview columns, no AE/DiT training.
+Separate official full-head VGGT teacher, pinned source/checkpoint; production
+StreamVGGT has no tracking head. No official teacher weights on this CPU-only
+PC; no real VGGT/NPU inference or mask-quality claim yet.64localinputs verified.
+Bidirectional camera+depth reprojection, confidence/occlusion/global checks,
+static/dynamic/unknown and sparse support; depth errors can still fool it.
+Full9frame teacher and observed4frame teacher are separate forwards; future
+labels never become generation conditions. Per-case teacherNPZ/media/receipts,
+dualIO, DI and idle guard retained. scripts/scale/55_audit_scene_trackmask.sh
+supports1+nodes,oneactiveNPU/node; official5.03GBdownload is explicitoptin and
+only afterguard. OBS availability still unconfirmed. No hard attention mask.
+Iftrackingfails compareotherteachers;ifmaskworksbutgenerationdoesn't, investigate
+motioncorrespondence/textureprediction/decoder ratherthanblindmaskweight sweeps.
+
+## Priority Update (2026-10-22, stage54 results reviewed locally)
+
+User manually downloaded stage54 to D:/中转站; OBS was NOT accessed. Read
+docs/SCENE_MOTION_RESULTS_20261022.md. Both24-rank arms completed6000 updates,
+~7.98h each, all6node exits0. Every source/monitor/final eval complete;1130MP4
+fully decode and3306non-PT receipt files match SHA/size. No NaN/OOM/badshard
+or idle reclamation evidence. Local weights absent; checkpoint/resume unverified.
+Fixed64cases x2seeds final RAW L1: source31069online .08940048;
+controlonline/EMA .08942967/.08890248; motion .08982384/.08926629.
+Motion EMA is .409% worse than control and wins16/64cases; small high-change
+probe/amplitude improvements do NOT fix ghosted people. Keep stage53reference;
+control6000EMA is a candidate, not a visual breakthrough. No new training/code.
+Both EMA probes best at2000 on fixed16cases, then4stale checks;6000 stopping
+means supervised plateau, not visual convergence. Final summary expands to64.
+Seven-case oracle: controlEMA GEN .122837, GTgeo .122626, GTtexture .072095,
+AE .072219; source already shows same asymmetry. Excluding exposure case041
+preserves result. GT means FUTURE cached latent, not depth/pose; not generation.
+Geo replacement changes pixels, so no claim geo unused. Could be accurategeo,
+decoder low sensitivity or redundant information; require zero/mean/shuffle/
+standardized perturbation on clean+sampled states before deciding. Texture is
+RGB spatial state and can carry shape, not just colors. Current teacher losses
+see fullz and do not enforce geo necessity. Do not blindly sweep motion weights.
+Evidence D:/workspace/VggAE_DataAudit/scene_motion_20261022; no OBS retry needed
+to discuss these results. Bucket recovery not established by local files.
+
 ## Priority Update (2026-10-19, convergence-based motion comparison)
 
 User retains 3x8 Ascend but now requests duration based on convergence, not a
