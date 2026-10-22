@@ -1,0 +1,62 @@
+{
+  "repository": "https://github.com/wzzheng/StreamVGGT",
+  "commit": "05682bcb05683c4c71522e9cb618fc8ca349063c",
+  "files": {
+    "heads/camera_head.py": {
+      "upstream_path": "src/streamvggt/heads/camera_head.py",
+      "upstream_sha256": "cdf5028935a5ead17d0cef862da2fe0b1b70800042a65a1f2b4f63bebbcecf6e"
+    },
+    "heads/dpt_head.py": {
+      "upstream_path": "src/streamvggt/heads/dpt_head.py",
+      "upstream_sha256": "1527cfcf1583f3ac3e1da4bc7643d40441ec8b792faad3aee3d828ea62433a12"
+    },
+    "heads/head_act.py": {
+      "upstream_path": "src/streamvggt/heads/head_act.py",
+      "upstream_sha256": "5f43ccda6fabc2659086e7b3f4923c2c4eedffa9725cfb49ac2d2b1d7a8dc1fb"
+    },
+    "heads/track_head.py": {
+      "upstream_path": "src/streamvggt/heads/track_head.py",
+      "upstream_sha256": "358df22d53da71040b17150cb046e4cca536c8c017bd38ca8f9246316ab2468a"
+    },
+    "heads/utils.py": {
+      "upstream_path": "src/streamvggt/heads/utils.py",
+      "upstream_sha256": "3b3e15fcbfc6d73d4ef291cfcf7c9357f1dbd8718662d04e996aeeed6dbe0e7f"
+    },
+    "heads/track_modules/__init__.py": {
+      "upstream_path": "src/streamvggt/heads/track_modules/__init__.py",
+      "upstream_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "heads/track_modules/base_track_predictor.py": {
+      "upstream_path": "src/streamvggt/heads/track_modules/base_track_predictor.py",
+      "upstream_sha256": "52004057c8df1f0a1bda77f16ca5725cf78666dc1852eaf475c5b8546d0f0658"
+    },
+    "heads/track_modules/blocks.py": {
+      "upstream_path": "src/streamvggt/heads/track_modules/blocks.py",
+      "upstream_sha256": "537761e200bc49fe97a6814186f65d6a04037f2d1ae22811fecaebb0f2e6cd38"
+    },
+    "heads/track_modules/modules.py": {
+      "upstream_path": "src/streamvggt/heads/track_modules/modules.py",
+      "upstream_sha256": "97517ed8606b8f3cb45bac084063ccf93f1084b10a6b2f0dd693c3e41ade51d8"
+    },
+    "heads/track_modules/utils.py": {
+      "upstream_path": "src/streamvggt/heads/track_modules/utils.py",
+      "upstream_sha256": "163b73a0753801d13386ba715dcec0e0fda747132892e5b8fefc217c65a70b42"
+    },
+    "utils/pose_enc.py": {
+      "upstream_path": "src/streamvggt/utils/pose_enc.py",
+      "upstream_sha256": "cc01606b046b2f3db5141f4e6512a61172d1df2913b2aef485d1adb88e18e342"
+    },
+    "utils/rotation.py": {
+      "upstream_path": "src/streamvggt/utils/rotation.py",
+      "upstream_sha256": "7fc9d4d34e93b212c79b761ea9f963baff18f8cfbb78ba9e2c24e403222c6608"
+    },
+    "LICENSE.txt": {
+      "upstream_path": "LICENSE.txt",
+      "upstream_sha256": "e0eb0aae5e2658b11ad65864bca446e7ed1d59a461ff02395b9e637bf41052e4"
+    }
+  },
+  "local_changes": {
+    "heads/camera_head.py": "head_act import points to local package; production streamvggt.layers intentionally reused"
+  },
+  "production_backbone": "streamvggt.models.aggregator.Aggregator"
+}

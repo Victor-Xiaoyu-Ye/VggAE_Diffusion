@@ -1,6 +1,7 @@
-"""Offline official VGGT teacher for track-mask diagnostics, never generation inputs.
+"""Offline StreamVGGT / VGGT teachers for track-mask diagnostics.
 
-This is deliberately separate from the production causal StreamVGGT encoder.
+This adapter is separate from training; the StreamVGGT backend reuses the
+production causal backbone and restores the matching camera/depth/track heads.
 No weights are downloaded, and every required camera/depth/tracking weight must
 exist and match before inference. All returned coordinates refer to the supplied
 RGB tensor; this adapter performs no implicit resize or crop.
@@ -21,7 +22,52 @@ import torch
 
 VENDORED_ROOT = Path(__file__).resolve().parents[1] / 'third_party' / 'vggt_trackmask'
 UPSTREAM_COMMIT = 'a288dd0f14786c93483e45524328726ab7b1b4ce'
+STREAM_VENDORED_ROOT = VENDORED_ROOT.parent / 'streamvggt_trackmask'
+STREAM_UPSTREAM_COMMIT = '05682bcb05683c4c71522e9cb618fc8ca349063c'
 REQUIRED_GROUPS = ('aggregator', 'camera_head', 'depth_head', 'track_head')
+
+
+def teacher_source_identity(backend, code_root=None):
+    """Hash runtime sources without importing torch models or allocating weights.
+
+    Include the production StreamVGGT tree because the diagnostic intentionally
+    reuses its NPU-compatible causal aggregator and transformer layers.
+    """
+    project = Path(__file__).resolve().parents[1]
+    files = [Path(__file__).resolve()]
+    if backend == 'streamvggt':
+        if code_root is not None:
+            raise ValueError('StreamVGGT uses the repository backbone and pinned heads; '
+                             'a teacher-code override is not supported')
+        roots = [project / 'streamvggt', STREAM_VENDORED_ROOT]
+        files.append(project / 'utils' / 'scene_trackmask_stream.py')
+        commit = STREAM_UPSTREAM_COMMIT
+    elif backend == 'vggt':
+        root = Path(code_root or VENDORED_ROOT).resolve()
+        roots = [root / 'vggt']
+        commit = UPSTREAM_COMMIT if root == VENDORED_ROOT.resolve() else None
+    else:
+        raise ValueError('Teacher backend must be streamvggt or vggt')
+    digest = hashlib.sha256()
+    for root in roots:
+        if not root.is_dir():
+            raise FileNotFoundError(f'Teacher source directory is missing: {root}')
+        for path in sorted(root.rglob('*.py')):
+            # Include the root label but not the absolute installation path.
+            digest.update((root.name + '/' + path.relative_to(root).as_posix()).encode())
+            digest.update(path.read_bytes())
+    for path in files:
+        digest.update(path.relative_to(project).as_posix().encode())
+        digest.update(path.read_bytes())
+    return {'code_sha256': digest.hexdigest(), 'code_roots': [str(p) for p in roots],
+            'upstream_commit': commit}
+
+
+def import_streamvggt_teacher(code_root=None):
+    provenance = teacher_source_identity('streamvggt', code_root)
+    from utils.scene_trackmask_stream import StreamVGGTTrackModel
+    from third_party.streamvggt_trackmask.utils.pose_enc import pose_encoding_to_extri_intri
+    return StreamVGGTTrackModel, pose_encoding_to_extri_intri, provenance
 
 
 def import_official_vggt(code_root=None):
@@ -50,28 +96,29 @@ def import_official_vggt(code_root=None):
         sys.path.remove(str(root))
     if not Path(model_module.__file__).resolve().is_relative_to(root):
         raise RuntimeError('Imported VGGT does not belong to requested checkout')
-    digest = hashlib.sha256()
-    for path in sorted((root / 'vggt').rglob('*.py')):
-        digest.update(path.relative_to(root).as_posix().encode())
-        digest.update(path.read_bytes())
-    provenance = {'code_root': str(root), 'code_sha256': digest.hexdigest(),
-                  'upstream_commit': UPSTREAM_COMMIT if root == VENDORED_ROOT.resolve() else None}
+    provenance = {'code_root': str(root), **teacher_source_identity('vggt', code_root)}
     return model_module.VGGT, pose_module.pose_encoding_to_extri_intri, provenance
 
 
 def checkpoint_state(payload):
-    """Accept plain official weights or a conventional state_dict/model wrapper."""
+    """Accept the same checkpoint wrappers as the production encoder loader."""
     if not isinstance(payload, Mapping):
         raise TypeError('Checkpoint must contain a tensor state dictionary')
-    for name in ('state_dict', 'model'):
-        if name in payload and isinstance(payload[name], Mapping):
+    for name in ('model_state_dict', 'model', 'state_dict', 'ema_state_dict'):
+        if name in payload:
+            if not isinstance(payload[name], Mapping):
+                raise TypeError(f'Checkpoint wrapper {name} must contain a tensor state dictionary')
             payload = payload[name]
             break
     if not payload or not all(isinstance(k, str) and torch.is_tensor(v) for k, v in payload.items()):
         raise TypeError('Checkpoint is not a pure tensor state dictionary')
-    if all(k.startswith('module.') for k in payload):
-        payload = {k[len('module.'):]: v for k, v in payload.items()}
-    return payload
+    state = {}
+    for name, value in payload.items():
+        key = name.removeprefix('module.')
+        if key in state:
+            raise ValueError(f'Duplicate checkpoint key after removing module. prefix: {key}')
+        state[key] = value
+    return state
 
 
 def validate_checkpoint_coverage(model, state):
@@ -94,7 +141,7 @@ def validate_checkpoint_coverage(model, state):
               'unexpected': unexpected,
               'ignored_point_head_keys': sum(k.startswith('point_head.') for k in state if k not in expected)}
     if missing or mismatched or unexpected:
-        raise ValueError('Incompatible full VGGT checkpoint; no randomly initialized heads are allowed: '
+        raise ValueError('Incompatible full VGGT/StreamVGGT checkpoint; no randomly initialized heads are allowed: '
                          + json.dumps(report, ensure_ascii=False))
     return report
 
@@ -151,10 +198,21 @@ def validate_predictions(outputs, frames, queries):
 
 
 class VGGTTrackTeacher:
-    """Full bidirectional VGGT diagnostics; NEVER a causal generation conditioner."""
+    """Full-window geometry/tracking diagnostics; NEVER an online conditioner.
+
+The StreamVGGT backbone and camera head are causal, but its tracking head uses
+all supplied frames. Always run a separate observed-prefix pass when assessing
+what could have been known from observations alone.
+"""
 
     def __init__(self, checkpoint, code_root=None, device='cpu', precision='float32',
-                 query_stride=21, query_margin=7, query_chunk_size=0):
+                 query_stride=21, query_margin=7, query_chunk_size=0, backend='vggt'):
+        if backend not in ('streamvggt', 'vggt'):
+            raise ValueError('Teacher backend must be streamvggt or vggt')
+        if backend == 'streamvggt' and code_root is not None:
+            raise ValueError('StreamVGGT uses the repository backbone and pinned heads; '
+                             'a teacher-code override is not supported')
+        self.backend = backend
         self.device = _device(device)
         if precision not in ('float32', 'bfloat16'):
             raise ValueError('precision must be float32 or bfloat16')
@@ -169,15 +227,20 @@ class VGGTTrackTeacher:
         self.query_chunk_size = int(query_chunk_size)
         path = Path(checkpoint).expanduser().resolve()
         if not path.is_file():
-            raise FileNotFoundError(f'Explicit local full VGGT checkpoint required: {path}')
-        model_class, self.pose_decoder, provenance = import_official_vggt(code_root)
+            raise FileNotFoundError(f'Explicit local full {backend} checkpoint required: {path}')
+        importer = import_streamvggt_teacher if backend == 'streamvggt' else import_official_vggt
+        model_class, self.pose_decoder, provenance = importer(code_root)
         # Point-head outputs are unnecessary; published point weights are explicitly ignored.
         self.model = model_class(enable_camera=True, enable_point=False, enable_depth=True, enable_track=True)
         if path.suffix == '.safetensors':
             from safetensors.torch import load_file
             state = load_file(str(path), device='cpu')
         else:
-            state = checkpoint_state(torch.load(str(path), map_location='cpu', weights_only=True,
+            # Existing StreamVGGT training checkpoints may carry Namespace or
+            # config metadata alongside model tensors. Only load a trusted user
+            # checkpoint here, matching the production encoder's loader.
+            state = checkpoint_state(torch.load(str(path), map_location='cpu',
+                                                weights_only=backend != 'streamvggt',
                                                 mmap=os.name != 'nt'))
         coverage = validate_checkpoint_coverage(self.model, state)
         active = {k: state[k] for k in self.model.state_dict()}
@@ -199,7 +262,17 @@ class VGGTTrackTeacher:
                          'heads_precision': 'float32', 'query_stride': self.query_stride,
                          'query_margin': self.query_margin, 'query_chunk_size': self.query_chunk_size,
                          'query_chunk_changes_tracker_context': bool(self.query_chunk_size),
-                         'role': 'offline_bidirectional_pseudo_label_teacher', 'implicit_resize': False}
+                         'backend': backend, 'causal_backbone': backend == 'streamvggt',
+                         'causal_camera_head': backend == 'streamvggt',
+                         'tracking_context': 'entire_supplied_window_bidirectional',
+                         'tracking_uses_future_within_supplied_window': True,
+                         'dpt_position_embedding': ('upstream_cpu_fp64_then_fp32'
+                                                    if backend == 'streamvggt' else 'upstream'),
+                         'kv_cache': False, 'online_conditioner': False,
+                         'role': ('offline_causal_backbone_full_window_tracking_teacher'
+                                  if backend == 'streamvggt' else
+                                  'offline_bidirectional_pseudo_label_teacher'),
+                         'implicit_resize': False}
 
     def _autocast(self):
         if self.precision == 'float32':
@@ -221,18 +294,24 @@ class VGGTTrackTeacher:
         reference_frame = int(reference_frame)
         if not 0 <= reference_frame < t:
             raise ValueError('reference_frame is outside the supplied window')
+        if self.backend == 'streamvggt' and reference_frame != 0:
+            raise ValueError('StreamVGGT requires reference_frame=0 to preserve chronological causal history')
         # Official VGGT uses the first frame as tracking query/camera gauge reference.
         order = [reference_frame] + [i for i in range(t) if i != reference_frame]
         inverse = torch.argsort(torch.tensor(order))
         images = frames[order].to(device=self.device, dtype=torch.float32).unsqueeze(0)
         queries = query_grid(h, w, self.query_stride, self.query_margin).to(self.device)
         with self._autocast():
-            tokens, patch_start = self.model.aggregator(images)
+            if self.backend == 'streamvggt':
+                tokens, patch_start = self.model.aggregator(images, use_cache=False)
+            else:
+                tokens, patch_start = self.model.aggregator(images)
         # Upstream model.forward disables CUDA autocast only. Explicit subhead calls
         # give CPU/CUDA/NPU the same FP32 geometry and correlation arithmetic.
         tokens = [x.float() if torch.is_tensor(x) else x for x in tokens]
         with torch.autocast(device_type=self.device.type, enabled=False):
-            pose = self.model.camera_head(tokens)[-1].float()
+            pose = (self.model.camera_head(tokens, use_cache=False) if self.backend == 'streamvggt'
+                    else self.model.camera_head(tokens))[-1].float()
             depth, depth_conf = self.model.depth_head(tokens, images=images, patch_start_idx=patch_start)
             extrinsics, intrinsics = self.pose_decoder(pose, (h, w))
             chunks = queries.split(self.query_chunk_size) if self.query_chunk_size else (queries,)

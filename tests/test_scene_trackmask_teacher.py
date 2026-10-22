@@ -1,5 +1,8 @@
 """Contracts for the separate official VGGT diagnostic adapter (CPU fake teacher)."""
 import tempfile
+import argparse
+import hashlib
+import json
 from pathlib import Path
 import types
 import unittest
@@ -11,6 +14,7 @@ from torch import nn
 from utils.scene_trackmask_teacher import (
     VGGTTrackTeacher, VENDORED_ROOT, checkpoint_state, import_official_vggt,
     query_grid, validate_checkpoint_coverage,
+    teacher_source_identity, import_streamvggt_teacher, STREAM_VENDORED_ROOT,
 )
 
 
@@ -19,8 +23,10 @@ class FakeAggregator(nn.Module):
         super().__init__()
         self.weight = nn.Parameter(torch.ones(()))
 
-    def forward(self, images):
+    def forward(self, images, use_cache=False):
         assert not torch.is_grad_enabled()
+        assert use_cache is False
+        self.received_images = images.clone()
         return [images.mean((-1, -2, -3))[..., None, None] * self.weight], 0
 
 
@@ -29,7 +35,8 @@ class FakeCamera(nn.Module):
         super().__init__()
         self.weight = nn.Parameter(torch.ones(()))
 
-    def forward(self, tokens):
+    def forward(self, tokens, use_cache=False):
+        assert use_cache is False
         return [tokens[0][..., 0].repeat(1, 1, 9) * self.weight]
 
 
@@ -51,6 +58,7 @@ class FakeTrack(nn.Module):
         self.weight = nn.Parameter(torch.ones(()))
 
     def forward(self, tokens, images, patch_start_idx, query_points):
+        self.received_images = images.clone()
         b, t = images.shape[:2]
         displacement = tokens[0][..., 0, 0][:, :, None, None]
         track = query_points[:, None] + displacement * self.weight
@@ -129,9 +137,113 @@ class TrackTeacherTests(unittest.TestCase):
 
     def test_checkpoint_wrappers_and_non_tensor_payload(self):
         state = {'module.aggregator.weight': torch.ones(1)}
-        self.assertEqual(list(checkpoint_state({'model': state})), ['aggregator.weight'])
+        for wrapper in ('model_state_dict', 'model', 'state_dict', 'ema_state_dict'):
+            with self.subTest(wrapper=wrapper):
+                self.assertEqual(list(checkpoint_state({wrapper: state})), ['aggregator.weight'])
         with self.assertRaises(TypeError):
             checkpoint_state({'bad': 7})
+        with self.assertRaisesRegex(TypeError, 'wrapper model'):
+            checkpoint_state({'model': 7, 'state_dict': state})
+        with self.assertRaisesRegex(ValueError, 'Duplicate'):
+            checkpoint_state({'module.x': torch.ones(1), 'x': torch.ones(1)})
+
+    def test_stream_full_window_tracking_preserves_history_and_checkpoint_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'checkpoints.pth'
+            state = {'module.' + k: v for k, v in FakeVGGT().state_dict().items()}
+            torch.save({'model_state_dict': state, 'args': argparse.Namespace(epoch=12)}, path)
+            real_load = torch.load
+            with mock.patch('utils.scene_trackmask_teacher.import_streamvggt_teacher',
+                            return_value=(FakeVGGT, fake_pose_decoder, {'code_sha256': 'fake-stream'})), \
+                    mock.patch('torch.load', wraps=real_load) as loader:
+                teacher = VGGTTrackTeacher(path, backend='streamvggt', query_stride=7)
+            self.assertIsInstance(loader.call_args.args[0], str)
+            self.assertFalse(loader.call_args.kwargs['weights_only'])
+            frames = torch.tensor([.1, .3, .6])[:, None, None, None].expand(3, 3, 28, 42)
+            result = teacher.infer(frames)
+            torch.testing.assert_close(teacher.model.aggregator.received_images[0], frames)
+            torch.testing.assert_close(teacher.model.track_head.received_images[0], frames)
+            self.assertEqual(teacher.model.track_head.received_images.shape[1], 3)
+            torch.testing.assert_close(result['tracks'][:, 0, 0], torch.tensor([7.1, 7.3, 7.6]))
+            metadata = result['teacher']
+            self.assertTrue(metadata['causal_backbone'])
+            self.assertTrue(metadata['causal_camera_head'])
+            self.assertTrue(metadata['tracking_uses_future_within_supplied_window'])
+            self.assertFalse(metadata['online_conditioner'])
+            self.assertFalse(metadata['kv_cache'])
+            with self.assertRaisesRegex(ValueError, 'chronological causal history'):
+                teacher.infer(frames, reference_frame=1)
+            with self.assertRaisesRegex(ValueError, 'override is not supported'):
+                VGGTTrackTeacher(path, backend='streamvggt', code_root=tmp)
+
+    def test_stream_aggregator_only_checkpoint_rejected_before_inference(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'partial.pth'
+            torch.save({'model': {'aggregator.weight': torch.ones(())}}, path)
+            with mock.patch('utils.scene_trackmask_teacher.import_streamvggt_teacher',
+                            return_value=(FakeVGGT, fake_pose_decoder, {})):
+                with self.assertRaisesRegex(ValueError, 'camera_head.weight'):
+                    VGGTTrackTeacher(path, backend='streamvggt')
+
+    def test_source_identity_tracks_production_and_vendor_without_model_import(self):
+        with mock.patch('utils.scene_trackmask_teacher.importlib.import_module',
+                        side_effect=AssertionError('source hashing must not import models')):
+            identity = teacher_source_identity('streamvggt')
+        self.assertEqual(len(identity['code_sha256']), 64)
+        self.assertEqual(len(identity['code_roots']), 2)
+        self.assertTrue(any(Path(p).name == 'streamvggt' for p in identity['code_roots']))
+        with self.assertRaisesRegex(ValueError, 'override'):
+            teacher_source_identity('streamvggt', 'ignored-custom-checkout')
+        with self.assertRaises(ValueError):
+            teacher_source_identity('typo')
+
+    def test_vendor_matches_pinned_upstream_with_only_declared_import_adaptation(self):
+        manifest = json.loads((STREAM_VENDORED_ROOT / 'UPSTREAM.json').read_text(encoding='utf-8'))
+        for rel, item in manifest['files'].items():
+            data = (STREAM_VENDORED_ROOT / rel).read_bytes()
+            if rel == 'heads/camera_head.py':
+                data = data.replace(b'from .head_act import activate_pose',
+                                    b'from streamvggt.heads.head_act import activate_pose')
+            self.assertEqual(hashlib.sha256(data).hexdigest(), item['upstream_sha256'], rel)
+
+    def test_real_stream_camera_head_is_causal_and_cpu_dpt_positions_match(self):
+        from third_party.streamvggt_trackmask.heads.camera_head import CameraHead
+        from third_party.streamvggt_trackmask.heads.dpt_head import DPTHead
+        from utils.scene_trackmask_stream import DeviceCompatibleDPTHead
+        torch.manual_seed(13)
+        head = CameraHead(dim_in=32, trunk_depth=1, num_heads=4).eval()
+        tokens = torch.randn(1, 4, 2, 32)
+        changed = tokens.clone()
+        changed[:, 2:] = torch.randn_like(changed[:, 2:]) * 10
+        with torch.inference_mode():
+            before = head([tokens])[-1]
+            after = head([changed])[-1]
+        torch.testing.assert_close(before[:, :2], after[:, :2], rtol=0, atol=0)
+        self.assertFalse(torch.equal(before[:, 2:], after[:, 2:]))
+        features = torch.randn(2, 32, 7, 9)
+        expected = DPTHead._apply_pos_embed(None, features, 126, 98)
+        actual = DeviceCompatibleDPTHead._apply_pos_embed(None, features, 126, 98)
+        torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
+    def test_real_tracker_full_sequence_updates_future_but_single_frame_locks_query(self):
+        from third_party.streamvggt_trackmask.heads.track_modules.base_track_predictor import BaseTrackerPredictor
+        torch.manual_seed(17)
+        tracker = BaseTrackerPredictor(latent_dim=16, hidden_size=32, depth=1,
+                                       corr_levels=1, corr_radius=1, use_spaceatt=False).eval()
+        # Make a deterministic positive coordinate update; real tracker retains
+        # its correlation, temporal transformer and first-frame reset behavior.
+        with torch.no_grad():
+            tracker.updateformer.flow_head.weight.zero_()
+            tracker.updateformer.flow_head.bias.zero_()
+            tracker.updateformer.flow_head.bias[:2] = torch.tensor([.4, .2])
+        points = torch.tensor([[[3., 4.], [5., 6.]]])
+        feature_maps = torch.randn(1, 3, 16, 12, 12)
+        with torch.inference_mode():
+            tracks, _, _ = tracker(points, fmaps=feature_maps, iters=2)
+            single, _, _ = tracker(points, fmaps=feature_maps[:, :1], iters=2)
+        torch.testing.assert_close(tracks[-1][:, 0], points)
+        torch.testing.assert_close(tracks[-1][:, 1], points + torch.tensor([.8, .4]))
+        torch.testing.assert_close(single[-1][:, 0], points)
 
     def test_bad_input_and_nonfinite_head_fail_without_fabricated_mask(self):
         with tempfile.TemporaryDirectory() as tmp:

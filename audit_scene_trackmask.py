@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Diagnose camera-compensated VGGT track masks on saved fixed-window previews.
+"""Diagnose camera-compensated StreamVGGT/VGGT tracks on fixed-window previews.
 
 No diffusion/AE training. Full-window teacher masks are future-assisted labels;
 observed-prefix masks are computed in a SEPARATE forward on observed RGB only.
@@ -81,15 +81,13 @@ def threshold_sensitivity(teacher, config):
 
 
 def checkpoint_identity(args):
-    root = Path(args.teacher_code).resolve()
-    files = sorted(root.rglob('*.py'))
-    if not files:
-        raise FileNotFoundError(f'No full-head VGGT code in {root}')
-    return dict(checkpoint=sampled_file_signature(args.teacher_checkpoint),
-                code_sha256=digest({file.relative_to(root).as_posix(): sha256(file) for file in files}),
+    from utils.scene_trackmask_teacher import teacher_source_identity
+    source = teacher_source_identity(args.teacher_kind, args.teacher_code)
+    return dict(**source, backend=args.teacher_kind,
+                checkpoint=sampled_file_signature(args.teacher_checkpoint),
                 precision=args.precision, query_stride=args.query_stride,
                 device_type=args.device.split(':')[0],
-                code_root=str(root), checkpoint_path=str(Path(args.teacher_checkpoint).resolve()))
+                checkpoint_path=str(Path(args.teacher_checkpoint).resolve()))
 
 
 def obtain_teacher(store, directory, raw, history, identity, teacher_factory):
@@ -200,10 +198,11 @@ def run(args):
     assigned = requested[args.node_rank::args.nodes]
     cfg = TrackMaskConfig()
     teacher_spec = None if args.prepare_only else checkpoint_identity(args)
-    contract = dict(schema='scene-trackmask-contract-v1', requested_cases=requested,
+    contract = dict(schema='scene-trackmask-contract-v2', requested_cases=requested,
         nodes=args.nodes,
         source_step=args.step, source_seed=args.seed, source_weights=args.weights,
-        teacher=teacher_spec, geometry=asdict(cfg), prepare_only=args.prepare_only,
+        teacher_kind=args.teacher_kind, teacher=teacher_spec,
+        geometry=asdict(cfg), prepare_only=args.prepare_only,
         input_note=INPUT_NOTE, mask_note=MASK_NOTE,
         point_support_radius_px=args.query_stride/2.,
         condition_policy='teacher_full_window_for_analysis_only; prefix_recomputed_separately')
@@ -225,10 +224,16 @@ def run(args):
             with heartbeat('loading_teacher', args.node_rank):
                 try:
                     teacher_instance = VGGTTrackTeacher(args.teacher_checkpoint,
-                        code_root=args.teacher_code, device=args.device,
+                        backend=args.teacher_kind, code_root=args.teacher_code, device=args.device,
                         precision=args.precision, query_stride=args.query_stride)
                 except Exception as exc:
+                    store.write_json(f'nodes/teacher_setup{args.node_rank:03d}.json',
+                        dict(status='failed', teacher_kind=args.teacher_kind,
+                             error=f'{type(exc).__name__}: {exc}'))
                     raise TeacherSetupError(f'Cannot initialize compatible full-head teacher: {exc}') from exc
+                store.write_json(f'nodes/teacher_setup{args.node_rank:03d}.json',
+                    dict(status='loaded', teacher_kind=args.teacher_kind,
+                         metadata=teacher_instance.metadata))
         return teacher_instance
     all_rows = []
     started = time.monotonic()
@@ -318,13 +323,16 @@ def run(args):
     return 1 if any(row['status'] == 'failed' for row in all_rows) else 0
 
 
-def main():
+def build_parser():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source-local', default='')
     parser.add_argument('--source-root', action='append', default=[])
     parser.add_argument('--output', required=True)
     parser.add_argument('--root', action='append', default=[])
-    parser.add_argument('--teacher-code', default=str(Path(__file__).parent/'third_party/vggt_trackmask'))
+    parser.add_argument('--teacher-kind', choices=('streamvggt', 'vggt'), default='streamvggt',
+                        help='Reuse the existing full StreamVGGT checkpoint by default; no public download.')
+    parser.add_argument('--teacher-code', default=None,
+                        help='Explicit backend source override, if supported; otherwise use bundled code.')
     parser.add_argument('--teacher-checkpoint', default='')
     parser.add_argument('--device', default='cpu')
     parser.add_argument('--precision', choices=('float32', 'bfloat16'), default='float32')
@@ -338,7 +346,11 @@ def main():
     parser.add_argument('--weights', choices=('online', 'ema'), default='ema')
     parser.add_argument('--prepare-only', action='store_true', help='Verify inputs and export comparison sheets; no teacher inference')
     parser.add_argument('--collect-only', action='store_true', help='Collect completed per-node reports without running any model')
-    raise SystemExit(run(parser.parse_args()))
+    return parser
+
+
+def main():
+    raise SystemExit(run(build_parser().parse_args()))
 
 
 if __name__ == '__main__':

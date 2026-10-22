@@ -1,5 +1,5 @@
 #!/bin/bash
-# Offline full-head VGGT teacher audit of saved RAW/AE/GENERATED previews.
+# Offline full-head geometry teacher audit of saved RAW/AE/GENERATED previews.
 # One independent inference worker per node; no training or HCCL collectives.
 set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -14,7 +14,13 @@ configure_modelarts_distributed
   echo 'Invalid NNODES, NUM_NPUS or NODE_RANK for independent trackmask workers.' >&2; exit 2;
 }
 SOURCE_NAMESPACE="${SCENE_TRACKMASK_SOURCE_NAMESPACE:-scene_street_motion_converge_v1_control}"
-NAMESPACE="${SCENE_TRACKMASK_NAMESPACE:-scene_trackmask_stage54_v1}"
+TEACHER_KIND="${SCENE_TRACKMASK_TEACHER_KIND:-streamvggt}"
+case "${TEACHER_KIND}" in
+  streamvggt) DEFAULT_NAMESPACE='scene_trackmask_stream_stage54_v1' ;;
+  vggt) DEFAULT_NAMESPACE='scene_trackmask_stage54_v1' ;;
+  *) echo 'SCENE_TRACKMASK_TEACHER_KIND must be streamvggt or vggt.' >&2; exit 2 ;;
+esac
+NAMESPACE="${SCENE_TRACKMASK_NAMESPACE:-${DEFAULT_NAMESPACE}}"
 for namespace in "${SOURCE_NAMESPACE}" "${NAMESPACE}"; do
   [[ "${namespace}" =~ ^[a-zA-Z0-9_-]+$ ]] || {
     echo "Invalid scene namespace: ${namespace}" >&2; exit 2;
@@ -98,40 +104,60 @@ if [[ "${SCENE_NPU_IDLE_GUARD:-1}" == 1 ]]; then
   echo "NPU idle guard started: pid=${IDLE_GUARD_PID}; logs=${LOGS}/npu_idle_guard"
 fi
 
-TEACHER_CODE="${VGGT_TRACKMASK_CODE:-${PROJECT}/third_party/vggt_trackmask}"
-TEACHER_CHECKPOINT="${VGGT_TRACKMASK_CHECKPOINT:-${VGGAE_REF_ROOT}/VGGT-1B/model.safetensors}"
-[[ -f "${TEACHER_CODE}/vggt/models/vggt.py" && -f "${TEACHER_CODE}/vggt/heads/track_head.py" ]] || {
-  echo "Missing full-head VGGT code at ${TEACHER_CODE}; set VGGT_TRACKMASK_CODE." >&2
-  exit 2
-}
-# Explicit full-head teacher only. The production StreamVGGT encoder is not a
-# substitute. Official web download requires this explicit opt-in; it starts
-# only after the all-device idle guard, and verifies existing files as well.
-DOWNLOAD_OFFICIAL="${VGGT_TRACKMASK_DOWNLOAD_OFFICIAL:-0}"
-[[ "${DOWNLOAD_OFFICIAL}" == 0 || "${DOWNLOAD_OFFICIAL}" == 1 ]] || {
-  echo 'VGGT_TRACKMASK_DOWNLOAD_OFFICIAL must be 0 or 1.' >&2; exit 2;
-}
-if [[ "${DOWNLOAD_OFFICIAL}" == 1 ]]; then
-  [[ "${TEACHER_CHECKPOINT}" == *.safetensors ]] || {
-    echo 'Pinned official download requires a .safetensors destination.' >&2; exit 2;
-  }
-  echo 'Official VGGT preparation opted in: up to 5,026,367,224 network bytes per node when not already verified.'
-  "${PYTHON_BIN}" "${PROJECT}/scripts/prepare_trackmask_teacher.py" \
-    --destination "${TEACHER_CHECKPOINT}"
-else
-  # These sources are existing local/OBS/S3 assets, not arbitrary web URLs.
-  for source in "${VGGT_TRACKMASK_CHECKPOINT_URL:-}" "${VGGT_TRACKMASK_CHECKPOINT_MIRROR_URL:-}"; do
+TEACHER_ARGS=(--teacher-kind "${TEACHER_KIND}")
+if [[ "${TEACHER_KIND}" == streamvggt ]]; then
+  # Reuse the production checkpoint, restoring its trained task heads in the
+  # separate audit adapter. The Python loader checks full-head coverage: an
+  # aggregator-only checkpoint must never silently use random task heads.
+  TEACHER_CHECKPOINT="${STREAMVGGT_CKPT}"
+  [[ -z "${SCENE_TRACKMASK_TEACHER_CODE:-}" ]] || \
+    TEACHER_ARGS+=(--teacher-code "${SCENE_TRACKMASK_TEACHER_CODE}")
+  for source in "${STREAMVGGT_URL:-}" "${STREAMVGGT_MIRROR_URL:-}"; do
     [[ "${source}" != http://* && "${source}" != https://* ]] || {
-      echo 'Use the official opt-in downloader or stage the checkpoint first; source URLs accept local/OBS/S3 paths.' >&2
+      echo 'StreamVGGT sources must be existing local/OBS/S3 assets; this backend never downloads public weights.' >&2
       exit 2
     }
   done
-  ensure_local_checkpoint "${TEACHER_CHECKPOINT}" "${VGGT_TRACKMASK_CHECKPOINT_URL:-}" \
-    'full-head VGGT tracking teacher' "${VGGT_TRACKMASK_CHECKPOINT_MIRROR_URL:-}"
+  if [[ "${VGGT_TRACKMASK_DOWNLOAD_OFFICIAL:-0}" != 0 ]]; then
+    echo 'Ignoring VGGT_TRACKMASK_DOWNLOAD_OFFICIAL: StreamVGGT reuses the existing checkpoint and never invokes the public downloader.'
+  fi
+  ensure_local_checkpoint "${TEACHER_CHECKPOINT}" "${STREAMVGGT_URL:-}" \
+    'full-head StreamVGGT tracking teacher' "${STREAMVGGT_MIRROR_URL:-}"
+else
+  TEACHER_CODE="${VGGT_TRACKMASK_CODE:-${PROJECT}/third_party/vggt_trackmask}"
+  TEACHER_CHECKPOINT="${VGGT_TRACKMASK_CHECKPOINT:-${VGGAE_REF_ROOT}/VGGT-1B/model.safetensors}"
+  [[ -f "${TEACHER_CODE}/vggt/models/vggt.py" && -f "${TEACHER_CODE}/vggt/heads/track_head.py" ]] || {
+    echo "Missing full-head VGGT code at ${TEACHER_CODE}; set VGGT_TRACKMASK_CODE." >&2
+    exit 2
+  }
+  TEACHER_ARGS+=(--teacher-code "${TEACHER_CODE}")
+  # Original VGGT remains an explicit alternative. The cluster is offline;
+  # the opt-in public downloader is only for separately connected machines.
+  DOWNLOAD_OFFICIAL="${VGGT_TRACKMASK_DOWNLOAD_OFFICIAL:-0}"
+  [[ "${DOWNLOAD_OFFICIAL}" == 0 || "${DOWNLOAD_OFFICIAL}" == 1 ]] || {
+    echo 'VGGT_TRACKMASK_DOWNLOAD_OFFICIAL must be 0 or 1.' >&2; exit 2;
+  }
+  if [[ "${DOWNLOAD_OFFICIAL}" == 1 ]]; then
+    [[ "${TEACHER_CHECKPOINT}" == *.safetensors ]] || {
+      echo 'Pinned official download requires a .safetensors destination.' >&2; exit 2;
+    }
+    echo 'Official VGGT preparation opted in: up to 5,026,367,224 network bytes per node when not already verified.'
+    "${PYTHON_BIN}" "${PROJECT}/scripts/prepare_trackmask_teacher.py" \
+      --destination "${TEACHER_CHECKPOINT}"
+  else
+    for source in "${VGGT_TRACKMASK_CHECKPOINT_URL:-}" "${VGGT_TRACKMASK_CHECKPOINT_MIRROR_URL:-}"; do
+      [[ "${source}" != http://* && "${source}" != https://* ]] || {
+        echo 'Use the official opt-in downloader or stage the checkpoint first; source URLs accept local/OBS/S3 paths.' >&2
+        exit 2
+      }
+    done
+    ensure_local_checkpoint "${TEACHER_CHECKPOINT}" "${VGGT_TRACKMASK_CHECKPOINT_URL:-}" \
+      'full-head VGGT tracking teacher' "${VGGT_TRACKMASK_CHECKPOINT_MIRROR_URL:-}"
+  fi
 fi
 
 CASES="${SCENE_TRACKMASK_CASES:-0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63}"
-echo "Scene trackmask audit: source=${SOURCE_NAMESPACE}, output=${NAMESPACE}"
+echo "Scene trackmask audit: teacher=${TEACHER_KIND}, source=${SOURCE_NAMESPACE}, output=${NAMESPACE}"
 echo "Cluster: nodes=${NNODES}, worker_node=${NODE_RANK}, one teacher worker per node; allocated NPUs=${NUM_NPUS}"
 echo 'Input is a decoded lossy preview; ROI metrics are distinct from original training metrics. No model training.'
 echo 'Worker DI_throughput measures useful teacher inference; idle-guard work is excluded.'
@@ -140,7 +166,7 @@ echo 'Worker DI_throughput measures useful teacher inference; idle-guard work is
   --source-root "${SCENE_TRACKMASK_SOURCE_PRIMARY:-${SCALE_REMOTE_ROOT}/${SOURCE_NAMESPACE}}" \
   --source-root "${SCENE_TRACKMASK_SOURCE_MIRROR:-${SCALE_MIRROR_ROOT}/${SOURCE_NAMESPACE}}" \
   --output "${OUT}" --root "${PRIMARY}" --root "${MIRROR}" \
-  --teacher-code "${TEACHER_CODE}" --teacher-checkpoint "${TEACHER_CHECKPOINT}" \
+  "${TEACHER_ARGS[@]}" --teacher-checkpoint "${TEACHER_CHECKPOINT}" \
   --device "${SCENE_TRACKMASK_DEVICE:-npu:0}" \
   --precision "${SCENE_TRACKMASK_PRECISION:-bfloat16}" \
   --query-stride "${SCENE_TRACKMASK_QUERY_STRIDE:-21}" --allocated-devices "${NUM_NPUS}" \

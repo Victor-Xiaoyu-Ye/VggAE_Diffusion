@@ -30,6 +30,7 @@ def temporary():
 class RecordingTeacher:
     def __init__(self):
         self.calls = []
+        self.metadata = {'backend': 'fake', 'not_real_teacher_quality': True}
 
     def infer(self, frames, reference_frame=0):
         self.calls.append(np.array(frames, copy=True))
@@ -73,7 +74,7 @@ def fixture(root, index=0):
 
 def arguments(source, output, mirror=None):
     return argparse.Namespace(source_local=str(source), source_root=[], output=str(output),
-        root=[str(mirror)] if mirror else [], teacher_code=str(audit.Path(audit.__file__).parent/'third_party/vggt_trackmask'),
+        root=[str(mirror)] if mirror else [], teacher_kind='streamvggt', teacher_code=None,
         teacher_checkpoint='explicit-fake-test-only', device='cpu', precision='float32', query_stride=7,
         node_rank=0, nodes=1, allocated_devices=1, cases='0', seed=101, step=6000, weights='ema',
         prepare_only=False, collect_only=False)
@@ -82,8 +83,45 @@ def arguments(source, output, mirror=None):
 class TrackMaskPipelineTests(unittest.TestCase):
     def run_fake(self, args, teacher):
         with mock.patch.object(audit, 'checkpoint_identity', return_value={'test_only': 'fake-teacher'}), \
-             mock.patch('utils.scene_trackmask_teacher.VGGTTrackTeacher', return_value=teacher):
-            return audit.run(args)
+             mock.patch('utils.scene_trackmask_teacher.VGGTTrackTeacher', return_value=teacher) as factory:
+            result = audit.run(args)
+            if factory.called:
+                self.assertEqual(factory.call_args.kwargs['backend'], args.teacher_kind)
+            return result
+
+    def test_default_backend_is_existing_stream_without_external_source(self):
+        args = audit.build_parser().parse_args(['--output', 'unused'])
+        self.assertEqual(args.teacher_kind, 'streamvggt')
+        self.assertIsNone(args.teacher_code)
+
+    def test_changed_teacher_backend_cannot_reuse_an_old_case_receipt(self):
+        with temporary() as directory:
+            root = Path(directory)
+            fixture(root/'source')
+            args = arguments(root/'source', root/'output')
+            teacher = RecordingTeacher()
+            self.assertEqual(self.run_fake(args, teacher), 0)
+            teacher.calls.clear()
+            args.teacher_kind = 'vggt'
+            with self.assertRaisesRegex(ValueError, 'another contract'):
+                self.run_fake(args, teacher)
+            self.assertEqual(teacher.calls, [])
+
+    def test_incomplete_teacher_is_reported_as_setup_failure_not_bad_videos(self):
+        with temporary() as directory:
+            root = Path(directory)
+            fixture(root/'source')
+            args = arguments(root/'source', root/'output', root/'mirror')
+            with mock.patch.object(audit, 'checkpoint_identity', return_value={'test_only': 'fake'}), \
+                 mock.patch('utils.scene_trackmask_teacher.VGGTTrackTeacher',
+                            side_effect=ValueError('missing track_head.weight')):
+                with self.assertRaisesRegex(audit.TeacherSetupError, 'track_head'):
+                    audit.run(args)
+            report = json.loads((root/'output/nodes/teacher_setup000.json').read_text(encoding='utf8'))
+            self.assertEqual(report['status'], 'failed')
+            self.assertEqual(report['teacher_kind'], 'streamvggt')
+            self.assertTrue((root/'mirror/nodes/teacher_setup000.json').is_file())
+            self.assertFalse((root/'output/cases/case000/teacher.done.json').exists())
 
     def test_end_to_end_real_mp4_seals_results_and_separates_prefix(self):
         with temporary() as directory:
@@ -97,6 +135,9 @@ class TrackMaskPipelineTests(unittest.TestCase):
             summary = json.loads((root/'output/summary.json').read_text(encoding='utf8'))
             self.assertEqual(summary['status'], 'completed')
             self.assertFalse(summary['teacher_quality_validated'])
+            setup = json.loads((root/'output/nodes/teacher_setup000.json').read_text(encoding='utf8'))
+            self.assertEqual(setup['status'], 'loaded')
+            self.assertEqual(setup['teacher_kind'], 'streamvggt')
             self.assertFalse(summary['cases'][0]['prefix']['uses_future_frames'])
             receipt_path = root/'output/cases/case000/done.json'
             receipt = json.loads(receipt_path.read_text(encoding='utf8'))

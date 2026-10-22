@@ -3,7 +3,37 @@
 Read this file first. It defines the active project context, current goals,
 rules, and safe next steps for future agents.
 
+## Priority Update (2026-10-22, reuse StreamVGGT for trackmask)
+
+User decided NOT to download original VGGT. Stage55 now defaults to
+SCENE_TRACKMASK_TEACHER_KIND=streamvggt, existing STREAMVGGT_CKPT and its existing
+local/OBS primary+mirror sources. No public-network model download in this path.
+Output namespace scene_trackmask_stream_stage54_v1; old VGGT receipts cannot mix.
+Read docs/SCENE_TRACKMASK_AUDIT_RUNBOOK.md. Diagnostic-only full model uses the
+unchanged production causal aggregator plus pinned official Stream camera/depth/
+track heads. Production wrapper/AE/DiT stay as before. Official StreamVGGT HAS
+task heads; our production wrapper omitted them. Full checkpoint head coverage
+must be checked; do not interpret 1210/1210 aggregator coverage as head coverage.
+Use chronological multi-frame heads, never upstream single-frame inference:
+that route sends S=1 to a tracker which fixes coords[:,0] to the query position.
+Stream camera head remains causal; track head sees all supplied window frames.
+Full9 and prefix4 run separately; neither full-window labels nor future-assisted
+tracks may become generation conditions. First-frame sparse queries miss later
+entrants; unknown regions and correlated teacher errors remain real limitations.
+Source hashes include production backbone and vendored heads; teacher setup and
+coverage are saved per node. Dual IO, sealed intermediate NPZ, DI and idle guard
+retained. Optional explicit vggt backend is a separate comparison, not required.
+No full Stream checkpoint is available locally; CPU tests do not establish real
+checkpoint compatibility, NPU operator support or dynamic-mask quality.
+73 diagnostic tests plus12 existing pipeline regressions pass; actual small CPU
+camera/tracker/DPT checks and Python/Bash checks pass. A device-compatible depth
+head computes unchanged positional constants onCPU FP64 then copiesFP32, avoiding
+Ascend FP64. Vendored Stream pin05682bcb05683c4c71522e9cb618fc8ca349063c.
+
 ## Priority Update (2026-10-22, trackmask diagnostic implemented)
+
+Historical initial implementation below; the StreamVGGT update above supersedes
+the requirement to prepare/download an original VGGT checkpoint.
 
 User clarified the cluster has NO public network access. User will download
 official VGGT weights elsewhere and stage via local/OBS. Always use

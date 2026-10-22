@@ -1,6 +1,33 @@
 # Project Context
 
+## StreamVGGT trackmask reuse (2026-10-22, latest decision)
+
+User requested reusing the existing StreamVGGT checkpoint and will not download
+original VGGT. Stage55 default backend is streamvggt; it uses STREAMVGGT_CKPT and
+the same local/OBS preparation variables as earlier training. New namespace:
+scene_trackmask_stream_stage54_v1. No public downloads occur in this backend.
+Diagnostic model combines unchanged production causal backbone with pinned
+official Stream camera/depth/track heads, loaded strictly from the full existing
+checkpoint; the production feature extractor, SceneAE and DiT are unchanged.
+Official Stream has heads; only our production wrapper omitted them. Real local
+checkpoint coverage is still unverified because no full checkpoint is on this PC.
+Full-window tracking is necessary: upstream per-frame inference sends S=1 and
+the tracker fixes the only frame to query coordinates. Camera head also remains
+causal; tracker attention uses all supplied frames. Full9 and observed4 inference
+remain separate, and masks are diagnostic pseudo-labels, not future conditions.
+Default output separates original VGGT results; identities hash backend, local
+backbone, vendored heads and checkpoint. Per-node setup coverage/error, sealed
+teacher NPZ, dual IO, DI and idle guard retained. Original VGGT remains an explicit
+optional comparison. See docs/SCENE_TRACKMASK_AUDIT_RUNBOOK.md for launch/limits.
+CPU regression tests cannot establish full-weight/NPU execution or mask quality.
+Validation:73 diagnostic tests +12 existing scene pipeline regressions passed;
+actual small CPU heads and source/Python/Bash checks passed. Depth positional
+constants retain upstream CPU FP64 calculation and copy onlyFP32 toAscend.
+
 ## Trackmask diagnostic, not a new training method (2026-10-22)
+
+Initial implementation history; the decision above supersedes the original-VGGT
+download requirement described in this section.
 
 Cluster has no public network access (user clarification). User will download
 the official checkpoint externally and provide local/OBS assets. Cluster
