@@ -3,6 +3,40 @@
 Read this file first. It defines the active project context, current goals,
 rules, and safe next steps for future agents.
 
+## Priority Update (2026-10-23, controlled fixed-window generation pilot)
+
+User approved implementing the camera/motion/reference comparison. Stage56 is
+scripts/scale/56_train_scene_control_reference.sh; read
+docs/SCENE_CONTROL_REFERENCE_RUNBOOK.md. This is a NEW controlled task: baseline
+A keeps observed-only conditions, B receives explicitly supplied future camera
+and sparse point tracks, C also soft-transports observed texture along tracks.
+The old stage55 no-future-condition rule still applies to its diagnostic and
+historical prefix task; it does not prohibit these explicitly authorized B/C
+controls. Never call B/C autonomous future prediction or future mask prediction.
+No semantic instance masks, dense future depth input, WASD frontend, motion
+planner, hard attention mask, residual target or AE retraining is implemented.
+Frozen productionC256, original normalization, observed4/generated5; everyarm
+warm starts stage53 online31069 with freshAdamW/FP32EMA. B/C zero-initcontrol
+stem adds117760params; backbone5e-6 and newstem10xLR, matched B/C. Base model
+state names preserved; checkpoint model_family distinguishes ControlledSceneFlow.
+First-frame teacher pointIDs are not semantic instances. Full9 teacher makes
+future controls; independentprefix4 determines appearance correspondence and
+fixed median-depth scale. Reference reads normalized observed texture only,
+not futureRGB/latent or warped geo channels. Unknown/occluded regions remain
+unsupported. Actual full Stream teacher/NPU/quality still needs cluster smoke.
+Default pilot4096matchedstreetwindows from32768; all64devcases. Raw exact saved
+frame_ids replay productioncrop; no preview-derived training annotations.
+Preparation: CPUindex ->24 independentteachers ->merge, perwindowsealed outputs,
+dualread/write and inputbadskip. CPUcoordination has noHCCL. ExistingfullStream
+weights only, no publicdownload. Idle guard covers complete job inclCPU/IO.
+Smoke is separate_namespace, first8sourceshards,24train/4eval,threeupdates with
+two-update save then freshprocessrestore; no image-quality claim from smoke.
+Fulltrain convergence-based, paired1000step snapshots; visualquality reportonly.
+Preparation can retain~115GB teacher intermediates perremote copy for4096windows;
+localfiles bounded/trimmed onlyafterartifact-specific dualpublication success.
+Local synthetic training, exactresume/mirrorrecovery, two-rankGloo, preparation
+and Bash/coordinator checks exist; none substitutes for NPU/OBS/realteacher.
+
 ## Priority Update (2026-10-22, cluster Stream head imports repaired)
 
 User's stage55 setup failed importing third_party.streamvggt_trackmask before

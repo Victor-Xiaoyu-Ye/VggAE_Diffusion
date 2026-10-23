@@ -34,7 +34,7 @@ def _masked_mean(error, mask):
 
 @torch.no_grad()
 def probe_case(model, rae, sample, mean, std, device, history=4, seed=303,
-               times=(.25, .5, .75, .95)):
+               times=(.25, .5, .75, .95), *, net_factory=None):
     """Return JSON-safe, unweighted x0 errors at fixed corruption levels.
 
     The same case-seeded Gaussian tensor is reused across all ``times`` and
@@ -60,7 +60,8 @@ def probe_case(model, rae, sample, mean, std, device, history=4, seed=303,
     noise = torch.randn(batch.target.shape, device=device, dtype=torch.float32,
                         generator=generator)
     core = getattr(model, 'module', model)
-    net = PrefixFlowNet(core, batch.known, model_frames=total-1)
+    net = (PrefixFlowNet(core, batch.known, model_frames=total-1) if net_factory is None
+           else net_factory(core, batch, sample, training=False))
     states = [(module, module.training) for module in core.modules()]
     dtype = torch.float32 if device.type == 'cpu' else torch.bfloat16
     rows, errors = [], []

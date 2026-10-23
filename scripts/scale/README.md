@@ -1,5 +1,15 @@
 # Large-scale training path
 
+Latest 2026-10-23: `56_train_scene_control_reference.sh` runs the new3x8
+controlled fixed-window pilot. A: observedprefix; B: suppliedfuturecamera/point
+tracks; C: B plus observed-only texture transport. FrozenC256 andstage53online
+31069 source. Default4096matchedstreetwindows,64devcases; originalstats retained.
+ExistingStream weights,24offline teacherworkers on exactrawframe_ids, no public
+downloads. First `SCENE_CONTROL_STAGE=smoke` (separate24window/3update rehearsal),
+then defaultall. Preparation/training dualIO, DI, snapshots andidle guard.
+See [stage56 runbook](../../docs/SCENE_CONTROL_REFERENCE_RUNBOOK.md).
+LocalCPU/Gloo/Bash checks do not establish realteacher/NPU/OBS or imagequality.
+
 Latest 2026-10-16: `53_train_scene_prefix_48h.sh` runs a3x8 two-day quality
 adaptation: frozenC256, sourcevideo71609 online, street8192only, observed4 ->
 future5 inoriginal8positions; freshAdam/FP32EMA. No AEtraining/trainRGBcache.

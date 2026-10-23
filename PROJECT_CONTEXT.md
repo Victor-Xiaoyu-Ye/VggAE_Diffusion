@@ -1,5 +1,70 @@
 # Project Context
 
+## Motion conditions and observed appearance pilot implemented (2026-10-23)
+
+User accepted the proposed fixed-window A/B/C experiment. Read
+docs/SCENE_CONTROL_REFERENCE_RUNBOOK.md and launch stage56. This supersedes
+the preceding survey's proposed next action, not its reconstruction/generation
+analysis. A is observed-only, B explicitly receives future camera/point tracks,
+C also receives soft transported observed texture. These future conditions
+are legal in the new controlled task and must not be claimed as autonomous
+prediction. No dense semantic/instance masks, future depth map, WASD interface
+or learned motion planner. Query IDs are sparse correspondences only.
+Keep production AE/C256/absolute target/original stats and four observed/five
+future slots. All arms start stage53 step31069 ONLINE with fresh AdamW/FP32EMA.
+Zero-initcontrolstem117760params preserves original output at warmstart; B/C
+same added architecture. Backbone LR5e-6/newstem5e-5 peak, same warmup/decay.
+Control input magnitude/support/injection ratios logged with DI_throughput.
+Source replay reload resets new stem output; generic SceneFlow replay cannot
+load controlled checkpoints without the stage56 model family.
+Offline full StreamVGGT teacher from existing weights predicts full9future
+controls; separate prefix4 forward supplies observation-only tracks and depth
+scale. C bilinearly samples latest valid observed texture, then splats along
+supplied tracks with support/confidence. Geo is not warped; holes stay empty.
+Future target/RGB perturbation cannot change reference assembly or sampled
+future with fixed controls/noise. Teacher validity still unproven on cluster.
+Raw videos replay exact cached frame_ids with productioncenterBICUBICcrop;
+eval rawuint8 checked. Default4096trainwindows selected acrossoriginalstreetIDs,
+all64devcases, same prepared good/bad sample set for allarms. Source paths readonly.
+Sealed teacher/control/window shards and metadata support resumable24worker
+preparation; preserve original targets byte-for-byte. No new normalization.
+Full index may read~49GB existing latentpayload; teacher intermediates~115GB per
+durable root for4096windows. Localstaging bounded, onlyprivatefiles removed
+aftertheir own dualpublication acknowledgement. Originalrawdownload is on-demand.
+CPUplan/merge and independentteacherworkers use TCPStore coordination, noHCCL
+waiting on preparation. One idle guard across entire job, DI excludes guard.
+Smoke separate_namespace usesfirst8source shards,24train/4eval and3updates perarm,
+including full optimizer/EMA/RNG save at2 and freshprocessrestore to3. Fullrun
+uses same-step1000update snapshots and supervised plateau stopping, not a
+quality gate. Resume repairs missing/partialsourcepreviews including smoke;
+preflight preserves scheduledvalidation so convergence state matchescontinuous.
+Implementation/tests prepared locally; no production job launched here and no
+new image-quality result. Next: realthree-node smoke, then matched A/B/C videos.
+
+## Reconstruction and generation gap survey (2026-10-23)
+
+Read docs/RECONSTRUCTION_GENERATION_GAP_SURVEY_20261023.md. Research only; no
+new trainer, checkpoint evaluation or cluster run. CurrentC256 is geo128 plus
+learned RGB texture128, not solely frozen foundation features. Seven-case oracle
+prioritizes future appearance prediction / decoder response, not a claim geo is
+unused. Earlier C192 generated-direction perturbations were more damaging than
+equal-RMS random ones but locally smooth; do not repeat this as an untried idea
+or diagnose a universally fragile decoder. CurrentAE already has Gaussian jitter;
+currentDiT already has x0, dimension shift4.5,768trunk/1536head andFP32EMA.
+New primary evidence: MIRA higher reconstructionPSNR with scratch encoder but
+worse generation; LV-RAE decoder robustness; Oct19 RoAR-VAE noisy semantic/RGB
+prediction shapes encoder separately from clean reconstruction; Oct21 CADRE
+diffusion decoder/compression study; GAEv4 Oct14 and V-RAE temporal diagnostics.
+Proposed priorities: one currentC256 branch/noise/trajectory diagnostic; choose
+decoder-only robustness or fixedAE denoiser structural supervision from evidence;
+if appearance states remain hard, test noisy-readout shaping of the trainable
+bottleneck while keeping Stream frozen. These are proposals, not accepted code
+or demonstrated improvements. Free-sample minusGT includes legitimate future
+diversity; use paired low-noise probes to calibrate corruption. Do not force
+arbitrary generated futures to uniqueGT or claim MSE makes diffusion inherently
+blurry. No temporal compression is not by itself a defect. Stage55 remains a
+mask diagnostic, not the main proven cure; fixed-window quality remains primary.
+
 ## Cluster Stream head import repair (2026-10-22)
 
 Stage55 failed before checkpoint loading: generic third_party namespace imports

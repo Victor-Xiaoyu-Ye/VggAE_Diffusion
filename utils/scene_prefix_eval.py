@@ -60,7 +60,8 @@ def _sharpness(rgb):
 
 
 @torch.no_grad()
-def sample_case(model, rae, sample, mean, std, device, history=4, steps=32, seed=101):
+def sample_case(model, rae, sample, mean, std, device, history=4, steps=32, seed=101,
+                *, net_factory=None):
     """Return ``(metrics, preview_rgb, generated_future_latents)`` on CPU.
 
     ``preview_rgb`` is float32 [T,H,4*W,3], with RAW/AE/GENERATED/COPY columns.
@@ -89,7 +90,10 @@ def sample_case(model, rae, sample, mean, std, device, history=4, steps=32, seed
         condition['anchor'] = sample['anchor']
     part = prepare_prefix(condition, mean, std, hist=history, device=device)
     core = getattr(model, 'module', model)
-    net = PrefixFlowNet(core, part.known, model_frames=total-1)
+    # A separate controlled-generation task may bind explicit future motion
+    # labels here. The default remains strictly observed-prefix completion.
+    net = (PrefixFlowNet(core, part.known, model_frames=total-1) if net_factory is None
+           else net_factory(core, part, sample, training=False))
     noise_seed = stable_case_seed(sample, seed)
     generator = torch.Generator(device=device).manual_seed(noise_seed)
     noise = torch.randn((1, total-history, tokens, channels), device=device,

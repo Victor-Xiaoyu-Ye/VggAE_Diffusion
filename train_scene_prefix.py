@@ -291,7 +291,7 @@ def prepare_evaluation(source, store, plan, cfg, cohort, selection, encoder_path
 
 
 def evaluate(model, ema, rae, samples, mean, std, store, plan, cfg, device,
-             rank, world, step, *, full=False, baseline=False, budget=None):
+             rank, world, step, *, full=False, baseline=False, budget=None, runtime=None):
     label=cfg.get('source_label','source71609') if baseline else f'step{step:07d}'
     selected=samples if full else samples[:cfg['monitor_cases']]
     seeds=cfg['eval_seeds'] if full else cfg['eval_seeds'][:1]
@@ -329,16 +329,23 @@ def evaluate(model, ema, rae, samples, mean, std, store, plan, cfg, device,
                     start=time.monotonic()
                     try:
                         row,frames,z=sample_case(model,rae,sample,mean,std,device,
-                            history=cfg['history'],steps=cfg['sample_steps'],seed=seed)
+                            history=cfg['history'],steps=cfg['sample_steps'],seed=seed,
+                            net_factory=runtime.bind if runtime is not None else None)
                         row.update(step=step,weights=arm,case_index=index,source=label)
-                        display=labelled_preview(frames,['RAW','AE','GENERATED '+arm,'COPY'],cfg['history']) \
+                        if runtime is not None:
+                            runtime.annotate(row,sample)
+                        generated_label=('GEN '+runtime.arm+' '+arm if runtime is not None else 'GENERATED '+arm)
+                        display=labelled_preview(frames,['RAW','AE',generated_label,'COPY'],cfg['history']) \
                             if cfg.get('label_previews') else frames
                         files=preview(store,prefix+'.mp4',display)
                         row['preview_status']='completed' if prefix+'.mp4' in files else 'failed'
                         if cfg.get('convergence') and seed==seeds[0]:
                             from utils.scene_motion_eval import probe_case
                             row['denoising_probe']=probe_case(model,rae,sample,mean,std,device,
-                                history=cfg['history'],seed=303)
+                                history=cfg['history'],seed=303,
+                                net_factory=runtime.bind if runtime is not None else None)
+                            if runtime is not None:
+                                runtime.annotate(row['denoising_probe'],sample)
                         if needs_oracle:
                             from utils.scene_motion_eval import oracle_branches
                             diagnostic,oracle_rgb=oracle_branches(rae,sample,z,device,history=cfg['history'])
@@ -387,6 +394,8 @@ def evaluate(model, ema, rae, samples, mean, std, store, plan, cfg, device,
                     r.get('oracle_preview_status','completed')!='completed' for r in all_rows) else 'partial',
                 full=full,quality_policy='report_only',history=cfg['history'],future=cfg['views']-cfg['history'],
                 denoising_probe=probe_summary,
+                condition_policy=plan.get('condition', 'observed prefix only'),
+                experiment_arm=getattr(runtime,'arm',None),
                 note='Source and new weights use identical prefix/noise. Observed frames are not generated.'))
     finally:
         if previous is not None:
@@ -397,7 +406,7 @@ def evaluate(model, ema, rae, samples, mean, std, store, plan, cfg, device,
 
 
 def train(a,cfg,plan,source,store,manifest,selection,rae_path,weights_path,eval_path,
-          budget,device,rank,world,*,data_store=None):
+          budget,device,rank,world,*,data_store=None,runtime=None):
     identity=plan['identity']
     latest='train/checkpoint_latest.pt'
     if rank==0:
@@ -411,7 +420,7 @@ def train(a,cfg,plan,source,store,manifest,selection,rae_path,weights_path,eval_
     if receipt:
         path=stage_asset(store,receipt,int(os.environ.get('LOCAL_RANK',0)),rank)
         saved=load_staged(path)
-    model=SceneFlow(**plan['model']).to(device)
+    model=(SceneFlow(**plan['model']) if runtime is None else runtime.make_model(plan['model'])).to(device)
     if saved:
         model.load_state_dict(saved['model'])
     else:
@@ -422,9 +431,13 @@ def train(a,cfg,plan,source,store,manifest,selection,rae_path,weights_path,eval_
             expected_step=int(Path(plan['source_weights']['file']).stem.removeprefix('weights_step'))
             if warm.get('step') != expected_step:
                 raise ValueError('Warm-start internal step differs from pinned filename')
-        model.load_state_dict(warm['model'],strict=True)
+        if runtime is None:
+            model.load_state_dict(warm['model'],strict=True)
+        else:
+            runtime.load_warm(model,warm['model'])
         del warm
-    optimizer=torch.optim.AdamW(model.parameters(),lr=cfg['lr'],betas=(.9,.95),weight_decay=0.)
+    parameters=model.parameters() if runtime is None else runtime.optimizer_groups(model)
+    optimizer=torch.optim.AdamW(parameters,lr=cfg['lr'],betas=(.9,.95),weight_decay=0.)
     ema=EMA(model,decay=.9995,dtype=torch.float32,warmup=True)
     tracker=None
     if cfg.get('convergence'):
@@ -462,20 +475,26 @@ def train(a,cfg,plan,source,store,manifest,selection,rae_path,weights_path,eval_
             model=plan['model'],effective_batch=world*cfg['accum'],model_slots=cfg['views']-1,
             history=cfg['history'],generated_frames=cfg['views']-cfg['history'],
             decoder_temporal_blocks=getattr(rae.config,'decoder_temporal_blocks',None),
-            schedule='update-based; wall time only stops resource use'))
+            schedule='update-based; wall time only stops resource use',
+            **(runtime.checkpoint_metadata() if runtime is not None else {})))
     baseline_label=cfg.get('source_label','source71609')
     baseline_summary=store.json(f'eval/{baseline_label}/summary.json')
-    if not baseline_summary or (tracker is not None and baseline_summary.get('status')!='completed'):
+    if not baseline_summary or ((tracker is not None or runtime is not None)
+                                and baseline_summary.get('status')!='completed'):
         original=None
         try:
             if step:
-                if tracker is None:
+                if tracker is None and runtime is None:
                     raise RuntimeError('Source baseline receipt missing on trained resume; do not relabel new weights')
                 original={k:v.detach().cpu().clone() for k,v in model.state_dict().items()}
                 warm=load_staged(weights_path)
-                model.load_state_dict(warm['model'],strict=True); del warm
+                if runtime is None:
+                    model.load_state_dict(warm['model'],strict=True)
+                else:
+                    runtime.load_warm(model,warm['model'])
+                del warm
             evaluate(model,ema,rae,samples,mean,std,store,plan,cfg,device,rank,world,0,
-                full=True,baseline=True,budget=budget)
+                full=True,baseline=True,budget=budget,runtime=runtime)
         finally:
             if original is not None:
                 model.load_state_dict(original)
@@ -483,6 +502,10 @@ def train(a,cfg,plan,source,store,manifest,selection,rae_path,weights_path,eval_
         # Model/codec constructors and DDP setup consume RNG. Restore only once
         # all initialization has finished, immediately before the next update.
         restore_rng_state(saved_rng)
+    elif runtime is not None:
+        # Extra adapters consume constructor RNG. Start all matched arms from
+        # the same *training* random stream, independent of model construction.
+        runtime.seed_training(cfg['seed'],rank)
     train_clock=StageBudget(cfg['train_hours']*3600 if cfg['train_hours'] else float('inf'),train_spent)
     start=last_save=last_eval=last_weights=last_full=time.monotonic()
     tokens=processed=0
@@ -505,6 +528,8 @@ def train(a,cfg,plan,source,store,manifest,selection,rae_path,weights_path,eval_
                 optimizer=optimizer.state_dict(),ema=ema.state_dict(),ema_metadata=ema.metadata(),
                 step=step,cursors=cursors,rng=rng,bank_states=bank_states,
                 train_spent=train_clock.elapsed(),total_spent=budget.elapsed())
+            if runtime is not None:
+                payload.update(runtime.checkpoint_metadata())
             if tracker is not None:
                 payload['convergence_state']=tracker.state_dict()
             with heartbeat('saving complete training recovery point',rank):
@@ -513,7 +538,8 @@ def train(a,cfg,plan,source,store,manifest,selection,rae_path,weights_path,eval_
                     store.save(f'train/full_step{step:07d}.pt',payload,identity)
                 if periodic or final:
                     store.save(f'train/weights_step{step:07d}.pt',dict(model=model.state_dict(),ema=ema.state_dict(),
-                        ema_metadata=ema.metadata(),model_args=plan['model'],step=step),identity)
+                        ema_metadata=ema.metadata(),model_args=plan['model'],step=step,
+                        **(runtime.checkpoint_metadata() if runtime is not None else {})),identity)
             trim_local_snapshots(store)
             record_progress(store,budget,step=step,train_spent=train_clock.elapsed(),phase='training')
         bad_path=store.local/f'train/bad-r{rank:03d}.jsonl'
@@ -551,7 +577,9 @@ def train(a,cfg,plan,source,store,manifest,selection,rae_path,weights_path,eval_
             noisy=(1-u[:,None,None,None])*batch.target+u[:,None,None,None]*noise
             sync=core.no_sync() if world>1 and micro+1<cfg['accum'] else contextlib.nullcontext()
             with sync,amp(device):
-                prediction=PrefixFlowNet(core,batch.known)(noisy,u,batch.anchor)
+                net=(PrefixFlowNet(core,batch.known) if runtime is None else
+                     runtime.bind(core,batch,sample,training=True))
+                prediction=net(noisy,u,batch.anchor)
                 motion_metrics={}
                 if cfg.get('motion_objective') is not None:
                     from utils.scene_motion_objective import motion_weighted_x0_loss
@@ -574,7 +602,7 @@ def train(a,cfg,plan,source,store,manifest,selection,rae_path,weights_path,eval_
             raise RuntimeError('Nonfinite prefix flow gradient')
         lr=conservative_lr(step,cfg['lr_steps'],cfg['lr'],cfg['min_lr'],cfg['warmup_steps'])
         for group in optimizer.param_groups:
-            group['lr']=lr
+            group['lr']=lr*group.get('lr_scale',1.)
         optimizer.step(); ema.update(model); step+=1
         if step==1 or step%cfg['log_every']==0:
             probe=model.output[-1].weight.detach().float()
@@ -587,22 +615,18 @@ def train(a,cfg,plan,source,store,manifest,selection,rae_path,weights_path,eval_
                 processed_tokens_per_second_per_npu=processed/max(time.monotonic()-start,1e-6),
                 scope='generated future tokens/npu; wall time including IO/save/eval, excludes guard',
                 train_hours=train_clock.elapsed()/3600,total_hours=budget.elapsed()/3600,
-                peak_allocated_gib=memory_gib(device)),rank)
+                peak_allocated_gib=memory_gib(device),
+                **(runtime.training_metrics(model,net,noisy) if runtime is not None else {})),rank)
             if motion_metrics:
                 metrics(store,dict(stage='motion_objective',step=step,**{
                     k:float(v) for k,v in motion_metrics.items()},
                     DI_throughput=tokens/max(time.monotonic()-start,1e-6)),rank)
-        if a.stage=='preflight' and step>=2:
-            save(periodic=False,full_snapshot=True)
-            if rank==0:
-                store.write_json('preflight_complete.json',dict(step=step,identity=identity,
-                    note='Full shape optimizer/save complete; launcher starts new process for exact resume'))
-            return
         ev=any_rank(step%cfg['eval_every_steps']==0 if cfg.get('eval_every_steps') else
             time.monotonic()-last_eval>=cfg['eval_seconds'],device)
         sv=any_rank(time.monotonic()-last_save>=cfg['save_seconds'],device)
         if ev:
-            probe=evaluate(model,ema,rae, samples,mean,std,store,plan,cfg,device,rank,world,step,budget=budget)
+            probe=evaluate(model,ema,rae, samples,mean,std,store,plan,cfg,device,rank,world,step,
+                budget=budget,runtime=runtime)
             if tracker is not None and 'ema' in probe:
                 convergence=tracker.update(step,dict(x0_mse=probe['ema']['probe_global_mse'],
                     changed_region_x0_mse=probe['ema']['probe_change_mse']))
@@ -614,6 +638,14 @@ def train(a,cfg,plan,source,store,manifest,selection,rae_path,weights_path,eval_
             save(periodic=ev or time.monotonic()-last_weights>=cfg['weights_seconds'],
                 full_snapshot=time.monotonic()-last_full>=cfg['full_snapshot_seconds'])
             last_save=time.monotonic()
+        if a.stage=='preflight' and step>=2:
+            # Do not skip an evaluation scheduled at this boundary. Otherwise
+            # preflight/resume changes plateau state versus continuous training.
+            save(periodic=False,full_snapshot=True)
+            if rank==0:
+                store.write_json('preflight_complete.json',dict(step=step,identity=identity,
+                    note='Full shape optimizer/save complete; launcher starts new process for exact resume'))
+            return
         if tracker is not None and ev and 'ema' in probe and convergence.get('converged',False):
             stop_reason='optimization_plateau_requires_visual_review'
             break
@@ -623,7 +655,8 @@ def train(a,cfg,plan,source,store,manifest,selection,rae_path,weights_path,eval_
             store.write_json('train/stopped.json',dict(identity=identity,step=step,stop_reason=stop_reason,
                 note='Optimizer finished; incomplete evaluation can resume without more updates.'))
         barrier()
-        evaluate(model,ema,rae,samples,mean,std,store,plan,cfg,device,rank,world,step,full=True,budget=budget)
+        evaluate(model,ema,rae,samples,mean,std,store,plan,cfg,device,rank,world,step,
+            full=True,budget=budget,runtime=runtime)
         if rank==0:
             record_progress(store,budget,step=step,train_spent=train_clock.elapsed(),phase='finished')
             evaluation=store.json(f'eval/step{step:07d}/summary.json',True)
