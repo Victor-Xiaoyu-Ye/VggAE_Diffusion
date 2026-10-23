@@ -436,6 +436,10 @@ def train(a,cfg,plan,source,store,manifest,selection,rae_path,weights_path,eval_
         else:
             runtime.load_warm(model,warm['model'])
         del warm
+    # DDP broadcasts rank0 parameters, including newly randomized adapters.
+    # Build EMA only afterwards: otherwise its initial shadows differ by rank
+    # even though online weights agree, corrupting early distributed EMA eval.
+    core=wrap(model,device,world)
     parameters=model.parameters() if runtime is None else runtime.optimizer_groups(model)
     optimizer=torch.optim.AdamW(parameters,lr=cfg['lr'],betas=(.9,.95),weight_decay=0.)
     ema=EMA(model,decay=.9995,dtype=torch.float32,warmup=True)
@@ -458,7 +462,6 @@ def train(a,cfg,plan,source,store,manifest,selection,rae_path,weights_path,eval_
         if tracker is not None and saved.get('convergence_state'):
             tracker.load_state_dict(saved['convergence_state'])
     del saved
-    core=wrap(model,device,world)
     bank=FilteredLatentSamples(data_store or store,manifest,selection,seed=cfg['seed'],
         on_bad_shard=lambda row:append_metrics(str(store.local/f'train/bad-r{rank:03d}.jsonl'),row))
     if saved_bank is not None:

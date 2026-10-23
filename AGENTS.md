@@ -36,6 +36,8 @@ Preparation can retain~115GB teacher intermediates perremote copy for4096windows
 localfiles bounded/trimmed onlyafterartifact-specific dualpublication success.
 Local synthetic training, exactresume/mirrorrecovery, two-rankGloo, preparation
 and Bash/coordinator checks exist; none substitutes for NPU/OBS/realteacher.
+Create EMA after DDP parameter broadcast so random newadapter shadows agree
+acrossranks; tests compare actual local EMA states rather than sharedcheckpoint.
 
 ## Priority Update (2026-10-22, cluster Stream head imports repaired)
 

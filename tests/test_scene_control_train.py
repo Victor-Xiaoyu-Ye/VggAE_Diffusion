@@ -41,7 +41,8 @@ def controlled_fixture(root):
     return data
 
 
-def execute(data,store,manifest,arm,*,stage='train',steps=3,rank=0,world=1,bank=None,smoke=False):
+def execute(data,store,manifest,arm,*,stage='train',steps=3,rank=0,world=1,bank=None,smoke=False,
+            capture_emas=None):
     cfg=dict(data['cfg'],max_steps=steps,source_label='source_fixture',
              eval_every_steps=1,convergence=dict(min_steps=100,patience=4,relative_tol=.002))
     if smoke:
@@ -50,6 +51,13 @@ def execute(data,store,manifest,arm,*,stage='train',steps=3,rank=0,world=1,bank=
         stack.enter_context(patch.object(trainer,'SceneRAE',TinyRAE))
         stack.enter_context(patch.object(trainer,'preview',fake_preview))
         stack.enter_context(patch.object(trainer,'metrics',record_metrics))
+        if capture_emas is not None:
+            ema_type=trainer.EMA
+            def create_ema(*args,**kwargs):
+                instance=ema_type(*args,**kwargs)
+                capture_emas.append(instance)
+                return instance
+            stack.enter_context(patch.object(trainer,'EMA',create_ema))
         source=data['source']
         trainer.train(SimpleNamespace(stage=stage),cfg,data['plan'],source,store,manifest,data['selection'],
             source.local/'rae.pt',source.local/'weights.pt',source.local/'eval.pt',
@@ -69,8 +77,12 @@ def controlled_ddp_worker(rank,folder):
         data['source']=ArtifactStore(root/'source',[])
         store=ArtifactStore(root/'ddp',[str(root/'ddp-primary'),str(root/'ddp-mirror')])
         seed_all(42+rank)
-        state=execute(data,store,data['manifest'],'reference',stage='preflight',rank=rank,world=2)
+        shadows=[]
+        state=execute(data,store,data['manifest'],'reference',stage='preflight',rank=rank,world=2,
+                      capture_emas=shadows)
         torch.save(state['model'],root/f'rank{rank}.pt')
+        # Inspect actual in-memory local EMA, not rank0's shared checkpoint.
+        torch.save(shadows[0].state_dict(),root/f'rank{rank}_ema.pt')
         dist.barrier()
     finally:
         dist.destroy_process_group()
@@ -164,6 +176,10 @@ class ControlTrainingTests(unittest.TestCase):
             b=torch.load(str(root/'rank1.pt'),weights_only=False)
             self.assert_nested_equal(a,b)
             self.assertGreater(a['control.2.weight'].abs().sum().item(),0.)
+            ema0=torch.load(str(root/'rank0_ema.pt'),weights_only=False)
+            ema1=torch.load(str(root/'rank1_ema.pt'),weights_only=False)
+            self.assert_nested_equal(ema0,ema1)
+            self.assertIn('control.0.weight',ema0)
 
 
 class ControlPlanTests(unittest.TestCase):

@@ -38,6 +38,9 @@ including full optimizer/EMA/RNG save at2 and freshprocessrestore to3. Fullrun
 uses same-step1000update snapshots and supervised plateau stopping, not a
 quality gate. Resume repairs missing/partialsourcepreviews including smoke;
 preflight preserves scheduledvalidation so convergence state matchescontinuous.
+DDP broadcasts online parameters before EMA construction; newly randomized
+controlstem shadows must agree acrossranks. Regression compares actual local
+EMA objects, not two reads of rank0's shared checkpoint.
 Implementation/tests prepared locally; no production job launched here and no
 new image-quality result. Next: realthree-node smoke, then matched A/B/C videos.
 
