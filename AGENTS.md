@@ -3,6 +3,21 @@
 Read this file first. It defines the active project context, current goals,
 rules, and safe next steps for future agents.
 
+## Priority Update (2026-10-26, stage56 torchrun argument boundary)
+
+The submitted cluster tail is a FAILED stage56 preparation, not completed
+training: CPU plan coordinator exit0 is followed by torchrun ambiguous --local,
+preparation exit2 and launcher exit2. No teacher worker or A/B/C training started
+in this attempt. Idle guard stopped during normal failure cleanup.
+Stage56 now places a second -- before prepare_scene_controls.py inside torchrun;
+the outer coordinator's -- only protects its own parser. Reproduced the exact
+failure with official CPython3.11.14 argparse plus torch2.7.1's actual parser;
+local Python3.12 alone missed it. Captured all/smoke launcher argv now pass with
+the separator; all9 launcher/coordinator regressions pass. Source/data identity
+and config remain unchanged: retain existing plan/index, same namespace and
+original all/smoke command after updating code on all3nodes. Do not skip to train
+because controls preparation did not finish. Real NPU execution remains pending.
+
 ## Priority Update (2026-10-23, controlled fixed-window generation pilot)
 
 User approved implementing the camera/motion/reference comparison. Stage56 is

@@ -1,5 +1,19 @@
 # Project Context
 
+## Stage56 preparation launch failure repaired (2026-10-26)
+
+The cluster log ends with launcher exit2, not success. CPU plan returned0 but
+torchrun rejected the child script's --local as an abbreviation of --local-*;
+teacher workers and A/B/C training did not start in that attempt. The shell now
+terminates torchrun options with -- before the preparation script. Its enclosing
+coordinator has a separate -- boundary. No Python preparation source, config or
+data contract changed, so existing plan/index remains reusable in the same
+namespace. Update all3nodes and repeat original all/smoke command, not train-only.
+Actual captured full/smoke argv reproduced exit2 without the separator and passed
+with it using official CPython3.11.14 argparse + torch2.7.1 parser; local3.12 does
+not reproduce the failure. All9 launcher/coordinator tests and static checks
+pass; full NPU/OBS teacher/training execution still needs the resumed cluster run.
+
 ## Motion conditions and observed appearance pilot implemented (2026-10-23)
 
 User accepted the proposed fixed-window A/B/C experiment. Read

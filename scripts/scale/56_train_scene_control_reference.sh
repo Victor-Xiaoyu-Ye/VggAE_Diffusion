@@ -160,12 +160,14 @@ if [[ "${STAGE}" =~ ^(all|smoke|prepare)$ ]]; then
   MASTER_PORT=$((MASTER_PORT+1)) AUDIT_TIMEOUT_SECONDS="${PREP_TIMEOUT}" \
     "${PYTHON_BIN}" -u "${PROJECT}/scripts/coordinated_diagnostic.py" \
     "${PYTHON_BIN}" -u "${PROJECT}/scripts/prepare_scene_controls.py" "${PREP_ARGS[@]}" --stage plan
+  # End torchrun options before the script: Python 3.11 otherwise expands the
+  # child's --local as an ambiguous abbreviation of torchrun's --local-* flags.
   MASTER_PORT=$((MASTER_PORT+2)) OMP_NUM_THREADS="${OMP_NUM_THREADS:-4}" \
     PYTORCH_NPU_ALLOC_CONF="${PYTORCH_NPU_ALLOC_CONF:-expandable_segments:True}" \
     "${PYTHON_BIN}" -u "${PROJECT}/scripts/coordinated_scene_controls.py" --timeout "${PREP_TIMEOUT}" -- \
     "${TORCHRUN_BIN}" "--nnodes=${NNODES}" "--node_rank=${NODE_RANK}" "--nproc_per_node=${NUM_NPUS}" \
     "--master_addr=${MASTER_ADDR}" "--master_port=${MASTER_PORT}" \
-    "${PROJECT}/scripts/prepare_scene_controls.py" "${PREP_ARGS[@]}" --stage work
+    -- "${PROJECT}/scripts/prepare_scene_controls.py" "${PREP_ARGS[@]}" --stage work
   MASTER_PORT=$((MASTER_PORT+3)) AUDIT_TIMEOUT_SECONDS="${PREP_TIMEOUT}" \
     "${PYTHON_BIN}" -u "${PROJECT}/scripts/coordinated_diagnostic.py" \
     "${PYTHON_BIN}" -u "${PROJECT}/scripts/prepare_scene_controls.py" "${PREP_ARGS[@]}" --stage merge

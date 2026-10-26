@@ -160,6 +160,20 @@ esac
             return groups
         prepare_args=commands('preparg','prepare_scene_controls.py')
         prepare_args+=commands('workerarg','prepare_scene_controls.py')
+        # Exercise the outer parser too. Python 3.11 eagerly interprets child
+        # --local as an ambiguous torchrun abbreviation without this boundary;
+        # Python 3.12 accepts it, so parsing alone misses the cluster regression.
+        from torch.distributed.run import get_args_parser
+        worker_argv=[line.split('=',1)[1] for line in result['arguments'].splitlines()
+                     if line.startswith('workerarg=')]
+        script_index=next(i for i,value in enumerate(worker_argv)
+                          if value.endswith('/prepare_scene_controls.py'))
+        self.assertEqual(worker_argv[script_index-1],'--')
+        outer=get_args_parser().parse_args(worker_argv)
+        self.assertEqual(outer.training_script,worker_argv[script_index])
+        self.assertEqual(outer.training_script_args,worker_argv[script_index+1:])
+        self.assertIn('--local',outer.training_script_args)
+        self.assertEqual(outer.nproc_per_node,'8')
         parsed=[prepare_parser().parse_args(args) for args in prepare_args]
         self.assertEqual({args.stage for args in parsed},{'plan','work','merge'})
         self.assertTrue(all(args.workers==24 and args.device=='npu' and args.train_windows==4096

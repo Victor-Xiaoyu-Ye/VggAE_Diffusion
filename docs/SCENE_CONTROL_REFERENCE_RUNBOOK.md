@@ -52,6 +52,15 @@ vendor 导入。无需下载原版 VGGT，也不会访问 Hugging Face。Full-wi
 
 三节点使用同一入口，沿用原 ModelArts 环境和既有 StreamVGGT 路径。
 
+2026-10-26 启动修复：若日志在计划协调器 `exit code=0` 后出现
+`torchrun: error: ambiguous option: --local`，最终 `exit_code=2`，这是准备
+worker 启动失败，尚未进入教师推理和三组训练。集群 Python 3.11 会提前解析
+子脚本的 `--local`；入口已在 torchrun 和 Python 脚本之间补上 `--`。
+三节点同步修复后的代码，保持原配置、namespace 和原启动命令重启即可；
+既有计划/索引可以复用，无需删除输出。此时不能跳过准备直接用 `stage=train`。
+本地已用官方 Python 3.11 argparse 和真实 torch 2.7.1 parser 对实际 all/smoke
+命令复现并验证修复，9 项启动/协调器回归通过；尚未代替真实 NPU 运行验证。
+
 先做真实模型与真实原始数据的小预演：
 
 ```bash
