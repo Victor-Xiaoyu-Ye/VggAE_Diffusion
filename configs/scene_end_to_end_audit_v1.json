@@ -1,0 +1,28 @@
+{
+  "schema": "scene-end-to-end-audit-v1",
+  "codec_namespace": "scene_rae_c256_15day_v1",
+  "source_weights": "train/weights_step0031069.pt",
+  "cases": [0, 4, 7, 11, 24, 36, 41, 48],
+  "teacher_cases": [0, 4],
+  "teacher_precisions": ["bfloat16", "float32"],
+  "teacher_inputs": ["real", "repeated_first"],
+  "query_stride": 21,
+  "query_margin": 7,
+  "query_chunk_size": 0,
+  "teacher_expected": {
+    "checkpoint_size": 5026743569,
+    "checkpoint_sample_sha256": "9b1db61d328510b6a5286ff17da2231d5842a55b4d552a97b01ed61cae16b07e"
+  },
+  "sample_steps": 32,
+  "seed": 101,
+  "replay": true,
+  "lk_comparison": true,
+  "cohort": "configs/scene_cohort_v1.json",
+  "notes": [
+    "Inference-only diagnosis; original 64-case index, including historical replay mismatches.",
+    "Independent full9/prefix4 teacher; repeated frames test false motion and precision isolates numerical effects.",
+    "LK is an explicit diagnostic alternative, never an automatic replacement for training labels.",
+    "Clean and sampled decoder interventions are counterfactuals, not generated results.",
+    "No optimizer or quality certification. All independent components run even after a component failure."
+  ]
+}

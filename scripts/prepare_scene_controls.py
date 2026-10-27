@@ -27,6 +27,8 @@ from data.scene_rgb import SceneRGB
 from utils.file_signature import sampled_file_signature
 from utils.scene_control_data import (SCHEMA, build_controls, canonical_hash, replay_rgb,
                                      select_windows, validate_controls, window_key)
+from utils.scene_control_readiness import (SCHEMA as READINESS_SCHEMA, assess_controls,
+    raw_teacher_scores, summarize)
 from utils.scene_quality_data import load_street_selection
 from utils.scene_run import ArtifactStore, digest
 from utils.scene_trackmask_teacher import VGGTTrackTeacher, teacher_source_identity
@@ -137,7 +139,8 @@ def make_contract(a, source):
     # a new namespace, but no host paths or mtimes enter the identity.
     fields['control_source_sha256'] = canonical_hash({str(p.relative_to(PROJECT)):
         hashlib.sha256(p.read_bytes()).hexdigest() for p in
-        (Path(__file__), PROJECT/'utils/scene_control_data.py', PROJECT/'utils/scene_trackmask.py')})
+        (Path(__file__), PROJECT/'utils/scene_control_data.py', PROJECT/'utils/scene_trackmask.py',
+         PROJECT/'utils/scene_control_readiness.py')})
     return dict(fields, identity=digest(fields)), manifest, selection
 
 
@@ -236,7 +239,32 @@ def plan(a, source, store, contract, manifest, selection):
     return ready
 
 
-def prepare_case(sample, a, store, identity, rows, reader, teacher_factory):
+def write_case_readiness(sample, controls, store, identity, *, split=None):
+    """Publish tiny diagnostic JSON even after restoring sealed controls/shards.
+
+Restoration never reruns the teacher just to reconstruct missing statistics.
+New controls preserve the real score summary; legacy controls may recover it
+from a matching sidecar, otherwise report it unavailable rather than invent it.
+"""
+    key = window_key(sample)
+    name = f'prepare/cases/{key}/readiness.json'
+    report = assess_controls(controls, split=split, window_key=key)
+    try:
+        if not report['raw_teacher_scores'].get('available'):
+            previous = store.json(name)
+            if previous is not None:
+                if previous.get('identity') != identity or previous.get('window_key') != key:
+                    raise ValueError('Readiness sidecar belongs to another control/window identity')
+                if previous.get('schema') == READINESS_SCHEMA:
+                    report['raw_teacher_scores'] = previous.get('raw_teacher_scores', report['raw_teacher_scores'])
+        report.update(identity=identity, sample_id=sample.get('id'), frame_ids=sample.get('frame_ids'))
+        store.write_json(name, report)
+    except Exception as exc:
+        raise OutputFailure(f'Cannot recover/publish control readiness {name}: {exc}') from exc
+    return report
+
+
+def prepare_case(sample, a, store, identity, rows, reader, teacher_factory, *, split=None):
     key = window_key(sample)
     case = f'prepare/cases/{key}'
     done = load_output(store, case+'/controls.pt', identity)
@@ -245,6 +273,7 @@ def prepare_case(sample, a, store, identity, rows, reader, teacher_factory):
             raise ValueError('Saved controls do not match source window')
         validate_controls(done['controls'], history=a.history, grid=a.grid,
                           frames=len(sample['frame_ids']))
+        write_case_readiness(sample, done['controls'], store, identity, split=split)
         return done['controls'], 0
     teacher_data = load_output(store, case+'/teacher.pt', identity)
     processed = 0
@@ -266,7 +295,9 @@ def prepare_case(sample, a, store, identity, rows, reader, teacher_factory):
                               history=a.history, grid=a.grid)
     controls['metadata']['raw_provenance'] = teacher_data['provenance']
     controls['metadata']['window_key'] = key
+    controls['metadata']['raw_teacher_scores'] = raw_teacher_scores(teacher_data)
     save_output(store, case+'/controls.pt', dict(window_key=key, controls=controls), identity)
+    write_case_readiness(sample, controls, store, identity, split=split)
     trim_published(store, case+'/teacher.pt')
     return controls, processed
 
@@ -328,6 +359,7 @@ def work(a, source, store, contract, manifest):
                 continue
             output = f'data/prepared/job{job["job_index"]:05d}.pt'
             payload = load_output(store, output, identity)
+            recovered = payload is not None
             if payload is None:
                 if job['kind'] == 'eval':
                     if evaluation is None:
@@ -353,6 +385,9 @@ def work(a, source, store, contract, manifest):
                         payload = prepare_job(values, job, a, store, identity, rows, reader, teacher_factory)
                 save_output(store, output, payload, identity)
                 neural_frames += payload['neural_frames']
+            if recovered:
+                for sample in payload['samples']:
+                    write_case_readiness(sample, sample['controls'], store, identity, split=job['kind'])
             errors.extend(payload['errors'])
             completed.append(dict(file=output, job_index=job['job_index'], kind=job['kind'],
                 eval_index=job.get('index'), count=len(payload['samples']),
@@ -375,7 +410,8 @@ def prepare_job(values, job, a, store, identity, rows, reader, teacher_factory):
     samples, errors, frames = [], [], 0
     for sample in values:
         try:
-            controls, processed = prepare_case(sample, a, store, identity, rows, reader, teacher_factory)
+            controls, processed = prepare_case(sample, a, store, identity, rows, reader, teacher_factory,
+                                              split=job['kind'])
         except (TeacherFailure, OutputFailure):
             raise
         except (OSError, RuntimeError, ValueError, KeyError, TypeError, EOFError) as exc:
@@ -410,12 +446,18 @@ def merge(a, store, contract, manifest):
     if [j['job_index'] for j in jobs] != list(range(len(plan['jobs']))):
         raise ValueError('Prepared job coverage has duplicates or omissions')
     shards, evaluation, errors = [], [], [e for r in reports for e in r['errors']]
+    readiness_records = []
     for job in jobs:
         # Verify payload/receipt before publishing final completeness. This
         # remains bounded to one shard at a time and repairs from either root.
         payload = store.load(job['file'], identity, True)
         if len(payload['samples']) != job['count']:
             raise ValueError('Prepared report and payload sample counts differ')
+        # Controls, not experiment names or the presence of a head, establish
+        # whether a motion/reference comparison has actual supplied signal.
+        for sample in payload['samples']:
+            readiness_records.append(write_case_readiness(sample, sample['controls'],
+                store, identity, split=job['kind']))
         if job['kind'] == 'train' and job['count']:
             shards.append(dict(file=job['file'], sources=job['sources'],
                 ids=[s['id'] for s in payload['samples']], count=job['count']))
@@ -435,10 +477,15 @@ def merge(a, store, contract, manifest):
         eval_cases=len(evaluation), bad=errors, bad_source_shards=plan['bad_source_shards'],
         requested_windows=a.train_windows, selected_windows=plan['selected_windows'],
         selected_pool=plan['selected_pool'],
-        future_control='camera_and_sparse_track_pseudo_labels_no_dense_future_depth_or_RGB')
+        future_control='camera_and_sparse_track_pseudo_labels_no_dense_future_depth_or_RGB',
+        control_readiness=summarize(readiness_records))
+    store.write_json('data/control_readiness.json', dict(identity=identity, **ready['control_readiness']))
     store.write_json('data/cache_complete.json', ready)
     print('[control prepare complete] '+json.dumps(dict(train=ready['samples'],
-        evaluation=ready['eval_cases'], skipped=len(errors), identity=identity)), flush=True)
+        evaluation=ready['eval_cases'], skipped=len(errors), identity=identity,
+        control_readiness={split:{key:report[key] for key in
+            ('motion_status', 'reference_status', 'camera_status', 'zero_motion_windows', 'zero_reference_windows')}
+            for split,report in ready['control_readiness']['splits'].items()})), flush=True)
     return ready
 
 

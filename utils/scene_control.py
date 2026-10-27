@@ -19,7 +19,7 @@ from models.r7_window_dit import position, sinusoid
 from utils.scene_prefix import PrefixFlowNet
 
 
-CONTROL_ARMS = ('baseline', 'motion', 'reference')
+CONTROL_ARMS = ('baseline', 'camera', 'motion', 'reference')
 CONTROL_SCHEMA = 'scene_control_v1'
 
 
@@ -125,7 +125,8 @@ class ControlledSceneFlow(SceneFlow):
     controls enter only the new stem: the warm-start camera MLP still receives
     zeros exactly as stage53/54 did. Therefore arbitrary source camera biases
     cannot break initialization equivalence. Both control arms have identical
-    parameter shapes; motion-only receives zeros for reference channels.
+    parameter shapes; motion-only receives zeros for reference channels, and
+    camera-only receives no point information.
     """
     def __init__(self, **model_args):
         super().__init__(**model_args)
@@ -218,12 +219,16 @@ def control_features(batch, sample, arm):
     features = observed.new_zeros((b, t - 1, n, 16 + ctex + 1), dtype=torch.float32)
     if arm == 'baseline':
         return features
+    if arm == 'camera':
+        # Match the v2 unknown-state constant without any track, motion or
+        # reference information. Controlled arms retain identical parameters.
+        features[..., 14] = 1.
     controls = sample.get('controls') if isinstance(sample, Mapping) else None
     if controls is None:
         return features
     if not isinstance(controls, Mapping):
         raise ValueError('sample controls must be a mapping')
-    for key, offset in (('rays', 0), ('motion', 8)):
+    for key, offset in ((('rays', 0),) if arm == 'camera' else (('rays', 0), ('motion', 8))):
         if key not in controls:
             continue
         value = _tensor(controls[key], 4, observed.device, key)

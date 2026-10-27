@@ -29,7 +29,7 @@ done
 ARMS="${SCENE_CONTROL_ARMS:-baseline motion reference}"
 [[ -n "${ARMS// /}" ]] || { echo 'At least one arm is required' >&2; exit 2; }
 for arm in ${ARMS}; do
-  [[ "${arm}" =~ ^(baseline|motion|reference)$ ]] || { echo "Invalid arm: ${arm}" >&2; exit 2; }
+  [[ "${arm}" =~ ^(baseline|camera|motion|reference)$ ]] || { echo "Invalid arm: ${arm}" >&2; exit 2; }
 done
 CONFIG="${SCENE_CONTROL_CONFIG:-${PROJECT}/configs/scene_control_reference_v1.json}"
 [[ -f "${CONFIG}" ]] || { echo "Missing config: ${CONFIG}" >&2; exit 2; }
@@ -46,7 +46,7 @@ if [[ "${STAGE}" == dry ]]; then
   echo "Stage56 dry plan: config=${CONFIG}; source=${SOURCE_LOCAL}"
   echo "Preparation: CPU plan -> 24 independent raw StreamVGGT teacher workers -> merge"
   echo "Training: arms=${ARMS}; each uses two-step preflight then a fresh-process resume"
-  echo "Controls=${CONTROLS_MIRROR}; outputs=${MIRROR}_{baseline,motion,reference}"
+  echo "Controls=${CONTROLS_MIRROR}; output prefix=${MIRROR}; arm suffixes=${ARMS}"
   echo 'Future pseudo-camera/point trajectories are explicit controls; appearance is observed-only.'
   exit 0
 fi

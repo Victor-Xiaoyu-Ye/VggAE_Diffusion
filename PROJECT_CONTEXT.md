@@ -1,5 +1,95 @@
 # Project Context
 
+## Integrated chain diagnosis and research direction (2026-10-27)
+
+Stage57 and its runbook/research plan are now in
+docs/SCENE_END_TO_END_AUDIT_RUNBOOK.md and
+docs/SCENE_RESEARCH_AND_EXECUTION_20261027.md. It reuses source53 online31069,
+the frozen productionC256 AE and actual fullStream checkpoint; no newweights,
+no AE retraining, no optimizer. One worker/node independently audits teacher,
+data and generator, all8devices/node under idleguard. Eight sealed original
+evaluation cases include prior skipped indices. BF16/FP32 and static/repeated
+teacher controls, layer/logit probes, LK diagnostic alternative, transported
+prefixtexture utility, both decoderbranches and structured-vs-random equalMSE
+perturbations distinguish several failure causes in one run. Percomponent
+metrics/tensors are saved before media, dualcopies/contentseals allow resume.
+Failure and zero-support findings are not quality success. NPU quality pending.
+129 relevant CPU/Bash tests pass together;20 changedPython files compile and
+bothlaunchers passbashsyntax. Actualteacher case000/004 remainzero motion/ref
+undernewreadiness andv2, withcamera present; no invented trackerrepair.
+
+New issue: oldmotionmaps contain future-depth-derived dynamic/static/unknown
+labels, so v1 is richer teacher-oracle conditioning. v2 explicitcontrol policy
+is constructed only from suppliedcamera/tracks/binaryvisibility plus observed
+appearance. No futuredepth labels/confidencemagnitude enters adapter. Oldconfig
+semantics/identities are preserved; a newconfig+namespace is required for v2.
+It does not magically supply valid correspondences. Preparation reports actual
+support separately fortrain/eval, and startup skips invalid B/C consistently
+without blocking A or treating an individual unsupportedclip as fatal.
+
+The paper target stays fixedwindow geometry-aware generation. Bare VGGT-as-RAE
+or addingtracks/masks is insufficientnovelty after GAE/GLD/OneWorld/track-reference
+work. Proposed mechanism: geometric organization of observableappearance and
+uncertain/newlyexposed content, tested against2D-only and samecontrol baselines.
+Currentevidence does not yet establish this mechanism or publication-quality
+results. Additionalmetadata/annotation needs are listed separately in the plan.
+
+## Actual teacher outputs confirm score collapse (2026-10-27)
+
+Two user-downloaded teacher.pt caches (case000/004) now pass receipt size/SHA.
+Read docs/SCENE_TRACK_TEACHER_FAILURE_20261027.md. Their14976full/prefix observations
+all fail both score thresholds: visibilitymax.0421, confidencemax1.61e-9; frame0
+queries are exactly correct. Outputs vary and are finite. Even dropping gates
+would leave transport nearzero due to tiny source/destination weights vs1e-8eps.
+Thus a threshold tweak alone is not a repair. Local interface/tuple/scale/sigmoid
+audit found no confirmed inferencebug. OfficialTrackLoss has a confidence-collapse
+escape path, consistent with symptoms but unproven as thischeckpoint's cause.
+Do not claimtrackingwasnevertrained or geometryfeaturesinvalid. Compare existing
+checkpoint on one exactwindow/repeatedframes underBF16/FP32 and inspect internal
+logits before choosing a correction or replacementteacher. CurrentAE/DiT and
+thresholds unchanged; no newtraining. Two caches suffice for currentdiagnosis;
+remaining causal distinction requires forwardactivation evidence, not morelabels.
+
+## Stage56 results: completed execution, inactive motion/reference (2026-10-27)
+
+Read docs/SCENE_CONTROL_RESULTS_20261027.md. Reviewed user-downloaded full/smoke
+results in D:/中转站/scale. A/B/C all completed5000updates on24ranks, ~7.08/7.10/
+7.28h each, stopping on supervision plateau. Media/dual-publication receipts pass:
+1344videos decode9frames,4032non-PT files match SHA/size,192dual statuses successful.
+Local actual checkpoints/teacher tensors absent; restore and tensor contents are
+not verified by these receipts.
+
+The intended new conditions failed to activate: all12024 logged records per B/C
+have zero track support and zero transported appearance. Motion contains only the
+unknown flag (RMS=sqrt1/8); all eval track_valid_fraction=0. Camera/injection are
+nonzero. Thus B/C actually compare camera+unknown conditioning with baseline;
+their difference does not test appearance transport. This already existed in
+smoke. Shape/range validation allowed the run without verifying useful coverage.
+Tracking head weights fully matched; frame0 fixed valid queries also fail the
+visibility>=.5 / confidence>=.2 qualification. This occurs before geometric
+motion labels. No double sigmoid found; saved tensors needed to distinguish the
+confidence signals and upstream failure, rather than lowering thresholds blindly.
+
+Preparation kept4096trainwindows and50/64evalcases;14 failed exact RGB replay
+consistency. All arms use the same surviving50, but old64-case means are not a
+fair comparison. Source31069 online RGBL1 .081693, finalEMA A/B/C .078187/.077844/
+.077855; most gain is ordinary continued training, B/C add only~.4%relative toA.
+Temporal motion amplitude falls and full-set denoising probe worsens; people remain
+ghosted. No visual breakthrough or new best-quality checkpoint established.
+
+Keep stage53 reference and stage56 baseline/camera pilot. Next useful work is
+small saved full/prefix teacher confidence/coordinate/overlay diagnosis, then
+actual reference transport and condition-sensitivity validation before a new full
+run. Do not reuse the prepared bank after semantic fixes. This review changed
+documentation only; no training or new threshold policy was implemented.
+Follow-up implements an independent CPU cached-teacher diagnostic at
+scripts/audit_scene_control_teacher.py, with6 synthetictests and optional compact
+NPZ export. It reports separate visibility/confidence rejection and source/target
+support without changing training or choosing thresholds. A local read-only OBS
+receipt attempt returned502; underlying teacher failure remains unconfirmed.
+Two existing full/prefix teacher.pt caches plus receipts suffice for first analysis;
+no new labels, full checkpoint download or retraining is required to inspect them.
+
 ## Stage56 preparation launch failure repaired (2026-10-26)
 
 The cluster log ends with launcher exit2, not success. CPU plan returned0 but

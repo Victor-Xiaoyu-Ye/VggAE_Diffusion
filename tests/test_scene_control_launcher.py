@@ -22,7 +22,7 @@ def shell(path, text):
 
 @unittest.skipUnless(BASH, 'Bash required')
 class SceneControlLauncherTests(unittest.TestCase):
-    def launch(self, stage='all', prep_code=0, train_code=0):
+    def launch(self, stage='all', prep_code=0, train_code=0, arms=None):
         with tempfile.TemporaryDirectory(prefix='control launcher ', dir=REPO.parent) as temporary:
             root = Path(temporary)
             for part in ('scripts/scale', 'scripts/lib', 'configs'):
@@ -120,6 +120,8 @@ esac
                        SCENE_HELPER_STOP_TIMEOUT='1')
             for key in ('SCENE_CONTROL_CONFIG', 'SCENE_CONTROL_ARMS', 'PYTHONPATH'):
                 env.pop(key, None)
+            if arms is not None:
+                env['SCENE_CONTROL_ARMS']=arms
             result = subprocess.run([BASH, (root/'scripts/scale/56_train_scene_control_reference.sh').as_posix()],
                                     cwd=root, env=env, capture_output=True, text=True, timeout=30)
             base = 'fixture_smoke' if stage=='smoke' else 'fixture'
@@ -205,6 +207,12 @@ esac
         self.assertEqual(result['calls'].splitlines(),[f'{arm} train' for arm in ('baseline','motion','reference')])
         self.assertNotIn('staging',result['order'])
         self.assertNotIn('work\n',result['order'])
+
+    def test_explicit_camera_arm_runs_four_matched_preflight_and_train_pairs(self):
+        result=self.launch(arms='baseline camera motion reference')
+        self.assertEqual(result['result'].returncode,0,result['result'].stdout+result['result'].stderr)
+        self.assertEqual(result['calls'].splitlines(),[f'{arm} {stage}' for arm in
+            ('baseline','camera','motion','reference') for stage in ('preflight','train')])
 
     def test_dry_has_no_cluster_mutation(self):
         result=self.launch('dry')

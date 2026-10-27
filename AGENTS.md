@@ -3,6 +3,95 @@
 Read this file first. It defines the active project context, current goals,
 rules, and safe next steps for future agents.
 
+## Priority Update (2026-10-27, integrated diagnosis and deployable control boundary)
+
+Read docs/SCENE_END_TO_END_AUDIT_RUNBOOK.md and
+docs/SCENE_RESEARCH_AND_EXECUTION_20261027.md. Stage57 is
+scripts/scale/57_audit_scene_end_to_end.sh, default scene_end_to_end_audit_v1:
+three independent node workers on local NPU0, all8-device idle guards, noHCCL,
+nooptimizer. Eight original eval cases include historical replay failures;
+teacher cases0/4 pair BF16/FP32 and real/repeated frames, independentfull9/prefix4.
+Existing teacher/checkpoint only. Layer/logit evidence, LK alternative diagnosis,
+same-region prefix-texture transport vs copy/wrong destinations, raw replay
+magnitudes, clean/sample branch interventions and equal-MSE structured/random
+decoder probes are saved in one submission. Component failures do not cancel
+independent work; sealed successes dual-read/write and retry damaged/failed jobs.
+Execution completion, nonzero support and good video are separate statuses.
+Real NPU/OBS/FP32/LK quality remain unverified locally; no fixed-teacher claim.
+129 relevantCPU/Bash tests jointlypass;20changedPython filescompile;bothlaunchers
+passbashsyntax. Realcase000/004 stillzero motion/referenceundernewv2/readiness.
+
+Critical new design finding: legacy stage56 dynamic/static/unknown inputs use
+future-depth bidirectional/persistence evidence. v1 is teacher-oracle control,
+not fully reproducible from user camera/2Dpaths alone. Separate config
+scene_control_reference_v2.json enables supplied_camera_tracks_visibility_only_v2:
+camera rays + suppliedtracks + binaryvisibility; no future-depth-derived labels,
+no neural confidence magnitudes; observed texture remains independentprefix-only.
+This policy does not rescue absent tracks. Legacy configs/finishedruns unchanged.
+Control readiness now reports train/eval separately; B/C with no evidence of
+required conditions write skipped_invalid_controls.json and allranks skip together,
+while baseline A and independent jobs continue. Individual zero windows are legal;
+bounded oldcache scans must not be called whole-bank failure. Newpreparation code
+changes sourcehash and needs a freshnamespace; don't overwrite old controls.
+
+Research: GAE/GLD/OneWorld already occupy geometry-native RAE/diffusion; track+ref
+adapters also exist. Proposed contribution is a testable geometry-specific
+dynamicappearance transport/unknown-region generation mechanism, NOT an established
+novel method. Fixed-window quality first, matched2D/control/geometry ablations;
+longvideo/WASD only after that. No further blind fullHQ scale or threshold lowering.
+
+## Priority Update (2026-10-27, actual teacher cache inspected)
+
+User supplied D:/中转站/teacher_diagnostic/case000 and case004 teacher.pt+receipts;
+both28044149B payloads passSHA/size. Read docs/SCENE_TRACK_TEACHER_FAILURE_20261027.md.
+Across14976full/prefix point-frame observations all visibility<.043 and confidence
+6.6e-11..1.61e-9, both failqualifications. Frame0 exactly matches576legalqueries.
+Nonconstant finiteoutputs: notNaN, missingheads or simpleoutofbounds. Lowering
+thresholds cannot fix confidence-weighted transport (source*dest vs1e-8eps still
+annihilates reference). Local tuple/normalization/stride/sigmoid audit found no
+confirmed interfacebug; vendorfiles matchofficialpin. OfficialTrackLoss atpin
+05682bcb weights errors by predictedconfidence with no anti-collapse term; a
+concrete lead, NOT proven release-checkpoint cause. Do not saytrackwasuntrained.
+Tracking scores unusable in this run; no conclusion that geometryAE is invalid.
+Next discriminator is one-window existingcheckpoint BF16/FP32 plus repeatedframe
+and layer/logit statistics, noAE/DiTtraining. No moreuserlabels/data required for
+this diagnosis. Currentteacher/thresholds unchanged; no premature fixed claim.
+Prior statements below about absent teacher tensors are superseded for these2cases;
+full training checkpoint payloads remain absentlocally.
+
+## Priority Update (2026-10-27, stage56 completed but tracks/reference inactive)
+
+Read docs/SCENE_CONTROL_RESULTS_20261027.md. Local D:/中转站/scale contains full
+and smoke results; no OBS access needed for this review. All3 full arms completed
+5000steps/24ranks (~7.08/7.10/7.28h), stopped on supervised plateau, not visual
+success. All1344MP4 decode9frames;4032non-PT receipt files match size/SHA;192
+publication statuses report dual success. Actual checkpoint/teacher .pt absent
+locally, so payload/restart and raw teacher confidence remain unverified.
+CRITICAL: B/C each12024 logged train records have track_support=0 and reference
+support/RMS=0; motionRMS=1/sqrt8 (unknown-only). Every eval track_valid_fraction=0.
+Camera and learned injection are active. Intended motion/reference comparison
+therefore did not operate; do not call C a successful reference-control model or
+claim reference guidance disproven. Smoke already had the same zero support.
+Track head394/394keys loaded; frame0 is forced to valid query pixels, pointing
+to visibility/confidence qualification, before geometric motion classification.
+No double sigmoid found; precise teacher failure needs saved tensors, not guesses.
+4096/4096trainwindows prepared;14/64eval skipped for RGB replay mismatch, leaving
+50matchedcases. Final50x2seedsxonline/EMA=200 outputs/arm. Source31069 RAWL1 .081693;
+A/B/C finalEMA .078187/.077844/.077855. B/C only~.4%better thanA, visually similar;
+people ghosts remain. Do not directly compare old64-case means. Retain stage53
+reference, preserve stage56 baseline/camera pilot; no new best-quality claim.
+Next: inspect small saved full/prefix teacher outputs and coverage, validate real
+transport before full rerun. Do not blindly reduce thresholds or reuse old cache
+after semantic changes. Zero-support individualwindows remain legal, but aggregate
+condition absence must be explicit, not accepted as a motion/reference experiment.
+Analysis/visuals at D:/workspace/VggAE_DataAudit/scene_control_20261027.
+Follow-up adds scripts/audit_scene_control_teacher.py: CPU read-only local saved
+teacher .pt score/coordinate/support audit, optional compactNPZ, receipt SHA/size
+checks. Six syntheticCPU tests pass; no realteacher payload inspected yet and no
+teacher/control threshold fix claimed. Existing local OBS credential's bounded
+receipt read returned502; no payloaddownload. First diagnosis needs2savedteacher
+files+receipts (case000/004 keys in report), not rawdata/fullweights/newannotations.
+
 ## Priority Update (2026-10-26, stage56 torchrun argument boundary)
 
 The submitted cluster tail is a FAILED stage56 preparation, not completed
