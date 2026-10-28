@@ -1,5 +1,15 @@
 # Large-scale training path
 
+Latest 2026-10-28: `58_train_scene_geo_texture.sh` runs a3x8 matched pilot:
+context/geometry consistency audit -> shared512window subset -> baseline and
+future-geo oracle each2000updates. FrozenC256/source53online31069; no GTgeo
+copy into generated outputs. Oracle is explicitly not deployable generation.
+Whole-job idle guards, dualIO, intermediate saves, failure-isolated phases.
+Defaultall includes2step preflight andfreshprocessrestore; optional
+`SCENE_GEO_STAGE=smoke` has its own namespace; `audit` performs no training.
+See [Stage58 runbook](../../docs/SCENE_GEO_TEXTURE_PILOT_RUNBOOK.md).
+Stage56's tracking/reference support failed; do not restart it as though fixed.
+
 Latest 2026-10-23: `56_train_scene_control_reference.sh` runs the new3x8
 controlled fixed-window pilot. A: observedprefix; B: suppliedfuturecamera/point
 tracks; C: B plus observed-only texture transport. FrozenC256 andstage53online

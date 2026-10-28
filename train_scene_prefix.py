@@ -319,8 +319,12 @@ def evaluate(model, ema, rae, samples, mean, std, store, plan, cfg, device,
                         print(f'[prefix eval] recomputing {prefix}: {exc}',flush=True)
                         receipt=None
                     needs_oracle=full and index in cfg.get('oracle_cases',[]) and seed==seeds[0]
+                    source_index=sample.get('source_eval_index',index)
+                    needs_geo=(full and not baseline and getattr(runtime,'arm',None)=='oracle_geo'
+                        and source_index in cfg.get('geo_condition_cases',[]) and seed==seeds[0])
                     if receipt and (receipt['metadata'].get('preview_status')!='completed' or
-                        (needs_oracle and receipt['metadata'].get('oracle_preview_status')!='completed')):
+                        (needs_oracle and receipt['metadata'].get('oracle_preview_status')!='completed') or
+                        (needs_geo and receipt['metadata'].get('condition_diagnostics',{}).get('status')!='completed')):
                         receipt=None  # Repair failed media, including final-only oracle diagnostics.
                     if receipt:
                         store.publish([*receipt['files'],prefix+'.done.json'])
@@ -334,7 +338,8 @@ def evaluate(model, ema, rae, samples, mean, std, store, plan, cfg, device,
                         row.update(step=step,weights=arm,case_index=index,source=label)
                         if runtime is not None:
                             runtime.annotate(row,sample)
-                        generated_label=('GEN '+runtime.arm+' '+arm if runtime is not None else 'GENERATED '+arm)
+                        generated_label=('ORACLE GEO '+arm if getattr(runtime,'arm',None)=='oracle_geo' else
+                            ('GEN '+runtime.arm+' '+arm if runtime is not None else 'GENERATED '+arm))
                         display=labelled_preview(frames,['RAW','AE',generated_label,'COPY'],cfg['history']) \
                             if cfg.get('label_previews') else frames
                         files=preview(store,prefix+'.mp4',display)
@@ -357,6 +362,13 @@ def evaluate(model, ema, rae, samples, mean, std, store, plan, cfg, device,
                             oracle_files=preview(store,oracle_file,oracle_rgb)
                             row['oracle_preview_status']='completed' if oracle_file in oracle_files else 'failed'
                             files+=oracle_files
+                        if needs_geo:
+                            from utils.scene_geo_evaluation import condition_diagnostics
+                            runtime.run_identity=plan['identity']
+                            row['condition_diagnostics'],diagnostic_files=condition_diagnostics(
+                                model,rae,sample,samples,mean,std,device,runtime,cfg,seed,
+                                frames,z,store,prefix,preview,labelled_preview)
+                            files+=diagnostic_files
                         store.save(prefix+'.pt',dict(latent=z,frame_ids=sample['frame_ids'],
                             history=cfg['history'],seed=seed),plan['identity'])
                         store.write_json(prefix+'.json',row)
@@ -391,6 +403,7 @@ def evaluate(model, ema, rae, samples, mean, std, store, plan, cfg, device,
                 previews=sum(r.get('preview_status')=='completed' for r in all_rows),
                 status='completed' if len(all_rows)==expected and not any(
                     'error' in r or r.get('preview_status')!='completed' or
+                    r.get('condition_diagnostics',{}).get('status','completed') not in ('completed','not_applicable') or
                     r.get('oracle_preview_status','completed')!='completed' for r in all_rows) else 'partial',
                 full=full,quality_policy='report_only',history=cfg['history'],future=cfg['views']-cfg['history'],
                 denoising_probe=probe_summary,
@@ -422,9 +435,13 @@ def train(a,cfg,plan,source,store,manifest,selection,rae_path,weights_path,eval_
         saved=load_staged(path)
     model=(SceneFlow(**plan['model']) if runtime is None else runtime.make_model(plan['model'])).to(device)
     if saved:
+        if runtime is not None and hasattr(runtime,'validate_checkpoint_metadata'):
+            runtime.validate_checkpoint_metadata(saved,resume=True)
         model.load_state_dict(saved['model'])
     else:
         warm=load_staged(weights_path)
+        if runtime is not None and hasattr(runtime,'validate_checkpoint_metadata'):
+            runtime.validate_checkpoint_metadata(warm,resume=False)
         if warm.get('model_args') != plan['model']:
             raise ValueError('Warm-start tensor model arguments differ from contract')
         if 'source_weights' in plan:
@@ -474,11 +491,11 @@ def train(a,cfg,plan,source,store,manifest,selection,rae_path,weights_path,eval_
     rae.eval().requires_grad_(False).to(device)
     samples=load_staged(eval_path)['samples']
     if rank==0:
-        store.write_json('train/model.json',dict(identity=identity,parameters=sum(p.numel() for p in model.parameters()),
+        store.write_json('train/model.json',dict(dict(identity=identity,parameters=sum(p.numel() for p in model.parameters()),
             model=plan['model'],effective_batch=world*cfg['accum'],model_slots=cfg['views']-1,
             history=cfg['history'],generated_frames=cfg['views']-cfg['history'],
             decoder_temporal_blocks=getattr(rae.config,'decoder_temporal_blocks',None),
-            schedule='update-based; wall time only stops resource use',
+            schedule='update-based; wall time only stops resource use'),
             **(runtime.checkpoint_metadata() if runtime is not None else {})))
     baseline_label=cfg.get('source_label','source71609')
     baseline_summary=store.json(f'eval/{baseline_label}/summary.json')
@@ -491,6 +508,8 @@ def train(a,cfg,plan,source,store,manifest,selection,rae_path,weights_path,eval_
                     raise RuntimeError('Source baseline receipt missing on trained resume; do not relabel new weights')
                 original={k:v.detach().cpu().clone() for k,v in model.state_dict().items()}
                 warm=load_staged(weights_path)
+                if runtime is not None and hasattr(runtime,'validate_checkpoint_metadata'):
+                    runtime.validate_checkpoint_metadata(warm,resume=False)
                 if runtime is None:
                     model.load_state_dict(warm['model'],strict=True)
                 else:
@@ -571,7 +590,7 @@ def train(a,cfg,plan,source,store,manifest,selection,rae_path,weights_path,eval_
             stop_reason='interrupted' if budget.interrupted else 'resource_cap'
             break
         optimizer.zero_grad(set_to_none=True)
-        total_loss=plain=0.; noise_bins=[0.,0.,0.]; noise_counts=[0,0,0]
+        total_loss=plain=geo_mse=texture_mse=0.; noise_bins=[0.,0.,0.]; noise_counts=[0,0,0]
         out_std=0.
         for micro in range(cfg['accum']):
             sample=bank.get(rank+world*cursor); cursor+=1
@@ -595,6 +614,10 @@ def train(a,cfg,plan,source,store,manifest,selection,rae_path,weights_path,eval_
                     raise RuntimeError('Nonfinite prefix flow loss')
                 (loss/cfg['accum']).backward()
             mse=(prediction.detach().float()-batch.target).square().mean().item()
+            half=prediction.shape[-1]//2
+            error=(prediction.detach().float()-batch.target).square()
+            geo_mse+=error[...,:half].mean().item()/cfg['accum']
+            texture_mse+=error[...,half:].mean().item()/cfg['accum']
             slot=min(2,int(u.item()*3)); noise_bins[slot]+=mse; noise_counts[slot]+=1
             total_loss+=loss.item()/cfg['accum']; plain+=mse/cfg['accum']
             out_std+=prediction.detach().float().std(unbiased=False).item()/cfg['accum']
@@ -611,6 +634,7 @@ def train(a,cfg,plan,source,store,manifest,selection,rae_path,weights_path,eval_
             probe=model.output[-1].weight.detach().float()
             ema_probe=ema.state_dict()['output.1.weight'].to(device).float()
             metrics(store,dict(stage='train',step=step,loss=total_loss,unweighted_x0_mse=plain,
+                geo_x0_mse=geo_mse,texture_x0_mse=texture_mse,
                 noise_bin_mse_sum=noise_bins,noise_bin_counts=noise_counts,pre_clip_grad_norm=grad.item(),
                 clipped=bool(grad.item()>1),prediction_std=out_std,lr=lr,
                 output_weight_norm=probe.norm().item(),output_ema_distance=(probe-ema_probe).norm().item(),
@@ -626,7 +650,8 @@ def train(a,cfg,plan,source,store,manifest,selection,rae_path,weights_path,eval_
                     DI_throughput=tokens/max(time.monotonic()-start,1e-6)),rank)
         ev=any_rank(step%cfg['eval_every_steps']==0 if cfg.get('eval_every_steps') else
             time.monotonic()-last_eval>=cfg['eval_seconds'],device)
-        sv=any_rank(time.monotonic()-last_save>=cfg['save_seconds'],device)
+        step_save=bool(cfg.get('save_every_steps') and step%cfg['save_every_steps']==0)
+        sv=any_rank(step_save or time.monotonic()-last_save>=cfg['save_seconds'],device)
         if ev:
             probe=evaluate(model,ema,rae, samples,mean,std,store,plan,cfg,device,rank,world,step,
                 budget=budget,runtime=runtime)
@@ -638,8 +663,8 @@ def train(a,cfg,plan,source,store,manifest,selection,rae_path,weights_path,eval_
                     print('[optimization convergence] '+json.dumps(convergence),flush=True)
             last_eval=time.monotonic()
         if sv or ev:
-            save(periodic=ev or time.monotonic()-last_weights>=cfg['weights_seconds'],
-                full_snapshot=time.monotonic()-last_full>=cfg['full_snapshot_seconds'])
+            save(periodic=ev or step_save or time.monotonic()-last_weights>=cfg['weights_seconds'],
+                full_snapshot=step_save or time.monotonic()-last_full>=cfg['full_snapshot_seconds'])
             last_save=time.monotonic()
         if a.stage=='preflight' and step>=2:
             # Do not skip an evaluation scheduled at this boundary. Otherwise

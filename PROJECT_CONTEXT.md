@@ -1,5 +1,44 @@
 # Project Context
 
+## Stage58 implemented: shared-history geometry and matched conditional pilot (2026-10-28)
+
+User approved proceeding after discussing coordinate/scale consistency. Read
+docs/SCENE_GEO_TEXTURE_PILOT_RUNBOOK.md; entry58_train_scene_geo_texture.sh.
+Defaultthree-node job audits24components onNPU0/node withoutHCCL, preparesone
+shared512windowcache viaCPUleader, thenruns24-rank baseline/oracle_geo sequentially.
+Eacharm2updatepreflight andfreshprocessresume to2000matched updates;500-stepfull
+checkpoints/weights/evaluation,original64evalcaseseveryfinal (incl041),online/EMA.
+No newpretrainedweights,newdataset,newlabels,AEtraining ordecoderadaptation.
+Bothmodels831421056parameters,+115712geo adapterover831305344source;baseline
+andoracle identicalarchitecture,zerooutputinit,presencegate. Source53online31069,
+frozenproductionC256,originalstats,4observed/5generated,unchangedjointC256loss.
+Futuregeo128conditionfromexistingcausalwholewindowcache;nofuturetexture/RGB
+condition,allfutureC256outputs predicted,notGTclamped. Oracleisfuturefeature
+diagnosis,cancarryappearance,notdeployableorproofpuregeometrycontribution.
+Separategeo/textureMSE andcorrect/zero/crosscasegeo same-noise finalinterventions.
+
+Data:bounded2048candidatewindowpool inseededshardorder;512deduplicated windows,
+halfhighnormalizedtemporaltexturechange andhalfhash-randomremaining,notsemantic
+objectlabels oruniformfullHQ. OriginalevalIDs excluded;badinputslogged/skipped,
+nonemptyactualsmallerpoolcontinues. Sharedcompactshardsmax64,sourceunaltered;
+intermediates/selectionsealed,dualread/write/restoration,privateinputcleanuponly.
+Auditfailureoronearmfailuredoesnotcancelindependentwork;summary/finalcodeskeep
+failures. Full-lifecycleall8cardidle guards,publishedlogs,DIwithphase-specificunits.
+
+Scaleclarification:productionStreamVGGT useswhole-windowcausalmask(defaultnoKV),
+firstframe reference shared;noexplicitSim3orwarpcalibration. Fixedlatentmean/std
+doesnotensuremetric-scaleconsistency. Stage58 comparesfull9/prefix4/changedfuture
+tokens/compactlatents,cached/reencodedAE,actualBF16quantization,independentanchor.
+RealgeometryusesStreamcamera/depth+LK,unknownnotstatic;repeatfitsonescaleonly
+asdiagnostic,neverchangestrainingtargets. ExistingStage57payloadCPUreplay leaves
+10.77%/9.26% relativedepthRMSafterbestscale on2staticcases,notpureglobalscale.
+ProductionStage58NPU/OBS/quality stillpending. ActualCPU/Gloo/Bashtests/runbook
+mustnotbepresentedasa realclusterqualitypass. Sameconfignamespaceforresume,
+freshnamespaceaftercode/config/sourcechanges;smokeisalwaysseparate.
+74unique relevantCPU/Gloo/Bashtests pass,13Pythoncompile,newBashsyntaxchecked.
+Actual2rank preflight2steps->freshprocessresume3steps verifiesranklocalonline/EMA,
+optimizer/cursors/metadata/mirrorstates;syntheticchecksarenotclusterquality.
+
 ## Stage57 result: texture-generation gap and failed tracking isolated (2026-10-28)
 
 Read docs/SCENE_END_TO_END_RESULTS_20261028.md. Actual local output at

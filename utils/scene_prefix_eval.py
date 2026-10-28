@@ -153,6 +153,14 @@ def sample_case(model, rae, sample, mean, std, device, history=4, steps=32, seed
             normalized_latent_mean=float(normalized.mean()),
             normalized_latent_std=float(normalized.std(unbiased=False)),
             decoder_temporal_blocks=temporal_blocks, has_caption=False, camera_present=False)
+        # Scoring only, after sampling: keep geometry and texture errors visible
+        # even when a controlled runtime intentionally supplies future features.
+        expected = (target[history:].to(device=device, dtype=torch.float32)-mean)/std
+        error = (normalized[0].float()-expected).square()
+        half = channels//2
+        row.update(future_geo_mse=float(error[..., :half].mean()),
+                   future_texture_mse=float(error[..., half:].mean()),
+                   latent_error_scope='original per-channel standardized future target; post-sampling metric only')
         preview = torch.cat((raw, oracle, generated_column, copy_column), dim=2)
         return row, preview.detach().cpu(), generated_z[0].detach().cpu()
     finally:

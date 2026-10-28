@@ -3,6 +3,33 @@
 Read this file first. It defines the active project context, current goals,
 rules, and safe next steps for future agents.
 
+## Priority Update (2026-10-28, Stage58 geometry consistency and conditional pilot)
+
+Stage58 is scripts/scale/58_train_scene_geo_texture.sh; read
+docs/SCENE_GEO_TEXTURE_PILOT_RUNBOOK.md. Defaultall:24 independent context/geometry
+auditjobs(oneNPU0/node), CPUleader compactdata preparation, then3x8 baseline and
+oracle_geo each2step preflight+newprocessresume to2000matched updates. No new
+weights/networkdownloads. FrozenproductionC256/source53online31069/originalstats.
+Two identical831421056parammodels (+115712adapter), baselinepresence0/oraclefuture
+geo128+presence1. FullC256jointobjective andallchannelsgenerated; neverclampGTgeo
+intooutput. Oraclefuturefeatures maycarryappearance, NOTdeployable/puregeometry.
+Shared512windows frombounded2048candidatepool,halfhighlatentchange/halfrandomrest;
+notsemanticdynamiclabels/notuniformwholeHQ. Sourceeval64allretained incl041.
+Every500updatesfull/weights/eval; explicitcorrect/zero/differentcasegeo final
+pairedsamplerseeds; separatetexture/geoerrors. Oldsource/state/outputpreserved.
+Auditfull9/prefix4/changedfuture/cachedvsreencodedinclBF16quantization; realLK+
+camera/depth and repeatedstaticdepth single-global-scale residual decomposition.
+Intermediateforwardsdualpublished,seals/resume,DIunits,idleguard all8devices/node.
+Auditfailuredoesnotblockvalidtraining;onearmfailurecontinuesother,finalcodeshonest.
+ActualoldStage57staticdepth afterbestonescale residual10.77%/9.26% on2cases:
+notpureglobalscaledrift,notnewNPUvalidation. Newproductionrunpending.
+UseSCENE_GEO_STAGE=dry/smoke/audit/train/preflight ordefaultall;smokeownnamespace.
+No decoder-retraining experiment implemented inStage58. Do not claim it was.
+74 uniqueCPU/Gloo/Bashregressions pass;13Pythoncompile/newBashsyntaxpass.
+Tests cover actualtinyC256optimization/exactresume,actualrank-localEMA, future
+appearanceisolation,wrongconditionmediarepair,sharedsubset/mirrorrestore and
+realparser/launcherfailures. No productionNPU/OBS/qualitypass implied.
+
 ## Priority Update (2026-10-28, Stage57 completed and independently reviewed)
 
 Read docs/SCENE_END_TO_END_RESULTS_20261028.md before proposing more training.
