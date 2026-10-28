@@ -3,6 +3,17 @@
 Updated 2026-10-27. This document separates measured failures, proposed methods,
 and implemented diagnostics. It does not certify generation quality or novelty.
 
+**2026-10-28 result update:** Stage57 is complete; read
+`SCENE_END_TO_END_RESULTS_20261028.md`. FP32 does not fix the neural tracker,
+and LK transport has not reliably beaten copy-last in normalized texture error.
+The immediate reference-control pilot below is therefore deprioritized.
+GT texture replacement nearly closes the generation-to-AE RGB gap; GT geometry
+replacement after sampling does not. Prefer a bounded, explicitly oracle
+geometry-conditioned texture-denoising experiment against a matched prefix-only
+baseline, plus an independent structured-error decoder study retaining clean AE
+quality. Neither has been implemented or proven by the completed audit. Geometry
+is not proven unused, and GT branch replacement is not deployable generation.
+
 ## 1. The concrete target
 
 The main task remains video generation in our learned StreamVGGT-derived

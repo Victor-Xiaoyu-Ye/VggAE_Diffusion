@@ -3,6 +3,31 @@
 Read this file first. It defines the active project context, current goals,
 rules, and safe next steps for future agents.
 
+## Priority Update (2026-10-28, Stage57 completed and independently reviewed)
+
+Read docs/SCENE_END_TO_END_RESULTS_20261028.md before proposing more training.
+Local D:/中转站/VGGAE/scale/scene_end_to_end_audit_v1 is complete:24/24jobs,
+136sealedfiles incl24actualPT SHA/sizepass,40MP4 decode9frames,all3node exits0.
+No newtraining:source53online31069,frozenC256,observed4/future5.
+All8 RGB L1 AE/gen/GTgeo/GTtex=.068197/.114833/.114589/.068080;
+7without separatelyreported AE-anomaly041=.035337/.082254/.082205/.035250.
+GTtexture restores nearlyall generation-to-AE gap; GTgeo barelydoes. These are
+post-sampling GTbranch oracles, NOT generatedquality or tests of geometry-guided
+denoising. Geo is not unused:rawzero stronglychangesRGB;mean/crossscene weaker.
+Actualtexture errors cause1.36-2.06xRGBL1 versus equalMSE isotropicnoise,8/8cases.
+Currenttexture is learnedRGB-encoder state;feature/relation losses readfullC256,
+so branchlabels do not establish disentanglement or pureVGGT-only generation.
+Case041AE alreadybright;rawreplayMAE .000848 cannot explainAEL1 .298213.
+Exactcache/reencoding/numerics origin unresolved;keepfull8+separate7reporting.
+TeacherFP32 doesnotrepaircollapse:59904neuralobservations invalid,repeatframes
+drift22.63/14.67pxmean afterframe0. LK hasrealcorrespondence buttransportL1not
+stablybetterthancopy;legacydynamiclabels0,case004allunknown. Do notlowerthresholds
+orclaimLKfixesdynamicmasks. No newteacher or training launched thisreview.
+Nextrecommended boundedpilot is geometry-conditionedtexture prediction with
+explicitGTgeo-oracle vs matchedprefix-only pluswrongconditions; notimplemented.
+Decoderstructured-error study and041reencoding are separate,retaincleanAEanchor.
+No automatic longrun or paper-quality claim; methoddecisioninresultsdocument.
+
 ## Priority Update (2026-10-27, integrated diagnosis and deployable control boundary)
 
 Read docs/SCENE_END_TO_END_AUDIT_RUNBOOK.md and

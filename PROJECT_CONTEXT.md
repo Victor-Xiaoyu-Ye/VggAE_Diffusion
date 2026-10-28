@@ -1,5 +1,41 @@
 # Project Context
 
+## Stage57 result: texture-generation gap and failed tracking isolated (2026-10-28)
+
+Read docs/SCENE_END_TO_END_RESULTS_20261028.md. Actual local output at
+D:/中转站/VGGAE/scale/scene_end_to_end_audit_v1 passes24/24jobs,136sealedfiles
+(24PT)SHA/size,40MP4decode9frames,all3nodeexits0/dualpublicationclean. No new
+checkpoint was trained:source53online31069,productionC256,4observed/5future.
+All8 RGBL1 AE/gen/GTgeo/GTtex=.068197/.114833/.114589/.068080. Seven without
+separatelyretained041AEanomaly=.035337/.082254/.082205/.035250. Post-sampling
+GTtexture replacement restoresalmostall generation-to-reconstructiongap;
+GTgeo recoversonly.10%ofgap on7cases. Thisdoesnot testgeometryconditioning
+inside denoising or establishgeounused:zeroingrawgeo stronglychangesRGB,
+mean/crossscenegeo less. RGBtextureencoder half cancarrystructure;fullC256
+feedsfeaturerestoration/relation,so noenforcedgeotexturedisentanglement.
+EqualMSE actualtextureerror vsrandomnoise increasesRGBL1by1.36-2.06x on8/8;
+moreisotropicjitter alone isnotan evidence-backedcompletefix.
+041AEalreadygloballybright,AEL1.298213;rawreplayMAE.000848 cannotexplainit.
+Needtargetedreencode/decoderprecision/cachecheck;nofullAEsourceweightslocal,
+no specificparameterbug proven. Fourreplaydifferences do not implywrongscene.
+
+FullteacherBF16/FP32real/repeated comparisons stillall59904observationsinvalid.
+Repeatedidenticalframes neuralpostframe0meandrift22.63/14.67px;FP32similar,
+LKacceptedpointsstrict0. Do notlowerconfidencecutoffs orclaimprecisionrepair.
+LKrealtracks support2978/5184 and2394/5184, buttransporttextureL1vs copy
+.45550/.38741 and.58709/.58559. Correctbetterthanwrongcorrespondence,not
+stablybetterthancopy. No legacypseudo-dynamictracks;004all576unknownduegeometry.
+V2dynamicchannelszero bypolicy,notdetectionevidence. Do notblindlyexpandB/C.
+
+Recommendednext smalltrainingexperiment:fixedcodec/source, matchedprefix-only
+vsfutureGTgeo-conditionedtexturedenoising,explicitlyoracle andwrong/zero controls;
+evaluateheldout to establishwhethergeometrycanactuallyguideappearance. Parallel
+boundeddecoderstructured-error/cleananchor comparison and041reencoding diagnosis.
+Theseareproposals,notimplementedtrainingorqualityclaims. Existingplan's direct
+referencepilot isdeprioritizedpendingusefulcorrespondence. No newdata/downloads
+requested. Analysisartifacts only D:/workspace/VggAE_DataAudit/scene_e2e_20261028.
+DIauditactiontiming excludesfinalseal/publication;nottrainingorpuregenerationspeed.
+
 ## Integrated chain diagnosis and research direction (2026-10-27)
 
 Stage57 and its runbook/research plan are now in
