@@ -1,5 +1,129 @@
 # Project Context
 
+## Stage59 matched feature-source pilot implemented (2026-10-30)
+
+User authorized "跑吧" after the decoder-history correction. Implementation:
+`scripts/scale/59_train_scene_matched_rae.sh`, `prepare_scene_matched.py`,
+`train_scene_matched.py`, `models/matched_video_rae.py`; runbook
+`docs/SCENE_MATCHED_RAE_RUNBOOK.md`. Defaultall uses3x8, shared Stage58 512train
+windows/64dev, seeded16unique-video train probes. Frozen existing checkpoint
+supplies DINOv2 frontend1024 and Stream aggregate2048. Both use identical
+quantized252 RGB, C25618grid framewise bottleneck, common13.58M video decoder
+with2temporalblocks and no independent RGBtexture encoder. Codec totals14.11M
+and14.63M include different-width projections. DINOarm is not a standalone
+officialDINO checkpoint nor a faithful publishedV-RAE reproduction.
+
+Everywindow has separatefull9/prefix4 featureforwards; observedslots useprefix
+features, futuretargets usefullfeatures. Recordprefixdiscrepancy without relying
+on a relaxednumericalgate. Traincodec6000updates thenfreeze finalonlinecodec;
+train-only FP64 channelmoments; fresh831305344paramSceneFlow10000updates,
+observed4/future5, pureGaussiansampling, nofutureteacher/text/rays. Eachphase
+does2stepssave/freshprocessresume. Finaltrain16+dev64 x2seeds xonline/EMA;
+every1000monitortrain8+dev8, every500full-latest/weights. Budgetsarenotconvergence,
+qualityreportdoesnotblockflow. Source31069 original518 train/dev freegeneration
+isaseparatereference; old518/new252 pixelmeansarenotmatchedqualitycomparisons.
+
+Namespaces `scene_matched_rae_v1_{data,source_audit,dino,stream}` plusbase launcher.
+Sharedpernodeimmutableinputcache, dualreceiptIO, explicitDIunits/stageETA,
+all8deviceidleguards, phasefailurepropagation, independentarmcontinuation.
+Oldperiodicweightpayloadslocallyprunedonlyafterdurablepublication; latestfull
+andselectedcodec retained; remotesretainallperiodics. Finishedcodec isnot
+reserialized duringevalrepair, so latentcacheidentity remainsstable. Local
+tests cover actualoptimization/exactresume andreal2rankGloo; noNPU/HCCL/OBS
+orproductionquality validation hasoccurredhere. Thisis a boundedexperiment
+to separatefitting/generalization andfeaturesource effects, not apaperresult.
+Finalchecks:30uniqueCPU/Gloo/Bash tests pass (29joint, then11targeted after
+newfrozen-badlistregression),8Pythoncompile/Bashsyntax pass. Completedbank
+accepted/skippedsubsetisimmutableonresume, andtrainingpinsmanifestdigest.
+
+## Decoder-history correction (2026-10-30)
+
+User correctly recalls decoder adaptation. Historical t2_c192_v3 and
+t1_c192_probe_v1 decoder_robust both completed 4000 steps: frozen representation,
+decoder-only Gaussian future-latent augmentation (raw sigma max .35, eval .22).
+The Aug17 t2 record reports noised PSNR ~20.33 to20.65 and LPIPS ~.270 to.248,
+without resolving subsequent generation failure. Historical geo112 probe used
+two RGB temporal blocks; old t2 and current Scene C256 use zero (current Stage58
+eval summary confirms). Stage34 decoder_shift3_s2500 was frozen perturbation
+diagnosis, not optimization. Scene AE code already includes late clean/jitter
+training. Do not advertise generic temporal/noise-robust decoder adaptation as
+new or never tried. No completed current-C256 fixed-sample temporal plus paired
+structured-error adaptation was found, but that exact combination being unrun
+is not sufficient reason to retrain. Research plan now downgrades generic
+decoder re-adaptation; matched video-codec positive control takes precedence.
+Old raw decoder_robust logs are no longer in the original Desktop location;
+metrics are supported by archived audits/inventory, not freshly recomputed.
+Geo112 temporal joint AE and the robust phases are separate experiments.
+
+## Publication-focused reassessment (2026-10-29)
+
+User requests an immediate publication-oriented pivot and all viable alternatives.
+Read the new priority section in docs/PAPER_RESEARCH_PLAN_20261013.md. This is a
+decision plan, not an implemented architecture or a successful new experiment.
+Recommend two bounded routes: A, retain VGGT-derived feature diffusion but permit
+replacement of the custom hybrid codec/decoder; B, native pretrained video prior
+with a measurable geometry mechanism as quality reference/fallback. Do not expand
+all thirteen alternatives or automatically extend Stage58. First close the fixed
+train/dev free-generation and matched DINO/VGGT video-codec controls promised in
+the Oct13 plan. A decoder-only comparison must hold sampled latents fixed and
+preserve clean reconstruction, identity and motion; arbitrary stochastic samples
+must not be treated as paired GT residuals. Geometry-specific appearance transport
+and uncertainty are hypotheses, not established novel methods. Generic temporal
+decoding, predictability losses, geometry AE losses, robust decoding, latent
+bridging and warped noise already have close prior art (including Oct26
+Predictable Latents, Oct21 CADRE, Oct12 VGGA, OneWorld, LV-RAE, VideoWeave,
+Latent Bridge and SyncVid). New final test must be source-disjoint and separate
+from the repeatedly inspected 64-case development set. Current code/weights and
+historical outputs remain unchanged; no new training or acceptance claim.
+
+## Stage58 final review (2026-10-29)
+
+Local D:/中转站/scale nowcontains completebaseline/oracle_geo matched2000-step
+pilot, allnodeexits0 and256finaloutputs/arm plus32oracleconditionvariants.
+Online64cases x2seed source/base/oracle RGBL1=.0894004/.0856243/.0802864;
+textureMSE=.3573332/.3268305/.2730680. Oracle improvesRGB6.23%,texture16.45%,
+geo45.96% vsbase;casebootstrap95%CI RGB[4.59,8.03]%,texture[14.16,18.73]%.
+58/64 case-mean RGB and62/64texture improve;EMAconfirms. Benefit isreal but
+only12.77% ofbaseline-to-AE errorgap closed;20casevisualreview stillfinds dynamic
+ghosts/deformedvehicles andstructuraldrift. Futuregeofeatures areused, notdead.
+Onlycorrectcondition trained;zero/shuffle testsareOOD andcannotprovegeometry
+specificity. Theyare usefulsensitivities, notsubstitutefor matchedbaseline.
+Oracle futurefeatures maycarryappearance andrequirefutureRGB; no deployable
+trajectorycontrol/bestmodel claim. NoGTfeaturecopytodecoder;allC256predicted.
+Source/data/model/stats identitiesmatch,loggednoisebinsmatchall4824rank-step
+pairs, but1180PTabsentlocallysoactualpayload/exposureverificationlimited.
+2944presentsealedfiles pass;928MP4decode,24PNGvalid. Peak25.40GiB includes
+evaluation;DI~1393/1410futuretokens/s/NPU;wall3.06/3.18h;24guardsnormalexit.
+Retaincase041fullstatisticsandseparate63cases; AEerrornotfixed,overallgain6.69%
+without041. Do notcall2000stepsconvergenceororacleupperbound. Train-setfree
+generationnotmeasured, so no provedfitvscoveragefailure. Nextrecommended research
+control ismatchedDINO/VGGT+videoRAE/decoder beforefurtherblindscale/control
+expansion;notimplemented orlaunched. Existingtrainingcodeunchanged;finalreport
+inSCENE_GEO_TEXTURE_PILOT_RUNBOOK.md andanalysisunder
+D:/workspace/VggAE_DataAudit/stage58_complete_20261029.
+
+## Stage58 partial review (2026-10-28)
+
+Downloaded D:/中转站/scale contains complete24-component audit, shared512-window
+preparation and baseline through saved1000-step evaluation; launcher logs extend
+to1300/1310. No oracle_geo results are present, and remote live status was not read.
+Source/500/1000 online on identical8cases,seed101,frameIDs and noise give future
+RGBL1 .10128955/.09812048/.09712830;1000EMA .09733226. TextureMSE improves7.46%,
+RGBL1 4.11%, but motion/sharpness do notshow a breakthrough. Case001 car worsens,
+case004 walkers remain ghosted. This is only prefix-baseline continuation.
+Audit rules against large prefix-context/cache mismatch: changedfuture leaves
+prefix unchanged, full9/prefix4 geo differs .354-.412% relativeRMS,texture0.
+Case041 AE washout persists after reencoding (all9/unclippedPSNR ~9.52dB), unlike
+the other7 mean~24.86dB; precise codec/preprocess/numerics cause remains unknown.
+Repeatedstaticimage single-scale depth residual5.38-10.77%; geometry-residual
+dynamicmask is not ready for supervision. These diagnostics do notchange targets.
+736present sealed files and192MP4 pass;430PT absent locally means weight/latent
+payloads notindependently verified. 24-rank loggedtraining finite, peak25.40GiB,
+DI~1393-1395futuretokens/s/NPU. Existing boundedpilot maycontinue unchanged through
+both2000-step arms andfinalcorrect/zero/shuffle conditions. No newtraining launched
+or trainingcode changed duringreview. Detailed evidence/limitations inrunbook;
+analysis under D:/workspace/VggAE_DataAudit/stage58_partial_20261028.
+
 ## Stage58 implemented: shared-history geometry and matched conditional pilot (2026-10-28)
 
 User approved proceeding after discussing coordinate/scale consistency. Read

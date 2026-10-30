@@ -1,0 +1,60 @@
+{
+  "schema": "scene-matched-rae-v1",
+  "seed": 42,
+  "views": 9,
+  "history": 4,
+  "size": 252,
+  "grid": 18,
+  "channels": 256,
+  "train_windows": 512,
+  "dev_cases": 64,
+  "train_eval_cases": 16,
+  "monitor_cases": 8,
+  "feature_dims": {"dino": 1024, "stream": 2048},
+  "decoder": {
+    "decoder_width": 192,
+    "decoder_temporal_blocks": 2,
+    "decoder_resblocks": 2,
+    "use_checkpoint": true
+  },
+  "codec": {
+    "steps": 6000,
+    "lr": 0.0001,
+    "min_lr": 0.00001,
+    "accum": 2,
+    "warmup_steps": 200,
+    "lpips_weight": 0.5,
+    "temporal_weight": 0.1,
+    "feature_weight": 0.1
+  },
+  "flow_training": {
+    "steps": 10000,
+    "lr": 0.0001,
+    "min_lr": 0.00001,
+    "accum": 4,
+    "warmup_steps": 500
+  },
+  "flow": {
+    "width": 768,
+    "depth": 24,
+    "head_width": 1536,
+    "head_depth": 6,
+    "heads": 12,
+    "text_dim": 4096
+  },
+  "save_every_steps": 500,
+  "keep_local_weights": 2,
+  "eval_every_steps": 1000,
+  "log_every": 10,
+  "sample_steps": 32,
+  "eval_seeds": [101, 202],
+  "quality_policy": "report_only",
+  "notes": [
+    "Matched DINOv2 front-end versus StreamVGGT aggregated features from the same existing frozen checkpoint; not a reproduction of published DINOv3 or EUPE V-RAE results.",
+    "Same accepted RGB windows, C256 token grid, video decoder and fresh generator initialization; no independent RGB texture branch or future controls.",
+    "Input feature widths differ and projector parameter counts must be reported; equal downstream shape does not imply equal encoder compute.",
+    "Fixed training-set and development-set free generation are both required. The reused 64 cases are development data, not a new publication test set.",
+    "All step counts are bounded experiment budgets, not evidence of convergence or guaranteed visual quality.",
+    "Existing historical Gaussian decoder adaptation remains a prior experiment; this run compares representation sources within a new shared codec."
+  ]
+}

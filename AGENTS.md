@@ -3,6 +3,117 @@
 Read this file first. It defines the active project context, current goals,
 rules, and safe next steps for future agents.
 
+## Priority Update (2026-10-30, Stage59 matched pilot implemented)
+
+Superseded for execution status by Stage59 implementation below: user said
+"跑吧" and the matched pilot is now implemented, not yet cluster validated.
+Read docs/SCENE_MATCHED_RAE_RUNBOOK.md before launching. Entry59 defaultall:
+24rank paired RGB/features from Stage58data -> original source31069 fixed
+train16/dev64 free sampling at518 -> DINO thenStream each codec6000/cache/flow10000.
+Each train phase has2step save/newprocessresume; noqualitygate blocksnextphase.
+New252px unifiedC256/18grid codec has2timeblocks, noindependentRGBtexturepath;
+commondecoder13.58M, totalcodec14.11M/14.63M; freshDiT831305344 each.
+DINO is existingStream checkpoint's frontend, notofficialDINOv3/V-RAEreproduction.
+Independentprefix4 extraction replaces observedslots forbotharms; full9 only
+providesfuturetargets. Full/prefix discrepancy retained. Sameacceptedwindows,
+seededuniqueIDtrainprobe, originaldev64, nofutureGTcondition. Newresolutionmust
+notbecomparedtoold518 asmatchedqualitygain. Stepbudgetsarenotconvergence.
+Stagecheckpoints/fullresume/FP32EMA/DIunits/8deviceguards/dualIO implemented.
+Localperiodicweightsretain2 afterdurablepublication, allremoteweightsretained.
+30uniqueCPU/Gloo/launcher tests pass (29combined then11data/train afterone
+newimmutable-skip regression);8Pythoncompile/Bashsyntax pass. Completedbank
+skipsarefrozen andwholemanifestdigestispinnedbytraining. RealNPU/HCCL/OBS/qualitypending.
+Oldgenericrobustdecoderworkremainspriorartwithinproject, notnewmethodclaim.
+
+## Priority Update (2026-10-30, decoder history correction)
+
+Do not propose generic temporal/robust decoder adaptation as never tried.
+t2_c192_v3 and t1_c192_probe_v1 decoder_robust completed4000 steps with frozen
+representation and Gaussian future-latent noise; t2 noised PSNR ~20.33->20.65
+did not solve subsequent generation. Historical geo112 RGB decoder has2
+temporal blocks; current Scene C256 has0. Stage34 decoder_shift3_s2500 was a
+frozen perturbation audit, no optimizer. Scene AE already has late jitter.
+Read the correction at the top of docs/PAPER_RESEARCH_PLAN_20261013.md.
+The exact current-C256 temporal/structured-error adaptation has no completed
+record found, but do not use that distinction to repeat an old low-yield idea
+automatically. Generic decoder adaptation is downgraded behind matched
+video-codec positive controls. No new training or code change in this review.
+Old raw logs have moved; cite archived audits/inventory, not new metric replay.
+Geo112 temporal joint training and Gaussian robust phases are distinct runs.
+
+## Priority Update (2026-10-29, publication-focused route reassessment)
+
+User asks to pivot immediately toward a publishable result and enumerate viable
+routes. Read the top Oct29 section of docs/PAPER_RESEARCH_PLAN_20261013.md and
+PROJECT_CONTEXT.md. No new training/code implemented in this reassessment.
+Recommend bounded route A: VGGT-derived feature generation with replaceable
+codec/decoder, plus native-video quality reference/fallback B. Fixed train/dev
+free sampling and matched DINO/VGGT video-codec controls were already promised
+Oct13 and remain missing; deliver them instead of another broad diagnostic loop.
+Stage58 gain is real but modest and oracle-only, not a quality breakthrough.
+Do not assume hybrid C256, source31069 or framewise decoder must remain fixed for
+new research. Preserve them as historical controls. Thirteen alternatives are
+ranked in the plan, not authorized as simultaneous long runs. Latest prior art
+occupies generic temporal/past-conditioned decoding, predictability objectives,
+geometry AE losses, drift-robust decoding, latent bridges and geometry-warped
+noise; none alone is a new contribution. Geometry-specific transport/uncertainty
+is a testable candidate only. Separate deployment controls from future oracles,
+and establish new source-disjoint final test beyond reused64 development cases.
+No extra full-data labels required for baseline RGB generation; verify existing
+motion/geometry evaluation annotations before asking for large transfers.
+
+## Priority Update (2026-10-29, Stage58 completed and reviewed)
+
+Read final-results section in docs/SCENE_GEO_TEXTURE_PILOT_RUNBOOK.md. Local
+D:/中转站/scale now has both baseline/oracle_geo2000 steps, all3node exit0,
+24audit jobs and both final64cases x2seeds xonline/EMA complete. stop=step_cap,
+NOT convergence. 2944present sealed files pass SHA/size;928MP4 decode. All1180
+PT payloads absentlocally, no independent tensor/checkpoint/restart proof.
+Matched128online RGBL1 source/base/oracle=.0894004/.0856243/.0802864;
+textureMSE .3573332/.3268305/.2730680;geo .0436140/.0408064/.0220528.
+Oracle vsbase: RGB6.23%,texture16.45%,geo45.96% better;58/64 case-mean RGB
+and62/64texture improve. EMA confirms5.91%/15.93%. AEreferenceL1 .0438093;
+only12.77% ofbaseline-to-AE errorgap closed. Dynamicghosts/deformationpersist.
+ConditionACTIVE: step2000meaninjectionRMS .09463,ratio .14326,presence5/8.
+8caseonline correct/zero/shuffle L1=.103942/.144999/.174503. Oracle onlytrained
+withcorrectconditions, sozero/shuffle areOOD sensitivity, notpuregeometry proof
+or interchangeablewithtrainedbaseline. Geo maycarryappearance,oracle requires
+futureframes; nevercallitdeployablebestmodel orphysicaltrajectorycontrol.
+Case041 stillAEanomalous; correctRGB canbeworsethanwrongthere. Full63excluding041
+RGBgain6.69%,notdrivingconclusion. Stage58doesnotisolateDINOvsVGGT orcodecfamily,
+and2000steporacle isnotabilityupperbound. No fixedtrainsetgenerationeval, so
+fitvsgeneralization bottleneck unresolved. No newtraining launched. Recommend
+preservebothweights andprioritize matchedDINO/VGGT+videocodecpositivecontrol,
+notautomaticlonger/fullHQ/control expansion. Thisfollowup isnotimplemented.
+DIbase/oracle1393/1410futuretokens/s/NPU;processwall3.06/3.18h incl eval/IO;
+maxallocated25.40GiB includes eval. 24guardsnormalstop,dualpubreportsuccess.
+Evidence D:/workspace/VggAE_DataAudit/stage58_complete_20261029;20cases visually
+reviewed incl all8conditioncases and quantitativebest/worst. Trainingcodeunchanged.
+
+## Priority Update (2026-10-28, Stage58 partial results reviewed)
+
+Local D:/中转站/scale is a partial snapshot: baseline launcher reaches1300/1310,
+saved evaluation/checkpoint receipts reach1000; no oracle_geo output yet. Do not
+call this a future-geometry conditioning result. Read the partial-results section
+of docs/SCENE_GEO_TEXTURE_PILOT_RUNBOOK.md. Audit24/24 complete; all192MP4 decode,
+736present sealed files pass SHA/size; all430PT payloads absent locally, so no
+independent checkpoint/tensor verification. Training finite, baselineadapter0
+as intended, latestDI1393-1395futuretokens/s/NPU, peak25.40GiB onnode0/22.03others.
+Shared512windows/498videos from2048candidates,64eval retained, no recordedbadinput.
+Matched first8cases/seed101 source->500online->1000online RGBL1
+.10128955->.09812048->.09712830;1000EMA .09733226. TextureMSE .378293->.350060.
+Only modest improvement; car001 worse, walking004 unchanged, visible ghosts and
+deformation persist. Do not compare this8case mean to older64/50case means.
+Audit futureintervention prefix tokens/latents exactly0 in8cases; full9/prefix4
+geo relativeRMS .354-.412%,texture0. Cached/reencoded reconstruction L1 differs
+atmost .00005195. Case041 stillwashesout inboth: full9 unclippedL1 .309495/.309547,
+PSNR9.519/9.518; cache-only mismatch insufficient, codec/preprocessing/numerics
+root cause notisolated. Repeatimage depth residual afterone scale5.38-10.77%,
+LKmotion0: teacher geometry notexact; current geometry-residual masks unreliable.
+Continue existing bounded2000+2000 matchedpilot; no config/code or AE changes
+midrun, no automatic extension. Oracle/control ablations stillrequired.
+Analysis D:/workspace/VggAE_DataAudit/stage58_partial_20261028. Trainingcode untouched.
+
 ## Priority Update (2026-10-28, Stage58 geometry consistency and conditional pilot)
 
 Stage58 is scripts/scale/58_train_scene_geo_texture.sh; read
