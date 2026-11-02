@@ -1,5 +1,51 @@
 # Project Context
 
+## Stage60 native editing implementation (2026-11-02, latest)
+
+User has staged Senorita-pilot on owner OBS `dataset/Senorita-pilot` and native
+VACE-14B / VACE-Benchmark / SAM2.1 under `vggae_ref`, copied by existing startup
+to `/cache/yexiaoyu/vggae_ref`. Local downloads now belong to the user; do not
+restart or stop them. User authorizes implementation and explicitly permits
+changing the initial hypothesis when evidence contradicts it. User stresses
+resolution/aspect handling. Three nodes x eight 910B remains the target.
+
+Implemented independent Stage60 (`scripts/scale/60_train_vace_edit_pilot.sh`):
+native VACE editing baseline -> matched LoRA SFT / edited-target RAE supervision.
+Default pilot 1000 updates per arm, 2048 train/24 dev/128 reserved test source-
+group pairs. Original Wan VAE/velocity/UniPC are retained. This is auxiliary RAE
+post-training, NOT the old C256 diffusion adapter or an already established
+geometry contribution. SAM2 is staged but not used without legal object prompts.
+Details/launch: `docs/VACE_EDIT_PILOT_RUNBOOK.md`.
+
+Actual format audit of local tar4 + official metadata: member `./4/hash.mp4`
+versus metadata `local_style_transfer/4/hash.mp4`; instructions but no target
+captions. A real pair is 8 FPS, 33 source/34 target frames, 336x592 portrait.
+Use 17 timestamps/8 FPS for Senorita; benchmark dev 16 FPS and descriptive
+prompts separately. Native RGB is fit to max 352*640 area, max side768, no
+upscaling, same transform for source/target, full-FOV aspect preservation, minimal
+padding to16. RAE uses aspect-preserving 518-square letterbox; auxiliary losses
+exclude padding. Previews/metrics crop valid content; no macroblock stretching.
+Twelve actual pairs from package4 decoded locally (all336x592/8FPS); not a full
+distribution audit. Default area increased from256*448 to352*640 to preserve
+their original336x592 resolution. Portrait MP4 encoding tested; files on D.
+
+Full VACE architecture including its control branch: 17,337,592,896 parameters;
+rank16 QKVO LoRA:62,914,560. Meta/tensor-at-a-time loading, BF16 base with FP32
+islands, block checkpointing, batch1, no full frozen-weight DDP broadcast.
+Live 14B NPU peak/HCCL/MoXing/quality UNVERIFIED until cluster smoke. CPU tiny
+native equivalence, shard loading, RAE->LoRA gradients, detached control,
+dual-read/resume/FP32 EMA, launcher sequencing and actual two-rank fresh-process
+Gloo resume have passed. The on-cluster entry itself runs small accelerator
+forward/backward tests and two-update/full-process-resume before longer arms.
+
+Outputs dual-write `$OUTPUT_URL/scale/vace_edit_pilot_v1` and owner output mirror.
+Cache persists owner `cache_latents/vace_edit_pilot_v1`. Save periodic immutable
+checkpoints + committed resume pointer + latest alias, RAW/EMA/native videos,
+native latents, RAE reconstruction previews, metrics/TensorBoard/DI_throughput,
+all-node launcher logs and job-scoped idle protection. Teacher/arm errors retain
+completed independent SFT work; final exit reports failure. Quality is not a
+gate. No cluster job submitted or new editing quality demonstrated locally.
+
 ## Stage59 matched feature-source pilot implemented (2026-10-30)
 
 User authorized "跑吧" after the decoder-history correction. Implementation:

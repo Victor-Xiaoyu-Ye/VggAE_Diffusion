@@ -3,6 +3,30 @@
 Read this file first. It defines the active project context, current goals,
 rules, and safe next steps for future agents.
 
+## Latest implementation: Stage60 native VACE editing (2026-11-02)
+
+User supplied owner OBS `dataset/Senorita-pilot`, plus official-layout
+`vggae_ref/{Wan2.1-VACE-14B,VACE-Benchmark,sam2.1-hiera-large}`. Existing startup
+copies refs to `/cache/yexiaoyu/vggae_ref`. Implemented standalone Stage60, with
+runbook `docs/VACE_EDIT_PILOT_RUNBOOK.md`. The user permits pivoting again if
+the hypothesis fails. Local downloads now user-managed: do not touch processes.
+
+Native VACE + LoRA SFT versus edited-target production Scene C256 supervision;
+native VAE remains renderer, no C256 re-interpretation of Wan weights. SAM2 not
+used in first pilot. Preserve 3x8 NPU startup/dual IO/DI_throughput/idle guard.
+Actual Senorita pair: 8 FPS/portrait/one extra target tail frame. Never hard-crop
+all samples to landscape, stretch their aspect or duplicate frames to16 FPS.
+Aspect-fit area<=352*640 (keep inspected336x592 sources native), no RGB upscaling,
+pad16, valid-rect bookkeeping;
+RAE518 letterbox with masked padding losses. Benchmark descriptive prompts are
+separate from instruction-transfer evaluation. Reserved tests never trained.
+
+CPU native/shard/gradient/resume + two-rank Gloo and shell contract tests passed;
+full14B NPU/HCCL/OBS/quality NOT verified. Use `EDIT_STAGE=smoke` then `all` on
+`scripts/scale/60_train_vace_edit_pilot.sh`; distinct namespaces. Do not call
+this a proven geometric method or a paper result. Main-output gains determine
+whether to keep the RAE approach, not auxiliary loss alone.
+
 ## Priority Update (2026-10-30, Stage59 matched pilot implemented)
 
 Superseded for execution status by Stage59 implementation below: user said

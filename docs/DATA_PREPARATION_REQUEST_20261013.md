@@ -10,6 +10,22 @@
 
 RGB继续放OBS。这里只检查目录、清单和小型annotation，必要临时文件放D盘；不把完整raw数据集下载到本机。
 
+## 2026-11-02最新：用户已搬运先行数据与权重，进入Stage60
+
+用户确认 `dataset/Senorita-pilot` 和 `vggae_ref/{VACE-Benchmark,Wan2.1-VACE-14B,sam2.1-hiera-large}`
+已在原owner OBS根目录，集群照旧将refs拉到`/cache/yexiaoyu/vggae_ref`。
+这属于用户的可用性报告，尚未重新远端逐对象校验。无需追加模型下载；本地下载由用户管理。
+实现、分辨率协议、启动方式见 [Stage60 runbook](VACE_EDIT_PILOT_RUNBOOK.md)。
+
+真实样本格式核查：tar内`./4/hash.mp4`，metadata为`local_style_transfer/4/hash.mp4`；
+只含编辑指令、源/目标路径，没有描述性caption。已解码的一对是8FPS、336×592竖屏，源33帧、目标34帧。
+因此先行编辑窗采用8FPS/17帧；不照搬16FPS，不统一横屏裁切。
+同一对使用同一等比缩放/补边：原始视野保留、不放大native RGB，像素预算≤352×640，最小16倍数补边。
+进一步抽查同一包12对均为336×592/8FPS且通过解码；提高像素预算后这些样本直接保留原始分辨率。
+该抽查不代表全部包的尺寸/质量分布。
+RAE518采用等比letterbox并排除补边损失。测试集按源字节hash分组预留、不缓存训练；
+这仍不是已认证的物理场景去重/公开benchmark测试划分。
+
 ## 1. 现在实际使用的资产
 
 以下是scene_rae_c256_15day_v1/production实际train cohort，非整个OBS库数量：
