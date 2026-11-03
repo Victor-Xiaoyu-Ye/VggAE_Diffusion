@@ -17,7 +17,7 @@ reveals a mismatch. No from-scratch, no-VAE or tiny-backbone constraint applies.
 - Data: `obs://yw-ads-training-gy1/data/external/personal/g00833899/y50046448/dataset/Senorita-pilot`
 - Existing startup stages `vggae_ref` to `/cache/yexiaoyu/vggae_ref`:
   `Wan2.1-VACE-14B`, `VACE-Benchmark`, `sam2.1-hiera-large`.
-- Frozen teacher: existing `scene_rae_c256_15day_v1/ae/best_joint.pt`, plus existing
+- Frozen teacher: existing `scene_rae_c256_15day_v1/production/ae/best_joint.pt`, plus existing
   `StreamVGGT/checkpoints.pth`. No new encoder/head download is required.
 - SAM2 is inventoried but not invoked. It needs an object prompt/seed; inventing
   a target-difference mask would leak the edited answer into the condition.
@@ -205,6 +205,27 @@ the existing launcher publisher. It identifies the Python/shell entry, stage,
 arm, local and phase outcomes, TCP endpoint and original exception. No model,
 data, cache identity or checkpoint format changed. Update all three nodes and
 retry the same stage/namespace; do not erase cached work for this change.
+
+### Teacher checkpoint path correction (2026-11-03)
+
+The next cluster log shows stage60_3 returned0 on all3 nodes, then stage60_4
+failed with OBS NoSuchKey. The teacher staging script incorrectly omitted
+`production/` from both default roots. Stage51/59 and the archived production
+`ae/complete.json` identify the same selected checkpoint at:
+
+`obs://yw-ads-training-gy1/data/external/personal/g00833899/y50046448/output/scale/scene_rae_c256_15day_v1/production/ae/best_joint.pt`
+
+The selection remains step9126, not latest or a newly trained teacher. Both
+defaults are corrected. Explicit EDIT_RAE_URL/EDIT_RAE_MIRROR_URL and an existing
+local EDIT_RAE still work. The old wrong-path404 does not establish an OBS outage.
+The current OUTPUT_URL may legitimately lack this historical run; the persistent
+owner mirror is then used. Update the OBS code package/all nodes and rerun the
+same smoke namespace, retaining native/data/SFT outputs. By design, missing
+teacher skips RAE work but still permits independent SFT; the overall exit remains
+nonzero, so smoke must not count as fully passed. Three real shell/local-file
+tests cover production-root fallback, explicit override and local reuse; the
+existing launcher tests check SFT continuation. No fresh remote payload read or
+claim of completed RAE training is made from these tests.
 
 Useful overrides (same values on all nodes):
 

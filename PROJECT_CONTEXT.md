@@ -1,5 +1,27 @@
 # Project Context
 
+## Stage60 teacher path correction (2026-11-03, latest)
+
+New user logs confirm stage60_3 exit0/local0/all_results_observed=True with
+all3 peer results0. Stage60_4 then fails on every node: selected productionAE
+default URL omitted production/ and OBS returns404 NoSuchKey. This is a script
+path bug, not another rendezvous failure or evidence of model OOM. Stage51/59
+root construction and archived production/ae/complete.json confirm selected
+ae/best_joint.pt at step9126, relative to the production root. Correct full path:
+output/scale/scene_rae_c256_15day_v1/production/ae/best_joint.pt.
+
+Both current-output and persistent-mirror defaults in stage_editing_teacher.sh
+are corrected; existing local/explicit URL overrides remain. Same productionAE,
+no representation/training/cache identity change, no new entry point or asset
+download. Real shell+file-transfer tests cover missing-current to production-
+mirror fallback (with a decoy obsolete path), explicit override and local reuse.
+Existing launcher checks retain independent SFT when optional teacher fails;
+RAE skipped and overall nonzero is not a completed smoke. Update OBS code and
+rerun same namespace, preserve caches/checkpoints. Remote correct-path bytes
+have not been re-fetched locally; current log does not prove RAE training passed.
+All7 teacher-staging/launcher tests pass, plus Python/Bash syntax and diff checks.
+Validation: D:/workspace/VggAE_DataAudit/vace_edit_pilot_format/teacher_staging_validation_20261103.log.
+
 ## Stage60 startup skew confirmed and coordinated (2026-11-03, latest)
 
 Complete user logs now identify the earlier disconnect: node0 failed in
