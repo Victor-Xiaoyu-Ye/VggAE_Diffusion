@@ -1,5 +1,36 @@
 # Project Context
 
+## Stage60 startup skew confirmed and coordinated (2026-11-03, latest)
+
+Complete user logs now identify the earlier disconnect: node0 failed in
+TCPStore construction after601s, only2/3 clients joined; worker2 was still in
+environment/ref staging, with one OBS copy taking1946.14s. Worker1 completed
+smoke indexing48/4/8 while node0 was still blocked in implicit worker wait.
+No model training had begun. Old exit0 described only node1's child; this was
+not evidence of loss/OOM or two-hour idle reclaim. User's bare consecutive
+smoke/all commands continued to all after smoke failed, causing a new manifest.
+
+Replaced asymmetric implicit TCPStore wait with explicit named-rank registration
+before any child starts. Log/persist joined/missing ranks, host, endpoint,
+phase/run namespace; reject duplicate ranks and mixed phases before launching.
+Connected peers acknowledge join failures before owner teardown. Stage60 uses
+3600s configurable EDIT_JOIN_TIMEOUT_SECONDS, independent of child runtime;
+all-device guards keep monitoring during waiting. External package/ref staging
+still happens before this launcher, not covered by its guard or diagnostics.
+
+User requests NO separate bootstrap/entry point; only explain setup delay and
+maintain the existing launcher. Leave unrelated reward-forcing commands alone.
+No dependency-installation or resource-copy redesign is implemented. Link the
+existing smoke/all commands with && so all runs only on smoke success; the
+same command/code must run on all3nodes. No cache/checkpoint/model change, no
+need to delete caches. Actual CPU TCPStore-process tests exercise missing third
+node, delayed join, mixed run ID and duplicate rank; shell tests cover failed
+index stopping before cache/training. All18 local coordinator/launcher tests
+pass, plus Python/Bash syntax and diff checks. Validation log is on D-drive:
+VggAE_DataAudit/vace_edit_pilot_format/rendezvous_validation_20261103.log.
+See docs/VACE_EDIT_PILOT_RUNBOOK.md. Full NPU,
+HCCL and remote quality validation still pending; no cluster job submitted here.
+
 ## Stage60 coordinator disconnect handling (2026-11-03, latest)
 
 User reported node1 TCPStore.check -> recv 0 bytes while the coordinator's

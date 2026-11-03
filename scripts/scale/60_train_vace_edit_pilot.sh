@@ -11,7 +11,9 @@ export MASTER_PORT="${MASTER_PORT:-29960}" HCCL_EXEC_TIMEOUT="${HCCL_EXEC_TIMEOU
 configure_modelarts_distributed
 STAGE="${EDIT_STAGE:-all}"
 [[ "${STAGE}" =~ ^(all|smoke|prepare|native|train|dry)$ ]] || { echo 'Invalid EDIT_STAGE'; exit 2; }
-[[ "${NNODES}" == 3 && "${NUM_NPUS}" == 8 ]] || { echo 'Use three nodes x eight NPUs.'; exit 2; }
+[[ "${NNODES}" == 3 && "${NUM_NPUS}" == 8 && "${NODE_RANK}" =~ ^[0-2]$ ]] || {
+  echo 'Use three nodes x eight NPUs, with NODE_RANK=0/1/2.'; exit 2;
+}
 [[ "${MASTER_PORT}" =~ ^[0-9]+$ && "${MASTER_PORT}" -ge 1024 && "${MASTER_PORT}" -le 65400 ]] || exit 2
 BASE_PORT="${MASTER_PORT}"
 NAMESPACE="${EDIT_NAMESPACE:-vace_edit_pilot_v1}"
@@ -76,6 +78,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 exec > >(tee -a "${LOGS}/pipeline.log") 2>&1
 TEE_PID=$!
+echo "Stage60 startup: stage=${STAGE} namespace=${NAMESPACE} node=${NODE_RANK}/${NNODES} host=${HOSTNAME:-unknown} master=${MASTER_ADDR}:${BASE_PORT} VC_TASK_INDEX=${VC_TASK_INDEX:-unset}"
 "${PYTHON_BIN}" "${IO}" publish --source "${LOGS}" \
   --root "${PRIMARY}/launcher/node${NODE_RANK}" --root "${MIRROR}/launcher/node${NODE_RANK}" --watch &
 SYNC_PID=$!
@@ -106,6 +109,7 @@ coordinate() {
     PYTORCH_NPU_ALLOC_CONF="${PYTORCH_NPU_ALLOC_CONF:-expandable_segments:True}" \
     "${PYTHON_BIN}" -u "${PROJECT}/scripts/coordinated_scene_controls.py" \
     --timeout "${EDIT_TIMEOUT_SECONDS:-604800}" --phase "stage60_${offset}" \
+    --join-timeout "${EDIT_JOIN_TIMEOUT_SECONDS:-3600}" --run-id "${NAMESPACE}:${STAGE}" \
     --status-file "${LOGS}/coordinator_phase_${offset}.json" -- "$@"
 }
 distributed_phase() {

@@ -65,6 +65,7 @@ case "$1" in
   echo publish >> "${PROJECT}/calls" ;;
  */coordinated_scene_controls.py)
   echo "port=${MASTER_PORT}" >> "${PROJECT}/ports"
+  echo "coordinator $*"
   while [[ "$1" != -- ]]; do shift; done; shift
   "$@" ;;
  -) "$REAL_PYTHON" "$@" ;;
@@ -116,6 +117,16 @@ esac
         self.assertEqual(result.returncode,7,result.stdout+result.stderr)
         self.assertIn('sft_0',calls);self.assertNotIn('rae_0',calls)
         self.assertEqual(cfg['steps'],3);self.assertEqual(cfg['rae_warmup'],0)
+        self.assertIn('--join-timeout 3600',result.stdout)
+        self.assertIn('--run-id fixture_smoke:smoke',result.stdout)
+
+    def test_index_failure_stops_before_cache_or_training(self):
+        result,calls,_,_=self.run_fixture('index','smoke')
+        self.assertEqual(result.returncode,7,result.stdout+result.stderr)
+        self.assertNotIn('cache',calls)
+        self.assertNotIn('native',calls)
+        self.assertNotIn('sft_2',calls)
+        self.assertIn('guard-stop',calls)
 
 
 if __name__=='__main__': unittest.main()

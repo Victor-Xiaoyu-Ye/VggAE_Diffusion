@@ -133,8 +133,19 @@ evaluation. The smoke has three updates and four-step samples: correctness only.
 
 ## Launch using the existing cluster startup
 
-After the usual repository/environment/vggae_ref staging, execute on all three
-nodes through the same ModelArts launcher as previous experiments:
+After the usual repository/environment/vggae_ref staging, execute the same
+commands on all three nodes through the existing ModelArts launcher:
+
+```bash
+cd /cache/yexiaoyu/VggAE_Diffusion
+export EDIT_JOIN_TIMEOUT_SECONDS=3600
+EDIT_STAGE=smoke bash scripts/scale/60_train_vace_edit_pilot.sh && \
+EDIT_STAGE=all bash scripts/scale/60_train_vace_edit_pilot.sh
+```
+
+The `&&` starts all only after smoke succeeds. Do not place
+bare smoke/all commands on consecutive lines: an outer shell without `set -e`
+will continue to all after smoke fails. To run only smoke while investigating:
 
 ```bash
 cd /cache/yexiaoyu/VggAE_Diffusion
@@ -157,6 +168,26 @@ scores never gate the next legal phase. Re-running the same command resumes.
 
 ### Coordinator disconnects (2026-11-03)
 
+The complete three-worker logs identify this incident's cause: node0 timed out
+in TCPStore construction after 601s with only 2/3 clients joined. Worker2 was
+still in environment/asset setup; one OBS copy alone took 1946.14s. Worker1 had
+already finished smoke indexing (48 train / 4 dev / 8 test) because TCPStore's
+implicit worker wait blocks the owner but not clients. When node0 timed out,
+worker1 lost its socket. This was before model/cache training, not an OOM or
+two-hour idle reclaim. The user's consecutive smoke/all commands then allowed
+all to start despite the smoke error, explaining the subsequent manifest change.
+
+The coordinator now starts a listening store without that asymmetric implicit
+wait and explicitly registers every rank before starting ANY child. Joining
+logs and phase JSON show joined/missing nodes, hostname, endpoint and run ID.
+Stage60 allows 3600s for connection/registration (`EDIT_JOIN_TIMEOUT_SECONDS`),
+separate from its child-runtime budget. Existing idle guards stay active during
+this wait. Duplicate ranks and mixed smoke/all namespace/phase registrations
+are rejected with a shared original error before doing work. On join timeout,
+connected peers acknowledge that error before node0 closes the store.
+Setup before entering this shell still belongs to the external cluster startup;
+this change does not speed up downloads or install an idle guard in that code.
+
 `TCPStore.check: failed to recv, got 0 bytes` means the store connection closed;
 it is not evidence of a diffusion loss failure. The old `node1 exit=0` final
 line could merely describe its own child process even while the coordination
@@ -177,7 +208,8 @@ retry the same stage/namespace; do not erase cached work for this change.
 
 Useful overrides (same values on all nodes):
 
-- `EDIT_STAGE=prepare|native|train|dry`, `EDIT_ARMS="sft rae rae_detached"`.
+- `EDIT_STAGE=smoke|all|prepare|native|train|dry`, `EDIT_ARMS="sft rae rae_detached"`.
+- `EDIT_JOIN_TIMEOUT_SECONDS=3600` for slow per-node environment/asset staging.
 - `EDIT_CONFIG=/path/config.json`, `EDIT_NAMESPACE=new_name` for changed protocol.
 - `EDIT_MODEL`, `EDIT_BENCHMARK`, `EDIT_DATA_SOURCE`, `EDIT_DATA_LOCAL`.
 - `EDIT_RAE`, `EDIT_RAE_URL`, `EDIT_RAE_MIRROR_URL` for the existing teacher.
