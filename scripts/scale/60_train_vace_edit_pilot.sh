@@ -105,7 +105,8 @@ coordinate() {
   MASTER_PORT=$((BASE_PORT+offset)) OMP_NUM_THREADS="${OMP_NUM_THREADS:-4}" \
     PYTORCH_NPU_ALLOC_CONF="${PYTORCH_NPU_ALLOC_CONF:-expandable_segments:True}" \
     "${PYTHON_BIN}" -u "${PROJECT}/scripts/coordinated_scene_controls.py" \
-    --timeout "${EDIT_TIMEOUT_SECONDS:-604800}" -- "$@"
+    --timeout "${EDIT_TIMEOUT_SECONDS:-604800}" --phase "stage60_${offset}" \
+    --status-file "${LOGS}/coordinator_phase_${offset}.json" -- "$@"
 }
 distributed_phase() {
   local offset=$1; shift

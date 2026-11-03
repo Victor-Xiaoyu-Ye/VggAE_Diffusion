@@ -155,6 +155,26 @@ If a teacher/arm fails, independent SFT work continues, completed results remain
 and the final exit is nonzero. Numerical/setup failures remain errors; quality
 scores never gate the next legal phase. Re-running the same command resumes.
 
+### Coordinator disconnects (2026-11-03)
+
+`TCPStore.check: failed to recv, got 0 bytes` means the store connection closed;
+it is not evidence of a diffusion loss failure. The old `node1 exit=0` final
+line could merely describe its own child process even while the coordination
+raised an exception. The new log distinguishes `local_exit`, the overall `exit`,
+observed peer results and `all_results_observed`. Node0's earlier exception or
+termination remains necessary to identify an incident's original cause.
+
+A command launch exception now participates in result/ack shutdown, keeping
+the node0 server alive until live peers receive the failure. Normal shutdown
+already had an ack barrier; this correction does not prove that an arbitrary
+disconnect was caused by a normal-shutdown race or fix external node death.
+
+Every node writes `launcher/nodeN/coordinator_phase_<offset>.json`, mirrored by
+the existing launcher publisher. It identifies the Python/shell entry, stage,
+arm, local and phase outcomes, TCP endpoint and original exception. No model,
+data, cache identity or checkpoint format changed. Update all three nodes and
+retry the same stage/namespace; do not erase cached work for this change.
+
 Useful overrides (same values on all nodes):
 
 - `EDIT_STAGE=prepare|native|train|dry`, `EDIT_ARMS="sft rae rae_detached"`.

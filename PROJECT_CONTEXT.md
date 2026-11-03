@@ -1,5 +1,26 @@
 # Project Context
 
+## Stage60 coordinator disconnect handling (2026-11-03, latest)
+
+User reported node1 TCPStore.check -> recv 0 bytes while the coordinator's
+finally log said exit=0. That was the local child exit code, not successful
+multi-node completion. The provided snippet does not identify why node0/store
+owner disconnected; node0's earlier error/termination log is still needed.
+
+Fixed confirmed coordinator defects: distinguish local/phase status and never
+log a failed TCP protocol as phase success; a Popen launch failure (especially
+on node0) now goes through result/ack coordination before the server exits,
+rather than publishing a failure then immediately destroying the owner. Normal
+completion already had an ack barrier; do not claim the snippet proves a normal
+shutdown race. Added per-phase/per-node JSON (stage60 launcher logs) with job,
+observed peer results, endpoint, original launch/protocol errors and outcome.
+Existing cache/checkpoint identities and training parameters stay compatible.
+
+Validation uses actual three-process CPU TCPStores whose owner really exits,
+covering delayed ack, leader/follower launch failures and abrupt owner loss;
+all 13 coordinator/current-launcher checks pass. These are not NPU/HCCL checks
+or proof that this cluster incident's underlying cause has been resolved.
+
 ## Stage60 native editing implementation (2026-11-02, latest)
 
 User has staged Senorita-pilot on owner OBS `dataset/Senorita-pilot` and native
