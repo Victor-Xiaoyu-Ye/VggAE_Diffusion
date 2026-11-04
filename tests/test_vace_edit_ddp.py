@@ -21,7 +21,7 @@ class Decoder(nn.Module):
     def decode(self,z): return self.project(z)
 
 
-def worker(rank,directory,phase):
+def worker(rank,directory,phase,aligned=False):
     import train_vace_edit as trainer
     root=Path(directory)
     os.environ['RANK']=str(rank); torch.set_num_threads(1)
@@ -30,12 +30,16 @@ def worker(rank,directory,phase):
     try:
         with cpu_native_import():
             torch.manual_seed(31)
-            cfg=config(); cfg['accum']=1
+            if aligned:
+                from tests.test_editing_alignment import aligned_config
+                cfg=aligned_config()
+            else:cfg=config()
+            cfg['accum']=1
             model=EditingModel(tiny_native().requires_grad_(False),cfg,True)
             decoder=Decoder().requires_grad_(False)
             fixture=torch.load(str(root/'fixture.pt'),weights_only=False)
             out=ArtifactStore(root/('direct' if phase=='direct' else 'resumed'),[])
-            args=SimpleNamespace(arm='rae',stop_after=2 if phase=='preflight' else 0)
+            args=SimpleNamespace(arm='rae_balanced' if aligned else 'rae',stop_after=2 if phase=='preflight' else 0)
             with patch.object(trainer,'evaluate',return_value=[]):
                 trainer.run_training(args,cfg,fixture['bank'],ArtifactStore(root/'data',[]),out,
                     'ddp-fixture',torch.device('cpu'),rank,2,model,fixture['teacher'],decoder)
@@ -47,6 +51,18 @@ def worker(rank,directory,phase):
 
 @unittest.skipUnless(dist.is_gloo_available(),'Gloo required')
 class EditingDDPTests(unittest.TestCase):
+    def test_aligned_region_loss_gradient_probe_and_checkpoint_restart(self):
+        from tests.test_editing_alignment import training_fixture
+        with tempfile.TemporaryDirectory(prefix='aligned ddp ',dir=Path(__file__).resolve().parents[2]) as tmp:
+            root=Path(tmp);_,bank,teacher=training_fixture(root)
+            torch.save(dict(bank=bank,teacher=teacher),str(root/'fixture.pt'))
+            for phase in ('direct','preflight','resume'):
+                mp.spawn(worker,args=(tmp,phase,True),nprocs=2,join=True)
+            final=[torch.load(str(root/f'{phase}-rank{r}.pt'),weights_only=False)
+                   for phase in ('direct','resume') for r in range(2)]
+            for state in final[1:]:
+                for key,value in final[0].items():torch.testing.assert_close(value,state[key],rtol=0,atol=0)
+
     def test_restart_keeps_ranks_and_updates_equal(self):
         with tempfile.TemporaryDirectory(prefix='editing ddp ',dir=Path(__file__).resolve().parents[2]) as tmp:
             root=Path(tmp); store=ArtifactStore(root/'data',[])

@@ -1,0 +1,11 @@
+{
+  "schema": "source-box-controls-v1",
+  "annotation_source": "manual_source_video",
+  "purpose": "Selected diagnostic cases from the already-reviewed internal dev set. Coarse source-video boxes, not segmentation GT, not an unbiased benchmark, never target-derived controls. All arms receive identical boxes.",
+  "cases": {
+    "19afd396b285f36d97e35d15": {"object": "bed covering", "keyframes": [[0, 0.12, 0.40, 0.96, 0.96], [16, 0.12, 0.40, 0.96, 0.96]]},
+    "7e05f2d9def62c598a2e7c80": {"object": "right foreground tent", "keyframes": [[0, 0.54, 0.53, 0.99, 0.99], [16, 0.49, 0.53, 0.97, 0.99]]},
+    "acccbcf84e66d0f08464db3f": {"object": "butterfly, coarse box includes adjacent flower", "keyframes": [[0, 0.24, 0.13, 0.75, 0.86], [8, 0.18, 0.13, 0.75, 0.90], [16, 0.18, 0.13, 0.75, 0.90]]},
+    "d00f8734c159126d439da449": {"object": "hat", "keyframes": [[0, 0.12, 0.12, 0.60, 0.31], [16, 0.12, 0.12, 0.60, 0.31]]}
+  }
+}

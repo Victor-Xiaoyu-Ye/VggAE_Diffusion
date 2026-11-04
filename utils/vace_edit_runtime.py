@@ -182,16 +182,26 @@ class EditingModel(nn.Module):
         insert_lora(backbone,cfg['lora_rank'],cfg['lora_alpha'])
         self.readout=(nn.Sequential(nn.LayerNorm(backbone.dim),nn.Linear(backbone.dim,256))
                       if with_rae else None)
+        self.last_readout_hidden = None
 
     def forward(self,x,t,condition,text,detach_readout=False):
         velocity,h,grids=native_forward(self.backbone,x,t,condition,text,
             self.cfg['rae_block'] if self.readout is not None else None,self.training,self.cfg['context_scale'])
         z=None
         if self.readout is not None:
+            self.last_readout_hidden = h if self.training else None
             h=h.detach() if detach_readout else h
             t1,h1,w1=grids[0].tolist()
             z=self.readout(h).transpose(1,2).reshape(len(x),256,t1,h1,w1)
-            z=F.interpolate(z.float(),size=(self.cfg['rae_frames'],18,18),mode='trilinear',align_corners=False)
+            if self.cfg.get('rae_alignment', 'legacy') == 'legacy':
+                z=F.interpolate(z.float(),size=(self.cfg['rae_frames'],18,18),mode='trilinear',align_corners=False)
+            else:
+                from utils.editing_alignment import ALIGNMENT
+                if self.cfg['rae_alignment'] != ALIGNMENT:
+                    raise ValueError('Unknown RAE coordinate contract')
+                # Keep native coordinates. Loss maps them using this sample's
+                # actual pad16 rectangle and teacher letterbox, not aspect stretch.
+                z=z.float()
             z=z.permute(0,2,3,4,1)
         return torch.stack(velocity),z
 
@@ -211,7 +221,12 @@ def flow_pair(clean,noise,sigma):
     return (1-s)*clean+s*noise,noise-clean
 
 
-def rae_supervision(pred,target,decoder,sigma,cfg,frame,valid_rect=None):
+def rae_supervision(pred,target,decoder,sigma,cfg,frame,valid_rect=None,spatial=None,support=None):
+    if cfg.get('rae_alignment', 'legacy') != 'legacy':
+        from utils.editing_alignment import aligned_rae_loss
+        if spatial is None or valid_rect is None:
+            raise ValueError('Aligned RAE needs native and teacher image coordinates')
+        return aligned_rae_loss(pred,target,decoder,sigma,cfg,frame,valid_rect,spatial,support)
     # Target-derived scale is detached, and the decoder weights stay frozen.
     scale=target.detach().flatten(0,-2).std(0,unbiased=False).clamp_min(.1)
     pixel_mask=None

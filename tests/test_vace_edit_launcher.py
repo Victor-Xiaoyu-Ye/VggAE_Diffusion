@@ -14,12 +14,13 @@ REPO=Path(__file__).resolve().parents[1]
 
 @unittest.skipUnless(BASH,'Bash required')
 class EditingLauncherTests(unittest.TestCase):
-    def run_fixture(self,fail='',stage='all'):
+    def run_fixture(self,fail='',stage='all',aligned=False):
         with tempfile.TemporaryDirectory(prefix='editing launcher ',dir=REPO.parent) as temp:
             root=Path(temp)
             for folder in ('scripts/scale','scripts/lib','configs'): (root/folder).mkdir(parents=True)
             for name in ('scripts/scale/60_train_vace_edit_pilot.sh','scripts/stage_editing_teacher.sh',
-                         'scripts/lib/job_cleanup.sh','configs/vace_edit_pilot_v1.json'):
+                         'scripts/lib/job_cleanup.sh','configs/vace_edit_pilot_v1.json',
+                         'scripts/scale/61_train_vace_edit_aligned.sh','configs/vace_edit_aligned_v2.json'):
                 shutil.copyfile(REPO/name,root/name)
             shell(root/'scripts/spatialvid_config.sh','''
 CONFIG_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -69,6 +70,14 @@ case "$1" in
   while [[ "$1" != -- ]]; do shift; done; shift
   "$@" ;;
  -) "$REAL_PYTHON" "$@" ;;
+ */check_editing_bank.py)
+  key=reuse_bank
+  [[ "$*" != *--require-teacher* ]] || key=reuse_teacher
+  echo "${key}" >> "${PROJECT}/calls"
+  [[ "${FAIL_PHASE}" != "${key}" ]] || exit 7 ;;
+ */finalize_vace_edit.py)
+  echo finalize >> "${PROJECT}/calls"
+  [[ "${FAIL_PHASE}" != finalize ]] || exit 9 ;;
  */prepare_vace_edit.py|*/train_vace_edit.py)
   key=''; stop=''
   while (( $# )); do
@@ -89,7 +98,10 @@ esac
             env={k:v for k,v in os.environ.items() if not k.startswith('EDIT_')}
             env.update(REAL_PYTHON=Path(sys.executable).as_posix(),FAIL_PHASE=fail,EDIT_STAGE=stage,
                 EDIT_NAMESPACE='fixture',EDIT_ARMS='sft rae',MASTER_PORT='29960',SCENE_HELPER_STOP_TIMEOUT='1')
-            result=subprocess.run([BASH,(root/'scripts/scale/60_train_vace_edit_pilot.sh').as_posix()],
+            if aligned:
+                env.pop('EDIT_ARMS');env['EDIT_EVAL_CHECKPOINT']='checkpoints/step_000250.pt'
+            entry='61_train_vace_edit_aligned.sh' if aligned else '60_train_vace_edit_pilot.sh'
+            result=subprocess.run([BASH,(root/'scripts/scale'/entry).as_posix()],
                 env=env,cwd=REPO.parent,capture_output=True,text=True,timeout=45)
             calls=(root/'calls').read_text().splitlines()
             ports=(root/'ports').read_text().splitlines()
@@ -101,7 +113,7 @@ esac
         result,calls,ports,cfg=self.run_fixture()
         self.assertEqual(result.returncode,0,result.stdout+result.stderr)
         jobs=[x for x in calls if x not in ('guard-start','guard-stop','publish','teacher_asset')]
-        self.assertEqual(jobs,['index','cache','native','teacher','sft_2','rae_2','sft_0','rae_0'])
+        self.assertEqual(jobs,['index','cache','native','teacher','sft_2','rae_2','sft_0','rae_0','finalize'])
         self.assertLess(calls.index('guard-start'),calls.index('index'))
         self.assertLess(calls.index('rae_0'),calls.index('guard-stop'))
         self.assertEqual(len(ports),len(set(ports)))
@@ -111,6 +123,31 @@ esac
         self.assertEqual(result.returncode,7,result.stdout+result.stderr)
         self.assertIn('sft_0',calls);self.assertNotIn('rae_2',calls)
         self.assertIn('guard-stop',calls)
+
+    def test_aligned_bank_readonly_all_controls_and_independent_arms(self):
+        result,calls,ports,cfg=self.run_fixture(aligned=True)
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        jobs=[x for x in calls if x not in ('guard-start','guard-stop','publish','teacher_asset')]
+        self.assertEqual(jobs,['reuse_bank','native','reuse_teacher','sft_2','rae_2','rae_detached_2',
+            'region_sft_2','rae_balanced_2','sft_0','rae_0','rae_detached_0','region_sft_0','rae_balanced_0','finalize'])
+        self.assertEqual(cfg['eval_cases'],24);self.assertEqual(len(ports),len(set(ports)))
+        self.assertIn('--controls',result.stdout)
+        self.assertIn('/cache_latents/vace_edit_pilot_v1',result.stdout)
+
+    def test_aligned_teacher_failure_still_runs_both_sft_arms_and_finalizes(self):
+        result,calls,_,_=self.run_fixture('reuse_teacher',aligned=True)
+        self.assertEqual(result.returncode,7,result.stdout+result.stderr)
+        self.assertIn('sft_0',calls);self.assertIn('region_sft_0',calls)
+        self.assertNotIn('rae_2',calls);self.assertIn('finalize',calls)
+
+    def test_checkpoint_evaluation_and_sync_never_prepare_or_train(self):
+        result,calls,_,_=self.run_fixture(stage='evaluate',aligned=True)
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        self.assertNotIn('sft_2',calls);self.assertNotIn('cache',calls)
+        self.assertIn('--eval-checkpoint checkpoints/step_000250.pt',result.stdout)
+        result,calls,_,_=self.run_fixture(stage='sync',aligned=True)
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        self.assertEqual([x for x in calls if x not in ('guard-start','guard-stop','publish')],['finalize'])
 
     def test_arm_failure_and_smoke_isolation(self):
         result,calls,_,cfg=self.run_fixture('rae_2','smoke')

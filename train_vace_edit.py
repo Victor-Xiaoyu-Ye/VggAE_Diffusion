@@ -21,25 +21,57 @@ from utils.vace_edit_runtime import (validate_assets,load_backbone,load_vae,Edit
 
 
 def evaluate(a,cfg,bank,data,out,model,device,rank,world,step,variant,identity):
+    rows=evaluate_protocol(a,cfg,bank,data,out,model,device,rank,world,step,variant,identity)
+    if getattr(a,'controls',None) and (step>=cfg['steps'] or a.arm=='native' or getattr(a,'eval_checkpoint',None)):
+        from utils.editing_controls import load_controls
+        controls=load_controls(a.controls)
+        rows+=evaluate_protocol(a,cfg,bank,data,out,model,device,rank,world,step,variant,identity,controls)
+    return rows
+
+
+def evaluate_protocol(a,cfg,bank,data,out,model,device,rank,world,step,variant,identity,controls=None):
     from utils.native_audit_io import recover_case,seal
     count=cfg['dev_pairs'] if a.arm=='native' or step>=cfg['steps'] else cfg['eval_cases']
     records=sorted([r for r in bank['records'] if r['split']=='dev'],key=lambda r:r['id'])[:count]
     if a.arm=='native':
         records+=[r for r in bank['records'] if r['split']=='benchmark_dev']
+    if controls is not None:
+        records=[r for r in records if r['split']=='dev' and r['id'] in controls['cases']]
+    tag=variant if controls is None else variant+'_source_region'
     rows=[]; vae=None; started=time.monotonic(); completed=0
     model.eval()
     for row in records[rank::world]:
-        folder=f'samples/s{step:06d}/{variant}/{row["id"]}'
-        contract=digest([identity,step,variant,row['id']])
+        folder=f'samples/s{step:06d}/{tag}/{row["id"]}'
+        contract=digest([identity,step,variant,row['id']] + ([controls['identity']] if controls else []))
         receipt=recover_case(out.local,folder+'/receipt.json',contract,out.roots)
         if receipt:
+            # Recovered movies may come from an older job's durable mirror.
+            # Publish payloads before the receipt into this job's OUTPUT_URL too.
+            out.publish([*receipt['files'],folder+'/receipt.json'])
             rows.append(receipt['metadata']); continue
         try:
             sample=data.load(row['file'],bank['identity'],True)
             if vae is None: vae=load_vae(a.model,device)
+            condition=sample['context'].to(device)
+            region_mask=None
+            if controls is not None:
+                from utils.editing_controls import source_box_mask
+                from utils.vace_edit_runtime import pack_context
+                region_mask=source_box_mask(controls['cases'][row['id']],sample['timing']['spatial'],cfg['frames'])
+                context_name='source_region_context/'+digest([bank['identity'],row['id'],controls['identity']])+'.pt'
+                context_identity=digest([bank['identity'],controls['identity'],'source-only-vace-context-v1'])
+                cached=out.load(context_name,context_identity)
+                if cached is None:
+                    # Only source RGB and the explicit user box enter the encoder.
+                    with torch.no_grad(),torch.autocast(device.type,dtype=torch.bfloat16,enabled=device.type!='cpu'):
+                        encoded=pack_context(vae,sample['source'].permute(1,0,2,3).to(device).float()/127.5-1,
+                                             region_mask.to(device))
+                    cached=dict(context=encoded.cpu().bfloat16())
+                    out.save(context_name,cached,context_identity)
+                condition=cached['context'].to(device)
             seed=cfg['seed']+int(digest(row['id'])[:8],16)%1000000
             with torch.no_grad():
-                latent=sample_native(model,sample['context'].to(device),sample['text'].to(device),
+                latent=sample_native(model,condition,sample['text'].to(device),
                                      sample['negative'].to(device),cfg,seed)
                 if not torch.isfinite(latent).all(): raise ValueError('Nonfinite generated native latent')
                 rgb=vae.decode([latent])[0].permute(1,0,2,3)
@@ -51,11 +83,21 @@ def evaluate(a,cfg,bank,data,out,model,device,rank,world,step,variant,identity):
             result=dict(id=row['id'],step=step,variant=variant,split=row['split'],
                 prompt=sample['row']['instruction'],prompt_kind=row['prompt_kind'],seed=seed,
                 spatial=sample['timing']['spatial'],**pixel_report(source,target,cropped))
+            result['protocol']='text_only' if controls is None else 'text_plus_source_box_diagnostic'
+            if controls is not None:
+                result['control_identity']=controls['identity']
+                result['control']=controls['cases'][row['id']]
+                result['control_caveat']='Additional manual source-video region, same for every arm; NOT evidence of stronger text-only instruction following.'
+            if cfg.get('region_metrics') and row['split']=='dev':
+                from utils.editing_alignment import region_pixel_report
+                external=None if region_mask is None else region_mask.permute(1,0,2,3)[:,:,top:top+height,left:left+width]
+                result.update(region_pixel_report(source,target,cropped,cfg,external_mask=external))
             if row['split']=='benchmark_dev':
                 result['metric_caveat']='Official condition/prompt at reduced pilot geometry; raw_video is not an edited-target ground truth. NOT an official benchmark score.'
             movie=folder+'/source_target_output.mp4'
             labels=(['OFFICIAL SOURCE CONDITION','RAW REFERENCE (not edited GT)','NATIVE VACE OUTPUT']
-                    if row['split']=='benchmark_dev' else None)
+                    if row['split']=='benchmark_dev' else
+                    ['SOURCE' if controls is None else 'SOURCE + PROVIDED BOX','EDITED TARGET',f'{a.arm.upper()} {tag.upper()} step {step}'])
             write_video(out.local/movie,source,target,cropped,sample['timing']['output_fps'],labels=labels)
             out.save(folder+'/generated_latent.pt',dict(latent=latent.cpu(),seed=seed),contract)
             receipt=seal(out.local,folder+'/receipt.json',contract,[movie],result)
@@ -70,8 +112,10 @@ def evaluate(a,cfg,bank,data,out,model,device,rank,world,step,variant,identity):
             DI_throughput=completed*cfg['frames']/max(1e-6,time.monotonic()-started),throughput_unit='generated frames/s per rank'))
     del vae
     rows=sum(gather(rows,world),[])
-    if rank==0: out.write_json(f'evaluation/s{step:06d}_{variant}.json',dict(cases=rows,requested=len(records),
-        completed=sum('error' not in r for r in rows),failed=sum('error' in r for r in rows)))
+    if rank==0: out.write_json(f'evaluation/s{step:06d}_{tag}.json',dict(cases=rows,requested=len(records),
+        completed=sum('error' not in r for r in rows),failed=sum('error' in r for r in rows),
+        protocol='text_only' if controls is None else 'text_plus_source_box_diagnostic',
+        omitted_controls=0 if controls is None else len(controls['cases'])-len(records)))
     barrier()
     return rows
 
@@ -163,6 +207,15 @@ def run_training(a,cfg,bank,data,out,identity,device,rank,world,model,teacher_ba
                 sample=data.load(row['file'],bank['identity'],True)
                 teacher=(data.load(teacher_map[row['id']]['file'],teacher_bank['identity'],True) if teacher_bank else None)
                 target=teacher['z'][None].to(device).float() if teacher else None
+                support=pixel_support=None
+                if a.arm in ('region_sft','rae_balanced'):
+                    from utils.editing_alignment import change_support
+                    pixel_support=change_support(sample['source'],sample['target'],
+                        cfg.get('edit_support_threshold',16/255),cfg.get('edit_support_dilation',5))
+                if a.arm=='rae_balanced':
+                    from utils.editing_alignment import support_on_teacher
+                    support=support_on_teacher(sample['source'],sample['target'],sample['timing']['spatial'],
+                        teacher['valid_rect'],cfg['rae_frames'],cfg,pixel_support=pixel_support)
             except Exception as exc:
                 error=repr(exc)
                 progress(out,f'data_rank{rank}',dict(phase='skip_cached_pair',id=row['id'],error=error,step=step))
@@ -182,14 +235,26 @@ def run_training(a,cfg,bank,data,out,identity,device,rank,world,model,teacher_ba
             with sync,torch.autocast(device.type,dtype=torch.bfloat16,enabled=device.type!='cpu'):
                 pred,z=wrapped(list(x),sigma*1000,[sample['context'].to(device)],
                                [sample['empty' if drop else 'text'].to(device)],detach_readout=detach)
-                flow=F.mse_loss(pred.float(),velocity)
-                loss=flow; aux={}
+                aux={}
+                if pixel_support is not None:
+                    from utils.editing_alignment import balanced_flow_loss
+                    flow,aux=balanced_flow_loss(pred,velocity,pixel_support,sample['timing']['spatial'],cfg)
+                else:
+                    flow=F.mse_loss(pred.float(),velocity)
+                loss=flow
                 if target is not None:
-                    addition,aux=rae_supervision(z,target,decoder,sigma,cfg,step%cfg['rae_frames'],teacher.get('valid_rect'))
+                    addition,rae_aux=rae_supervision(z,target,decoder,sigma,cfg,step%cfg['rae_frames'],teacher.get('valid_rect'),
+                        spatial=sample.get('timing',{}).get('spatial'),support=support)
+                    aux.update(rae_aux)
                     loss=loss+addition
+                    probe=cfg.get('gradient_probe_every',0)
+                    if probe and (step+1)%probe==0 and not detach:
+                        from utils.editing_alignment import hidden_gradient_diagnostics
+                        aux.update(hidden_gradient_diagnostics(flow,addition,model.last_readout_hidden))
                 if any_rank(not bool(torch.isfinite(loss).all()),device):
                     raise FloatingPointError('Nonfinite editing loss; see last durable checkpoint')
                 (loss/cfg['accum']).backward()
+            if hasattr(model,'last_readout_hidden'): model.last_readout_hidden=None
             for k,v in dict(loss=float(loss.detach()),flow=float(flow.detach()),**aux).items():
                 totals[k]=totals.get(k,0.)+v/cfg['accum']
         if batch_failed:
@@ -207,6 +272,10 @@ def run_training(a,cfg,bank,data,out,identity,device,rank,world,model,teacher_ba
             statistics=gather(totals,world)
             if rank==0:
                 stats={k:sum(x[k] for x in statistics)/world for k in totals}
+                if 'aux_probe_active' in stats:
+                    active=stats['aux_probe_active']
+                    for key in ('aux_flow_cosine','aux_flow_grad_ratio'):
+                        stats[key]=stats[key]/active if active else 0.
                 stats.update(step=step+1,arm=a.arm,lr=optimizer.param_groups[0]['lr'],grad_norm=float(norm),head_grad_norm=float(head_norm),
                     DI_throughput=(step+1-start-skipped)*world*cfg['accum']*cfg['frames']/max(1e-6,time.monotonic()-started),
                     throughput_unit='global target video frames/s including IO, sampling and checkpoints',
@@ -243,9 +312,11 @@ def run_training(a,cfg,bank,data,out,identity,device,rank,world,model,teacher_ba
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     for flag in ('config','model','data','output'): p.add_argument('--'+flag,required=True)
-    p.add_argument('--arm',choices=('native','sft','rae','rae_detached'),required=True)
+    p.add_argument('--arm',choices=('native','sft','region_sft','rae','rae_balanced','rae_detached'),required=True)
     p.add_argument('--data-root',action='append',default=[]); p.add_argument('--root',action='append',default=[])
     p.add_argument('--rae'); p.add_argument('--stop-after',type=int,default=0)
+    p.add_argument('--controls',help='Optional source-only manual box JSON; evaluated separately at final sampling')
+    p.add_argument('--eval-checkpoint',help='Evaluate an existing checkpoint relative to this arm output; no optimizer steps')
     a=p.parse_args(); cfg=json.loads(Path(a.config).read_text())
     device,rank,world=distributed()
     torch.manual_seed(cfg['seed']); random.seed(cfg['seed'])
@@ -274,7 +345,15 @@ def main():
         torch.manual_seed(cfg['seed'])
         if device.type!='cpu': getattr(torch,device.type).manual_seed_all(cfg['seed'])
         model=EditingModel(model,cfg,teacher_bank is not None).to(device)
-        run_training(a,cfg,bank,data,out,identity,device,rank,world,model,teacher_bank,decoder)
+        if a.eval_checkpoint:
+            saved=out.load(a.eval_checkpoint,identity,True)
+            model.restore(saved['model'])
+            results=evaluate(a,cfg,bank,data,out,model,device,rank,world,saved['step'],'raw',identity)
+            model.restore(saved['ema'])
+            results+=evaluate(a,cfg,bank,data,out,model,device,rank,world,saved['step'],'ema',identity)
+            if not any('error' not in r for r in results): raise RuntimeError('All checkpoint previews failed')
+        else:
+            run_training(a,cfg,bank,data,out,identity,device,rank,world,model,teacher_bank,decoder)
     if dist.is_initialized(): dist.destroy_process_group()
 
 

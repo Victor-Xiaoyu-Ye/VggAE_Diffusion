@@ -3,6 +3,31 @@
 Read this file first. It defines the active project context, current goals,
 rules, and safe next steps for future agents.
 
+## Stage61 implementation: aligned editing and media repair (2026-11-04)
+
+User authorizes continuing toward a working publishable editing method. Read
+docs/VACE_EDIT_ALIGNED_RUNBOOK.md. Text-only is primary; user accepts optional
+source-region diagnostics only when all methods receive identical controls.
+Do not claim stronger instruction following from extra localization. No new
+data download needed. New namespace vace_edit_aligned_v2; read-only reuse of
+vace_edit_pilot_v1 native/teacher bank. Use scripts/scale/61_train_vace_edit_aligned.sh
+with smoke && all on existing three-node startup, not a new bootstrap installer.
+Arms sft/rae/rae_detached/region_sft/rae_balanced, native baseline. All24 dev at
+250/500/750/1000, RAW+EMA; checkpoint125. Correct native/letterbox coordinates
+and causal temporal indices. Paired-difference support is training/eval-only,
+not semantic/motion labels, never inference conditioning. Four manual source
+boxes are selected diagnostics, separate paths/protocol; no reserved-test use.
+RAE is hybrid RGB/Stream C256 training supervision, not the inference renderer.
+Generic geometry alignment, masks and loss reweighting are not novelty claims.
+CPU native gradients, detached=SFT exact updates, two-rank Gloo/probe/restart,
+real Bash/reuse/arm failure tests cover this change; 14B/NPU/OBS quality untested.
+User specifically requests fixing asymmetric preview publication: recovered
+cases now republish videos/receipt; final sweep verifies SHA/size on both roots
+including early steps. EDIT_STAGE=sync repairs without model loading/training.
+media_sync.json and comparison_summary.json expose failed/missing cases. Preserve
+old outputs/checkpoints and preexisting uncommitted research notes. Below's
+"alignment unfixed/no code changes" statements are historical and superseded.
+
 ## Latest implementation: Stage60 native VACE editing (2026-11-02)
 
 User supplied owner OBS `dataset/Senorita-pilot`, plus official-layout

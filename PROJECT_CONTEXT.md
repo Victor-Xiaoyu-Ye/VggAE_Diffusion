@@ -1,5 +1,50 @@
 # Project Context
 
+## Stage61 implemented, awaiting cluster validation (2026-11-04)
+
+User authorizes proceeding toward a working CVPR-oriented editing project.
+Their input preference: keep text-only primary, retain source-video region
+conditions as a separate equal-input comparison across Native/SFT/RAE. A click
+cannot justify stronger instruction-following claims. This is RAE-assisted
+native VACE post-training, not RAE-space diffusion or an AE-only paper.
+
+New scripts/scale/61_train_vace_edit_aligned.sh wraps existing Stage60 startup.
+Namespace vace_edit_aligned_v2 (separate _smoke); reuses old vace_edit_pilot_v1
+native and teacher caches read-only. Same2048train/24dev/128reservedtest split,
+17frames/8FPS, aspect/pad16 preserved. Native baseline plus five1000-step arms:
+sft, corrected rae, rae_detached, region_sft, rae_balanced. Checkpoint125, all24
+dev RAW/EMA at250/500/750/1000; no test checkpoint selection. Source-only manual
+box diagnostics on4already-reviewed dev cases are separately labeled and optional.
+
+Fixed student native-grid to teacher518-letterbox coordinates; native causal
+time anchors0,4,... to teacher0,2,...; padding excluded from target scale and
+losses. Decoder-only padding context is detached teacher, never main model input.
+Balanced arms share ordinary VAE-space edit/keep flow weighting; only one adds
+RAE. RGB-difference supports are training/evaluation proxies, not semantic masks.
+Per50-step hidden gradient diagnostics measure aux/flow conflict without extra
+parameter backward. Local tests verify detached/SFT exact optimizer equality,
+actual tiny VACE gradients, legal source controls independent of target, Gloo
+checkpointing/probe/restart, and shell execution/independent-arm failure handling.
+NPU/HCCL/full14B memory, OBS services and quality remain unverified for Stage61.
+
+User additionally reports videos present in durable mirror but missing from
+cluster output. Fixed skip-after-recovery publication; added final all-step
+media reconciliation with hash/size read-back in BOTH destinations, bounded
+retries and receipt-after-payload ordering. Existing runs can use EDIT_STAGE=sync
+with Stage60; no training/model load. Finalization runs after independent arms,
+reports incomplete replication nonzero without preventing those arms. Per-arm
+media_sync.json and root comparison_summary.json record coverage/failures.
+Checkpoint-only evaluation added via EDIT_STAGE=evaluate + EDIT_EVAL_CHECKPOINT.
+
+See docs/VACE_EDIT_ALIGNED_RUNBOOK.md for launches, interpretation and research
+boundary. Existing Stage60 final24 PSNR15.419/17.454/16.455 does not establish RAE
+advantage; selected mint-tent gain and multiple regressions remain the evidence.
+New paired summarizer reproduces those numbers from actual local result JSON.
+GeometryForcing/GAD/VitronEdit already cover feature/attention/geometric editing
+supervision. Current repair and region weighting are mechanism experiments,
+not claimed novel contributions. Need independent geometry/motion, edit adherence,
+scene-disjoint heldout tests and matched ablations before claiming a paper method.
+
 ## Stage60 teacher path correction (2026-11-03, latest)
 
 New user logs confirm stage60_3 exit0/local0/all_results_observed=True with
