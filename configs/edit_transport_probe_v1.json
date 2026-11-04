@@ -1,0 +1,33 @@
+{
+  "schema": "edit-transport-probe-v1",
+  "seed": 42,
+  "cases": 24,
+  "frames": 9,
+  "target_indices": [4, 8],
+  "strengths": [0.5, 1.0],
+  "observed_fractions": [1.0, 0.25],
+  "noise_stds": [0.0, 0.005],
+  "iterations": 40,
+  "checkpoint_every": 10,
+  "log_every": 5,
+  "lr": 0.03,
+  "ridge": 0.0001,
+  "trust": 1.5,
+  "decoder_precision": "fp32",
+  "effect": "rgb_difference",
+  "rotation_degrees": 4.0,
+  "translation_pixels": [22.0, 12.0],
+  "scale_change": 0.08,
+  "edit_rgb": [0.02, -0.03, 0.10],
+  "observation_tiles": 8,
+  "rgb_fill_iterations": 120,
+  "gradient_control": true,
+  "notes": [
+    "Frozen production AE and Stage60 source RGB only; no Stage61 checkpoint dependency.",
+    "Controlled synthetic 2D source transforms and analytic local color edits, not video generation or geometry accuracy.",
+    "H1 uses a decoder-defined anchor effect. H2 uses the SAME analytic RGB edit target for RAE/VAE/RGB controls.",
+    "H2 solvers see masked observations only; withheld effect values are evaluation-only. Dense RGB warp is an explicitly oracle reference.",
+    "Native VAE control is image-mode T=1 at a 528 padded canvas, not a matched temporal-context/parameter-count tokenizer comparison.",
+    "No text benchmark, semantic object mask, optical flow teacher, DINO decoder, 14B DiT load or native writeback claim in this first probe."
+  ]
+}

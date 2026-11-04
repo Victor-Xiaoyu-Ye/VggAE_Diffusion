@@ -1,5 +1,36 @@
 # Project Context
 
+## Stage62 ready for independent follow-on job (2026-11-04)
+
+User asks to set up the next experiments now and clarifies a new job will follow
+the previous one. Implemented audit_edit_transport.py, utils/edit_transport_probe.py,
+configs/edit_transport_probe_v1.json and scripts/scale/62_audit_edit_transport.sh.
+Run smoke && all on normal3x8 startup. No Stage61 checkpoint dependency: read-only
+Stage60 dev source RGB bank, frozen productionC256/Stream; optional-stage Wan VAE
+is included by default as T=1 image-codec control. No14B DiT/UMT5/SAM/new models.
+
+24source clips -> nine known synthetic2D poses from each first frame. H1 targets
+the AE-defined anchor effect and compares direct token warp/calibrated/fixed
+response/no-edit/RGBoracle. H2 independently specifies analytic local RGB edits,
+holds out observation blocks and adds controlled effect noise; RAE and VAE
+receive identical masked observations, against source-edge-aware RGB fill/denoise.
+No target values enter H2 optimization/best-state selection; CPU regression
+verifies arbitrary hidden-target replacement leaves delta exactly unchanged.
+9RAE states/synthetic motions are NOT real video generation or 3D geometry.
+Default2496cells, about1600decoder updates per NPU,40iterations/cell, checkpoints10.
+Prepared source states/optimizer/best/delta/media receipts dual-write/recover;
+final SHA/size reconciliation includes source MP4s and cell media. Completed
+recovered cells republish before skipping. Negative quality does not gate another
+codec phase. Explicit DI units and all8device idle guard in all phases.
+report.html, summary.json, metrics.jsonl, media_sync.json expose coverage/errors,
+effect_gain and heldout-edit/leakage metrics; clip-level paired bootstrap is
+descriptive only. DINO-RAE/natural correspondences/text/native14B writeback remain
+not_evaluated. Source/codec reconstruction quality and latent size recorded.
+CPU real tiny Wan VAE reverse gradients/padding, exact optimizer resume,
+integration/media repair, two-rank Gloo and actual shell scheduling tested;
+full-size910B FP32 memory/remoteOBS/effectiveness require cluster smoke.
+See docs/EDIT_TRANSPORT_PROBE_RUNBOOK.md; existingStage61 code/outputs untouched.
+
 ## Stage61 implemented, awaiting cluster validation (2026-11-04)
 
 User authorizes proceeding toward a working CVPR-oriented editing project.

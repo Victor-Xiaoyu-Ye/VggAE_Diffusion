@@ -3,6 +3,24 @@
 Read this file first. It defines the active project context, current goals,
 rules, and safe next steps for future agents.
 
+## Stage62 implemented: independent frozen-codec probe (2026-11-04)
+
+User will start a new three-node job after Stage61; no new bootstrap needed.
+Read docs/EDIT_TRANSPORT_PROBE_RUNBOOK.md. scripts/scale/62_audit_edit_transport.sh
+smoke && all uses Stage60 source bank and production AE/Stream, NOT Stage61
+checkpoints. Only Wan VAE image-mode control, no14B DiT/new download. Synthetic
+2D source transforms, H1 decoder-effect transport and H2 sparse/noisy analytic
+RGB-effect completion. Not natural motion, text editing or full method output.
+24cards each one source case; solver checkpoints/DI units/dual receipts/idle
+guard retained. Independent RAE/VAE phases; negative quality is valid completion.
+Withheld H2 values are eval-only, same observations across RAE/VAE/RGB controls.
+H1 target decoder-defined, H2 target codec-independent; no unsupported geometry
+claim or DINO-RAE/native-writeback coverage. report.html/summary.json give full
+coverage, paired clip statistics and not_evaluated list. CPU tiny-real-Wan-VAE,
+inverse resume, withheld-target isolation, full mocked-codec integration, two
+Gloo workers and actual Bash sequence tested. Production910B/OBS not yet tested.
+This implements only first mechanism probes from the proposal below.
+
 ## Stage61 implementation: aligned editing and media repair (2026-11-04)
 
 User authorizes continuing toward a working publishable editing method. Read
