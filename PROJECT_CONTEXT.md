@@ -1,5 +1,61 @@
 # Project Context
 
+## Stage64 ready: learned residual transport, frozen renderers (2026-11-05)
+
+User authorizes continuation after clarifying Stage63 had no newweighttraining.
+Implemented train_edit_transport.py,models/edit_transport.py,data cache,Stage64
+config/script/runbook. Script64 LEARNED_STAGE=smoke&&all uses existing3x8 setup.
+Train2.77Mtheta: spatialconv/temporalattention/editedanchorcrossattention. Inputs
+sourceC256nineframes+anchorC256oneframe+source/proposalRGB/conf/support; predicts
+latentcorrection through frozenRAEdecoder and retains directRGBproposalbypass.
+Firstframe exactanchor, trustedobservations protected; uncertainregions receive
+decodedresidual. ActualVACE latewriteback consumes learnedreference; no14Btrain.
+
+Data: oldStage60train2048, deterministicwholegroup~6.25%monitor. Onlytraining/
+monitor usepairedtargetfirstframe asdeclaredreference; futuretargetseparatesupervision.
+Dev24 reusescompletedStage63source/anchor, neverdataseteditedtargetconditions.
+Source-onlyscale; pad-awareloss; identity10%/observationholes30%augmentation.
+Max3000steps,min500,monitor250,patience4; savedEMAselection and optimizer/RNG
+recovery. Newcacheapprox70GB/node aftershufflefetch. No localrawdownloadneeded.
+BaselineNative+sharedreference/RGBwriteback/learnedRAEwriteback; same source/
+anchor/seed and unionofcoarse/full permittedsupport; no confidencevetoatwriteback.
+
+Engineering: separate Stream/RAE/native14Bprocesses; normaltrainbadrows skipped;
+percase failures continue; publishallreceiptsdualroots;DIactualsupervisedframes
+excludesskips/idle;selected/refhashes invalidate onlyaffectedcachedpredictions/
+renders/comparisons. Stage63 remainsimmutable. CPUgradient/actualupdates,
+targetpoison,validcanvas,2Gloo exactrestart,errors,dualmediarepair and Bash
+checks pass. NewproductionNPUexecution/visualbenefit unverified; cluster not
+launched. No claimthissolves anchorsemanticerrors or topologychangingedits;
+matchedRGB and fullvideooutput must establish anyRAE-specificbenefit.
+
+## Stage63 complete: working execution, weak edit retention (2026-11-05)
+
+Review docs/EDIT_REFERENCE_VIDEO_RESULTS_20261105.md. User supplied local
+D:/中转站/VGGAE/scale/edit_reference_video_v1. All24 sources/all48 actualnative
+renders completed; 3nodesexit0. 120receipt/264registeredfiles localSHA+sizepass;
+120MP4+48PNG. media_sync reports120/120 dualpublication, not recheckedOBS.
+No localpt payloads. Actual Stage61regionSFT RAW750 frontend; nofallback.
+Botharms identical source/anchor/mask/seed;48actualnonzerowriteback events.
+
+Visual result mixed: minttent/brownhat less saturated and sometimes closer to
+instruction, but bluebutterfly fades, icywater/woodtexture disappear and bluepen
+edits paper. Wrongobject/overbroadsupport upstream;20auto masks average74.09%area.
+RAEreference itself shrinks knownedits alreadyatframe0. MP4 approximate edit
+projectiongain=.560all/.509first; finalRAEvsNativegain=.815, not qualitymetrics.
+ExactJSON editregion sourceL1 .111998->.092940;keep .035313->.033949. Reduced
+change does not establish improved editing; noncollinearchanges also exist.
+All24 solver histories stillimprove at12; meanobjective1.11258(s1)->.59828(s12).
+Zero-delta start/softfirstframeanchor/fullreplacement allows incompletelyfit
+RAEeffect to erase alreadyknownedit; originalVACEprefix andwriteback disagree.
+
+Recommended next major visual iteration: preserve trustworthy editedanchor and
+visibleeffects; restrictRAE correction/completion to uncertainty and respect
+realfit residuals. Keep text-onlyendtoend and declareduserreference protocols
+separate. One full matchedNative/RGBwriteback/revisedRAE comparison, no standalone
+solver sweep as nextmilestone. Sourceflow doesn'tsolve changedgeometry/occlusion.
+No productioncodechanges/clusterlaunch/OBSdownload/paperpromotion thisreview.
+
 ## Stage63 implemented for the next full visual run (2026-11-05)
 
 User authorizes start after prioritizing realoutputs. See

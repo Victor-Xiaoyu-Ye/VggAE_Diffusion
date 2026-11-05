@@ -3,6 +3,48 @@
 Read this file first. It defines the active project context, current goals,
 rules, and safe next steps for future agents.
 
+## Stage64 trainable edit transport implemented (2026-11-05)
+
+User says continue after distinguishing Stage63 per-video optimization from
+learned weights. See docs/EDIT_TRANSPORT_LEARNED_RUNBOOK.md and script64.
+LEARNED_STAGE=smoke&&all on existing3x8; no newweights/bootstrap. Train2,774,656
+parameter spatial/temporal/anchorattention network; frozenStream/SceneC256 and
+nativeVACE14B. RGBproposal bypass + decoded latent residual; zerohead=RGB;
+hardfirstframe reference; highconfidence effects protected, uncertain supported
+pixels trainable. Decoder gradients reach module, nofutureeditedtarget input.
+Reuse2048Stage60train, groupmonitor~6.25%; trainfirsttargetframe legal supervised
+reference, futuretarget separateloss only; dev reusesStage63legalanchors only.
+Train input observation holes/identity examples; no new auxiliary14B loss.
+Actualnative/RGBwriteback/learnedRAEwriteback shareanchor/mask/seed. Source-flow
+coarse/fullsupportunion; flowconfidence not reapplied to veto completion.
+Teacher and14B phasesseparate; dualIO/DI/idle/ckpt/EMA; besttrainmonitor selection,
+max3000steps/min500/patience4 eval250. Cache~70GB/node additional. Hashinvalidate
+onchangedselected/output, failurecontinuation/mediarepair; trainbadrows skip.
+CPU actualweights/gradient/frozenRAE/2Gloo exactresume+errors/fullpipeline and
+Bash validated; actualnewmodule910B/HCCL/quality remainsunverified. No newrun
+launched. This learns uncertainty residuals, cannot fix confidently wrong
+reference semantics/changedgeometry by itself. No provenuniqueRAE/CVPRgain.
+
+## Stage63 actual result reviewed (2026-11-05)
+
+Read docs/EDIT_REFERENCE_VIDEO_RESULTS_20261105.md. All24 anchors/24transport/
+48renders complete; all3nodesexit0; local120receipts/264files size+SHA pass,
+120MP4+48PNG. Remote dual publication recorded120/120; no newOBS verification.
+Only pt.json local, no tensor/optimizer payload validation. Actual frontend
+Stage61 regionSFT RAW750, nofallback; matched source/anchor/mask/seed all24;
+48 nonzero writebacks step26/28. This is native+SHAREDREFERENCE baseline, not
+old text-onlyNative. Production execution confirmed; usefulRAE benefit NOT.
+Limited naturalness gains (minttent, brownhat), but wrongobject edits persist.
+RAE reference already loses edits: bluebutterfly/ice/woodtexture; source return
+is not edit success. Firstframe MP4 effectdirectiongain~.509 (all~.560), so not
+just temporal/flowfailure. Solver all24stillimproving at12sweeps; no convergence.
+Zero-delta initialization + softanchor loss + full replacement of known effect
+underfits edits; originalVACEanchor and attenuatedwriteback can conflict.
+20automatic masks mean74.09%area; not object segmentation. Next recommendation:
+retain known anchor/visible effects, focusRAE on uncertainty; full matched
+Native/RGBwriteback/revisedRAE outputs, not loss-onlyscaleup. No codechange or
+clusterlaunch this review, no paper-level success/uniquegeometry claim.
+
 ## Stage63 natural-video milestone implemented (2026-11-05)
 
 Read docs/EDIT_REFERENCE_VIDEO_RUNBOOK.md. User says start; implemented
