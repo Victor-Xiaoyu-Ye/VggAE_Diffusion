@@ -4,6 +4,7 @@ No dependency on the old C256 diffusion adapter. Only trainable deltas are saved
 """
 import importlib
 import json
+import math
 from pathlib import Path
 import sys
 import types
@@ -95,23 +96,64 @@ def load_text(root, device):
         tokenizer_path=str(Path(root)/'google'/'umt5-xxl'))
 
 
-def pack_context(vae, frames, mask):
+def pack_context(vae, frames, mask, reference_images=None):
     """Official [VAE(inactive), VAE(reactive), 8x8 packed mask] = 96 channels.
 
     Even the all-zero inactive pixels must go through VAE.encode: encoded zero
     RGB is not an all-zero normalized latent. White means regenerate.
+
+    Optional references are a sequence of [3,1,H,W] images in [-1,1], already
+    fitted to the source canvas without stretching. As in upstream WanVace,
+    each reference gets its own image-mode VAE encode and a temporal prefix
+    slot: [encoded reference, literal zero reactive latent, zero mask]. These
+    are conditioning slots, not extra output video frames. Use decode_native
+    with their count to remove them BEFORE the causal VAE video decode.
     """
     if mask.shape != (1,*frames.shape[1:]):
         raise ValueError('Expected mask [1,T,H,W] aligned to source')
     t,h,w=frames.shape[1:]
     if (t-1)%4 or h%16 or w%16:
         raise ValueError('Native VACE requires 4n+1 frames and dimensions divisible by 16')
+    refs=[] if reference_images is None else list(reference_images)
+    for ref in refs:
+        if not isinstance(ref,torch.Tensor) or ref.shape!=(3,1,h,w):
+            raise ValueError('Reference must be [3,1,H,W] on the source canvas')
+        if not bool(torch.isfinite(ref).all()):
+            raise ValueError('Reference image contains nonfinite values')
     mask=(mask>.5).float()
     inactive=vae.encode([frames*(1-mask)])[0]
     reactive=vae.encode([frames*mask])[0]
     packed=mask[0].reshape(t,h//8,8,w//8,8).permute(2,4,0,1,3).reshape(64,t,h//8,w//8)
     packed=F.interpolate(packed[None],size=inactive.shape[1:],mode='nearest-exact')[0]
-    return torch.cat((inactive,reactive,packed),0)
+    context=torch.cat((inactive,reactive,packed),0)
+    if refs:
+        encoded=vae.encode([ref.to(device=frames.device,dtype=frames.dtype) for ref in refs])
+        if len(encoded)!=len(refs):
+            raise ValueError('VAE did not return one latent per reference image')
+        prefix=[]
+        for ref in encoded:
+            if ref.shape!=(16,1,*inactive.shape[-2:]):
+                raise ValueError('Expected a single image-mode VAE latent per reference')
+            # The reactive reference is literal zero in the official model;
+            # encoding a black image here would produce a different condition.
+            prefix.append(torch.cat((ref,torch.zeros_like(ref),
+                ref.new_zeros(64,1,*ref.shape[-2:])),0).to(context))
+        context=torch.cat([*prefix,context],dim=1)
+    return context
+
+
+def decode_native(vae, latent, reference_count=0):
+    """Decode sampled video after removing VACE's reference latent prefix.
+
+    Trimming decoded RGB instead would change the causal VAE's temporal
+    history and output alignment. The default preserves reference-free calls.
+    """
+    if latent.ndim!=4 or latent.shape[0]!=16:
+        raise ValueError('Expected native latent [16,T,H,W]')
+    if (type(reference_count) is not int or reference_count<0 or
+            reference_count>=latent.shape[1]):
+        raise ValueError('Reference count must leave at least one video latent slot')
+    return vae.decode([latent[:,reference_count:].contiguous()])[0]
 
 
 class LoRALinear(nn.Module):
@@ -251,8 +293,140 @@ def rae_supervision(pred,target,decoder,sigma,cfg,frame,valid_rect=None,spatial=
         rae_latent=float(latent.detach().mean()),rae_rgb=float(rgb.detach().mean()),rae_active=float(valid.mean()))
 
 
+class _ReferenceWriteback:
+    """A bounded clean-latent correction, expressed as native flow velocity.
+
+    Reference RGB is a legal source/anchor-derived proposal, not an evaluation
+    target. Unknown pixels have zero mask and retain the current native clean
+    estimate. This interface does not assert that VAE receptive fields preserve
+    unmasked pixels exactly after re-encoding or after subsequent denoising.
+    """
+
+    def __init__(self,vae,reference,cfg,reference_count,mask,observer):
+        if reference.ndim!=4 or reference.shape[0]!=3:
+            raise ValueError('Writeback reference must be [3,T,H,W] in [-1,1]')
+        if not bool(torch.isfinite(reference).all()):
+            raise ValueError('Writeback reference contains nonfinite values')
+        if bool((reference.abs()>1.00001).any()):
+            raise ValueError('Writeback reference must be normalized to [-1,1]')
+        if type(reference_count) is not int or reference_count<0:
+            raise ValueError('Reference count must be a nonnegative integer')
+        if mask is None:mask=reference.new_ones(1,*reference.shape[1:])
+        if mask.shape!=(1,*reference.shape[1:]):
+            raise ValueError('Writeback mask must be [1,T,H,W] aligned to reference')
+        if not bool(torch.isfinite(mask).all()) or bool(((mask<0)|(mask>1)).any()):
+            raise ValueError('Writeback mask must be finite and in [0,1]')
+        self.vae=vae
+        self.reference=reference.detach()
+        self.mask=mask.detach()
+        self.reference_count=reference_count
+        self.observer=observer
+        self.alpha=float(cfg.get('writeback_alpha',.35))
+        self.max_clean_rms=float(cfg.get('writeback_max_clean_rms',.25))
+        self.max_sigma=float(cfg.get('writeback_max_sigma',.75))
+        self.requested_sigmas=[float(s) for s in cfg.get('writeback_sigmas',[.3,.15])]
+        if not math.isfinite(self.alpha) or not 0<=self.alpha<=1:
+            raise ValueError('Writeback alpha must be finite and in [0,1]')
+        if not math.isfinite(self.max_clean_rms) or self.max_clean_rms<=0:
+            raise ValueError('Writeback clean-latent RMS cap must be positive')
+        if not math.isfinite(self.max_sigma) or not 0<self.max_sigma<1:
+            raise ValueError('Writeback max sigma must be between zero and one')
+        if any(not math.isfinite(s) or not 0<s<1 for s in self.requested_sigmas):
+            raise ValueError('Requested writeback sigmas must be between zero and one')
+        self.schedule=None
+        self.events=[]
+
+    def set_schedule(self,sigmas):
+        """Choose actual nearest usable solver positions; reset for a new sample.
+
+        A short smoke schedule may map two requested sigmas onto one position.
+        That position is corrected once. Zero/noise-only positions are excluded.
+        """
+        values=[float(s) for s in sigmas]
+        available=[i for i,s in enumerate(values) if math.isfinite(s) and 0<s<=self.max_sigma]
+        selected={min(available,key=lambda i:abs(values[i]-target))
+                  for target in self.requested_sigmas} if available else set()
+        self.schedule={i:values[i] for i in sorted(selected)}
+        self.events=[]
+        self._applied=set()
+
+    @torch.no_grad()
+    def __call__(self,*,step_index,sigma,latent,velocity):
+        if self.schedule is None:
+            raise RuntimeError('Writeback needs the actual sampler sigma schedule')
+        if step_index not in self.schedule or step_index in self._applied:
+            return velocity
+        sigma=float(sigma)
+        if not math.isfinite(sigma) or sigma<=0 or abs(sigma-self.schedule[step_index])>1e-6:
+            raise ValueError('Writeback step disagrees with the actual sigma schedule')
+        if latent.ndim!=4 or latent.shape[0]!=16 or velocity.shape!=latent.shape:
+            raise ValueError('Writeback needs matching native [16,T,H,W] state and velocity')
+        if self.reference_count>=latent.shape[1]:
+            raise ValueError('Reference prefix leaves no video slots for writeback')
+        clean=latent.float()-sigma*velocity.float()
+        video_clean=clean[:,self.reference_count:]
+        decoded=decode_native(self.vae,clean,self.reference_count).float()
+        if decoded.shape!=self.reference.shape:
+            raise ValueError('Decoded clean video and reference canvas/time differ')
+        if not bool(torch.isfinite(decoded).all()):
+            raise FloatingPointError('Nonfinite native clean video during writeback')
+        reference=self.reference.to(decoded)
+        mask=self.mask.to(decoded)
+        proposed=decoded+mask*(reference-decoded)
+        # Guarantee the no-op identity without making two numerically distinct
+        # encode calls. This also avoids unnecessary VAE work for an empty mask.
+        zero=self.alpha==0 or torch.equal(proposed,decoded)
+        change=torch.zeros_like(video_clean)
+        clipped_fraction=0.
+        if not zero:
+            encoded=self.vae.encode([proposed,decoded])
+            if len(encoded)!=2 or any(v.shape!=video_clean.shape for v in encoded):
+                raise ValueError('Writeback VAE encoding changed the video latent shape')
+            delta=encoded[0].float()-encoded[1].float()
+            if not bool(torch.isfinite(delta).all()):
+                raise FloatingPointError('Nonfinite native encoding difference during writeback')
+            change=self.alpha*delta
+            rms=change.square().mean((-2,-1),keepdim=True).sqrt()
+            scale=(self.max_clean_rms/rms.clamp_min(1e-12)).clamp_max(1.)
+            clipped_fraction=float((scale<1).float().mean())
+            change=change*scale
+            zero=not bool(change.abs().any())
+        corrected=velocity
+        if not zero:
+            corrected=velocity.clone()
+            # x_sigma=(1-sigma)*clean+sigma*noise and v=noise-clean.
+            # To add `change` to x-sigma*v, SUBTRACT change/sigma from v.
+            corrected[:,self.reference_count:]-=change.to(corrected)/sigma
+        self._applied.add(step_index)
+        event=dict(step=step_index,sigma=sigma,alpha=self.alpha,
+            clean_delta_rms=float(change.square().mean().sqrt()),
+            max_channel_clean_rms=float(change.square().mean((-2,-1)).sqrt().max()),
+            clipped_fraction=clipped_fraction,reference_count=self.reference_count,
+            mask_mean=float(mask.mean()),zero_effect=bool(zero))
+        self.events.append(event)
+        if self.observer is not None:self.observer(event)
+        return corrected
+
+
+def build_reference_writeback(vae,reference,cfg,reference_count=0,mask=None,observer=None):
+    """Return an optional sampling callback for bounded late RGB-reference writes.
+
+    `reference` is [3,T,H,W] in [-1,1], `mask` is [1,T,H,W] confidence in [0,1].
+    Config keys: writeback_sigmas, writeback_alpha, writeback_max_clean_rms,
+    writeback_max_sigma. sample_native supplies the actual scheduler sigmas.
+    """
+    return _ReferenceWriteback(vae,reference,cfg,reference_count,mask,observer)
+
+
 @torch.no_grad()
-def sample_native(model,condition,text,negative,cfg,seed):
+def sample_native(model,condition,text,negative,cfg,seed,velocity_callback=None):
+    """Sample all condition slots, including any reference-image prefix.
+
+    For reference-conditioned inputs, pass the result through decode_native
+    with reference_count; the sampler must retain those slots for attention.
+    An optional callback receives the guided velocity and actual scheduler
+    sigma before every update. It may locally enable gradients if needed.
+    """
     prefix,_=native_modules()
     cls=importlib.import_module(prefix+'.utils.fm_solvers_unipc').FlowUniPCMultistepScheduler
     device=condition.device
@@ -260,12 +434,21 @@ def sample_native(model,condition,text,negative,cfg,seed):
     x=torch.randn((16,*condition.shape[1:]),device=device,generator=generator,dtype=torch.float32)
     scheduler=cls(num_train_timesteps=1000,shift=1,use_dynamic_shifting=False)
     scheduler.set_timesteps(cfg['sample_steps'],device=device,shift=cfg['shift'])
+    if velocity_callback is not None and hasattr(velocity_callback,'set_schedule'):
+        velocity_callback.set_schedule(scheduler.sigmas[:len(scheduler.timesteps)])
     backbone=model.backbone if isinstance(model,EditingModel) else model
     for i,t in enumerate(scheduler.timesteps):
         with torch.autocast(device.type,dtype=torch.bfloat16):
             c=native_forward(backbone,[x],t.reshape(1),[condition],[text],context_scale=cfg['context_scale'])[0][0]
             u=native_forward(backbone,[x],t.reshape(1),[condition],[negative],context_scale=cfg['context_scale'])[0][0]
-        x=scheduler.step((u+cfg['guidance']*(c-u))[None],t,x[None],return_dict=False,generator=generator)[0][0]
+        velocity=u+cfg['guidance']*(c-u)
+        if velocity_callback is not None:
+            velocity=velocity_callback(step_index=i,sigma=float(scheduler.sigmas[i]),latent=x,velocity=velocity)
+            if not isinstance(velocity,torch.Tensor) or velocity.shape!=x.shape:
+                raise ValueError('Velocity callback must return the native velocity shape')
+            if not bool(torch.isfinite(velocity).all()):
+                raise FloatingPointError('Velocity callback returned nonfinite values')
+        x=scheduler.step(velocity[None],t,x[None],return_dict=False,generator=generator)[0][0]
         if (i+1)%5==0: print(f'[VACE sample] {i+1}/{cfg["sample_steps"]}',flush=True)
     return x
 

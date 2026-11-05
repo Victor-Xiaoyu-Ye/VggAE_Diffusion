@@ -3,6 +3,83 @@
 Read this file first. It defines the active project context, current goals,
 rules, and safe next steps for future agents.
 
+## Stage63 natural-video milestone implemented (2026-11-05)
+
+Read docs/EDIT_REFERENCE_VIDEO_RUNBOOK.md. User says start; implemented
+edit_reference_video.py, utils/editing_video_transport.py, nativevelocity
+callback, configs/edit_reference_video_v1.json and scale/63_edit_reference_video.sh.
+REFERENCE_STAGE=smoke && all on existing3x8 startup. Real17frame sources;
+sharedmodel/useranchor -> sourceDISflow -> nine-statejointRAEcalibration ->
+reference-conditioned native14B with actual latevelocitywriteback. Compare
+native_reference vsrae_writeback; no newauxloss training or targetconditioning.
+Launcher auto tries fixedStage61 regionSFT RAW750 foranchors (nodeleaderstage,
+allnodes samehash), explicitly fallsbacknative ifunavailable. Empty
+REFERENCE_ADAPTER disables; finalrenderer nativeweights. Manualsourceboxes4,
+otherwise referencechangesupport; NOT SAM2/semanticmask. Classicalflow explicit
+backend/reliability; no claim learnedgeometry/oldStreamtracks reliability.
+Native/source resolution preserved by transferring EDIT DIFFERENCES from518;
+referenceprefix trimmedbefore VAEdecode. Encoder freed beforeRAEsolve, separate
+14Bphase. Per-case recovery/optimizerstates/DI/idle guard/dualmedia reconciliation.
+Recoveredfallback native rerenders when sharedtransport succeeds; inputhashes
+must match atcomparison. No newmodeldownloads or clusterlaunch; actual14B/NPU
+quality/memory unverified. BroaderRGB/VAE/DINO ablations deferred, not passed.
+45local tests pass includingactualDIS controlledtranslation (~.108pxcentralEPE),
+real tinyVACEwriteback, fullmockedpipeline and actualBash; notproductionquality.
+
+## User priority: real editing outputs before more probes (2026-11-05)
+
+Read docs/EDITING_VISUAL_MILESTONE_20261105.md. User explicitly wants major
+end-to-end visual milestones first; derive ablations from working fullmethod.
+Do NOT schedule standalone solver-budget sweeps as nextresearch job or require
+H2 to pass before building naturalvideo path. Keep necessary engineering tests.
+Priority: legal editedanchor + sourceobject support/correspondences + jointRAE
+edit calibration + actual nativeoutput. Modelanchor/text and userreference
+protocols both retained; no GTtarget input or instructionfollowing claim from
+extra usercontrol. Firstcompare matchedreference native vsfullmethod videos.
+Runtime now supports optionalreference_images in pack_context and decode_native
+prefixtrim BEFORE causalVAEdecode. Existingdefaultscalls unchanged. No complete
+newlauncher/SAM2/flow/jointsolver/nativewriteback yet; no newcluster run or
+download. Old60/61/62 do not automatically call newreferencepath. OfficialVACE
+refs previously unused, not proof of a bug in the prior text-only protocol.
+
+## Stage62 full probe reviewed (2026-11-05)
+
+Read docs/EDIT_TRANSPORT_PROBE_RESULTS_20261105.md and newest PROJECT_CONTEXT.
+Actual3node910B smoke264/all2496cells completed, allnodeexit0; flat/phase/group
+metrics independently match. H1strength1 editL1 naive .016052 -> calibrated
+.005764 (-64.09%,24/24sources), gain .696->.947. Decoder-defined dense target;
+RGBoracle exact. Supports calibration, NOT uniqueRAE/geometry/editor superiority.
+H2quarter/noise.005/strength1 hiddeneditL1 RGB .023051 < RAE .036810 < VAE
+.058958; RAE loses RGB24/24sources despite beating currentVAE24/24. All4sparse
+aggregates same ranking; dense VAE beatsRAE. Fortyupdates not convergence;
+fixed_response approximategradient unstable, saved outputs use bestiterate.
+RAE9framecontext vsVAE1, reconstruction24.13vs38.25dB, latent82944vs69696;
+cannot attribute codec difference uniquely toVGGTgeometry. No nativewriteback,
+naturalcorrespondence, DINO-RAE or textediting evidence. No newtraining launched.
+Remote sync records2520/288 allpass; local main9VAE PNG/143receipts empty,
+allpt absent. Full numeric ledgers intact;183PNG+24MP4 hashpass. Not a reason
+to rerun. Auditgallery D:/workspace/VggAE_DataAudit/transport_review_20261105/visual.
+Next candidate: bounded solver/compute controls, then shared-anchor natural
+transport with matchedRGB/VAE controls; no automatic longloss training/scaleup.
+
+## Stage61 full results reviewed (2026-11-05)
+
+Read docs/VACE_EDIT_ALIGNED_RESULTS_20261105.md and newest PROJECT_CONTEXT.
+User downloaded D:/中转站/VGGAE/scale. All5arms1000/3nodesexit0;1272main+79smoke
+MP4 pass SHA/size; final records verify dual media publication. Corrected AE
+aux supervision still no reliable main-output gain.24dev finalEMA PSNR:
+native15.419,SFT17.273,AE16.335,detached17.447,regionSFT17.749,regionAE16.924.
+RegionSFT improves some real hat/tent edits; AE adds background pollution and
+forest deformation. No universal best editor or paper-level geometry gain.
+RAW750 regionSFT/SFT are dev candidates, not automatic final selections.
+ActualNPU detached differs fromSFT despite CPU exact test; cause not isolated.
+Local ckpt payloads absent; do not claim tensor/resume verification from receipts.
+Source-box metrics use a different ROI from text-only; do not subtract them.
+All24 synced comparisons: D:/workspace/VggAE_DataAudit/vace_aligned_review_20261105/visual.
+User requests waiting for later experiments, no added long auxiliary training.
+Stage62/decoder-calibrated transport remains separate, not tested byStage61.
+No runtime edits, OBS access/new downloads, launch or paper results promotion.
+
 ## Stage62 implemented: independent frozen-codec probe (2026-11-04)
 
 User will start a new three-node job after Stage61; no new bootstrap needed.

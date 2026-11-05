@@ -1,5 +1,135 @@
 # Project Context
 
+## Stage63 implemented for the next full visual run (2026-11-05)
+
+User authorizes start after prioritizing realoutputs. See
+docs/EDIT_REFERENCE_VIDEO_RUNBOOK.md; script63_edit_reference_video.sh smoke&&all.
+Real17frames fromStage60 devcache, preservesaspect/FPS. Fourphases: generatelegal
+model/useranchor; sourceDIS/Farneback correspondence and jointRAE effect solve;
+two actualnativeVACE reference-conditioned outputs with/without latewriteback;
+matchedvideo/media reconciliation. No dataseteditedtarget conditioning.
+Defaultlauncher auto recovers fixedStage61 regionSFT RAW750 foranchorfrontend,
+nodeleadersstageandhash; allnodesnativefallback recordedifmissing. Optional
+externalreference manifest and explicit adapter. Finalrenderer alwayssame
+nativeVACEweights. Manualsourceboxes4 or reference-derived support, noSAM2.
+
+RAE seesnineevenstates and directcoarseflow; native17frameproposal receives
+calibratedeffect, oddcorrection sourcewarped. Only EDIT DIFFERENCES resize back
+to nativecanvas, preservingdetails atzeroedit. Frozenblockcoordinate decoder
+graph usesboth incoming/outgoing edges, snapshots eachsweep; nofullJacobian.
+Nativecallback usesactualscheduler sigmasnear.3/.15, alpha.35, bounded
+E(refmix)-E(decodedclean), modifiesvelocity beforeUniPC, refprefix preserved.
+Lowconfidence pixels remainnative cleanproposal. No strictoutsidepixelidentity
+claim dueVAEreceptivefields. No independentRGBprojection attributionyet.
+
+Output edit_reference_video_v1(_smoke), comparisons/<id>/source_native_rae.mp4,
+report.html/summary/media_sync. Recover percase, republish media, rerenderold
+fallbacknative when sharedtransport arrives, requireequalinputhashes. Dualroots,
+DIunits, stagecheckpoint and idle guard preserved. Encoder freed beforeRAEsolve,
+14B separatephase; no productionNPUmemory/qualityvalidation yet. Localtests
+cover realtinyNative/ref/writeback, jointsolver/resume, complete mockedpipeline,
+targetisolation/publicationrepair and actualBash coordinatorordering. No new
+clusterjob launched. A small CPU OpenCV validation dependency was installed only
+in D:/workspace/vggae_validation_deps; no models/datasetdownload or globalenvchange.
+All45relatedlocaltests passed; actualDIScontrolledtranslationcentralEPE~.108px,
+notanaturalbenchmark. Fixedfallbackdiagnostics excludedfromresumeidentity to
+avoid transientOBSrequestIDs invalidating identicalnativefallback runs.
+
+## Priority changed to complete visual milestone (2026-11-05)
+
+User requests goodoutputs first, no separate rounds of smallmechanism probes;
+fullmethod ablations can follow. See docs/EDITING_VISUAL_MILESTONE_20261105.md.
+This supersedes the earlier recommendation to start with solverbudget curves.
+Next milestone is natural17frame referenceguided appearanceediting with legal
+anchor/source region, trustworthy sourcecorrespondences, jointRAE visibleedit
+calibration and actualnative rendering/writeback. Preserve text+modelanchor and
+userreference protocols separately; extra region does not prove strongertext
+following. Dataset editedtarget remains eval/trainonly. Sameanchor/sourcecontrol
+nativebaseline and fullmethod are the initial two output branches; broader
+ablations deferred, not silently treatedas passed. No qualitygate stops cases.
+
+Codeaudit found source-only defaultallwhite context and no referenceimages in
+custom runtime, while officialvendoredVACE already supports latentprefix refs.
+Optionalreference_images now implemented in pack_context; newdecode_native
+trims refslots BEFORE causalVAE decode. Legacycalls unchanged. These are runtime
+interfaces, NOT a completed newpipeline or proven14Bquality. SAM2 checkpointexists
+but inference notintegrated; no dependable productiondenseflow; oldStreamtracks
+not default. Need source support, genuineanchors and finalwriteback integration.
+No newlauncher yet; existing60/61/62 do not invoke newreference capability.
+No newexperiment/downloading/clusterlaunch in this change. Necessary local
+reference/temporal contract tests retained rather than researchprobe jobs.
+New7reference tests plus existing9VACE tests pass (CPU realtinyforward/sampler,
+officialprefix semantics, beforedecode trimming and legacycompatibility).
+
+## Stage62 completed: calibration positive, completion advantage unresolved (2026-11-05)
+
+Read docs/EDIT_TRANSPORT_PROBE_RESULTS_20261105.md. User ran smoke && all and
+provided D:/中转站/VGGAE/scale/{edit_transport_probe_v1,edit_transport_probe_v1_smoke}.
+All2496/main and264/smoke cells completed,3nodeexit0; independent row/phase/group
+recomputation matches.24sources, synthetic9affine states from firstframes,
+H1decoder-defined dense effect / H2codec-independent analyticcolor effect.
+No fullvideo/texteditor/newmodel training. Production run now verified; the
+older ready/not-yet-run entries below are historical.
+
+H1strength1 naive->calibrated editL1 .016052->.005764 (-64.09%),gain.696->.947,
+24/24source and48/48state gains. Better than scalaroraclefit/fixedresponse too;
+backgroundleakage not consistently better. RGBoracle0, dense known target,
+extraoptimization budget: supports usingdecoder for effectcalibration but no
+RAE-specific/geometry/editor superiority. fixed_response holds anchorbase,
+not a constant linearJacobian; its finalobjective diverges atcurrentLR.
+Saved metrics evaluate best observed-objective iterate, not divergentlast.
+
+H2quartercoverage/noise.005/strength1 hiddeneditL1 RGB .023051,RAE .036810,
+VAE .058958. RAEbeatsVAE24/24sources butlosesRGB24/24; backgroundRAEalso worse
+RGB. All4sparse aggregates RGB<RAE<VAE; all4denseedit aggregates VAE<RAE.
+Visualinspection24RAE/15availableVAE shows partialcolorblocks vsadditionalVAE
+texturecorruption. RGB numericalcontrol hasnoPNG, do not claim visualreview.
+40steps stillimproving; no percodec optimaltuning/equalwalltime conclusion.
+RAEmeanrecon24.134dB/VAE38.247,82944vs69696latentvalues,9vs1encodercontext;
+no isolatedVGGTgeometrycausality. H2independenttargetstatefits, no sharedanchor
+editgraph. Remains necessary to show usefulgain beyondRGB on naturalcases.
+
+Remote-syncrecordmain2520/smoke288 allpass; no newOBSaccess. Localmain9VAEPNG
+and143cellreceipts empty,ptpayloads allabsent; numericalledgers complete.
+183PNG+24MP4+4706JSON verifySHA/size;2353cellmetadata matches. No localtensor
+restore verification. Missingdownloads are not evidence of failedcomputation.
+Actualmainphases15.81min,smoke7.65min excludingexternalbootstrap;DIunits decoder
+frameevaluations/s/NPU, not generatedFPS. Detailedaudit/gallery in
+D:/workspace/VggAE_DataAudit/transport_review_20261105. No runtime changes,
+newexperiment/remotejob or paper empiricalclaims promoted. Proposed nextwork
+is boundedsolver controls then legalsharedanchor/naturalcorrespondence trials,
+with matchedRGB/VAE information and mainoutput metrics, not moreauxloss scaleup.
+
+## Stage61 completed and visually reviewed (2026-11-05)
+
+Read docs/VACE_EDIT_ALIGNED_RESULTS_20261105.md. User supplied
+D:/中转站/VGGAE/scale/{vace_edit_aligned_v2,vace_edit_aligned_v2_smoke}.
+All five arms reached1000; three nodes exit0,45 phase records all3results0;
+main1272MP4 and smoke79 pass local receipt SHA/size. Final media records say
+both roots synced; no new remote access/checkpoint tensor verification here.
+All24 matched dev EMA1000 PSNR: native15.4191,SFT17.2734,AE16.3347,
+detached17.4469,regionSFT17.7491,regionAE16.9238. AE adds no established gain;
+regionAE loses PSNR on20/24 vs regionSFT. RegionSFT has real hat/tent recoloring
+and preservation improvements but unresolved oversaturation/wrong-object edits.
+AE butterfly blue-background pollution/forest deformation persist; old mint
+tent AE wall-preservation win does NOT reproduce. Extra source boxes reduce
+some exterior edits but do not reliably solve instruction/shape preservation.
+Do not directly compare region metrics across box/text protocols (different ROI).
+RegionSFT RAW750 (PSNR18.1725) and SFT RAW750(18.1270) are dev candidates,
+not declared best task models; source-copy PSNR21.1945 exposes metric limits.
+Aux losses fall and gradients reach hidden/backbone; no proof of bypass or
+strong negative gradient conflict. ActualNPU detached is not bitwise SFT:
+first flow equal, grad norm already differs; finalEMA +.1735dB; exact cause
+not isolated. CPU equivalence does not establish actualNPU deterministic control.
+Single training seed,24dev,pixel proxy metrics; no reserved-test/geometry claim.
+All24 synchronized8column videos and inspection sheets are under
+D:/workspace/VggAE_DataAudit/vace_aligned_review_20261105/visual/index.html.
+User latest steering: retain evidence and wait for follow-on experiments,
+build correct method/effect for paper; no extra long auxiliary-loss training.
+Stage61 is NOT decoder-calibrated edit transport. Stage62 remains independent
+mechanism probe; no Stage62 result in this download. No training code changed,
+new experiment launched or paper empirical claims promoted in this review.
+
 ## Stage62 ready for independent follow-on job (2026-11-04)
 
 User asks to set up the next experiments now and clarifies a new job will follow

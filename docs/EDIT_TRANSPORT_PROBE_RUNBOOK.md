@@ -1,7 +1,9 @@
 # Stage62：固定 AE 上的编辑传输机制实验
 
-实现日期：2026-11-04。已完成本地 CPU、双进程 Gloo 与实际 Bash 编排测试；
-尚未在生产 AE/910B/OBS 上运行。数学设计见
+实现日期：2026-11-04；生产运行审核：2026-11-05。smoke/all 已在三节点 910B
+完整完成，结果见 [实测报告](EDIT_TRANSPORT_PROBE_RESULTS_20261105.md)。H1 校准
+优于直接 token 传输；H2 当前 RAE 胜过 VAE 对照但落后于 RGB 补全，不能宣称
+RAE 独有编辑收益已经建立。数学设计见
 `docs/DECODER_CALIBRATED_EDIT_TRANSPORT_20261104.md`。
 
 ## 依赖与启动
@@ -69,8 +71,8 @@ H2检查不完整观测下的读写补全：
 
 正式配置每卡负责一个源片段，约1600次decoder优化反传，全部24卡并行。
 完整任务数：RAE/RGB phase中RAE960、RGB1152；VAE384，共2496个小cell。
-时间尚无NPU实测，按数小时预留；smoke的冷启动/编译不能直接当稳定吞吐。
-可看后续`decoder frame evaluations/s/npu`估计剩余求解时间。
+本次正式 launcher 阶段实测约15.81分钟，smoke约7.65分钟，不含外层安装/下载；
+OBS状况与冷启动会影响时间。`decoder frame evaluations/s/npu`不是生成视频FPS。
 smoke保留24个源片段以覆盖每张卡，缩小为1个目标时刻/强度/观测设置、2次更新。
 
 每10次更新保存输入delta、Adam状态、best状态及逻辑step，两处同步；每cell
@@ -121,4 +123,6 @@ RAE在这个设置的额外作用。负面结果也正常完成，不用质量�
 梯度、完整逆问题精确中断恢复、任意替换隐藏target不改变求解状态、完整缓存/
 两codec/汇总/媒体修复流程；双Gloo进程验证分片和汇总；真实Bash入口验证独立
 顺序、smoke隔离、失败phase后继续、所有设备idle guard和只汇总路径。
-910B实际算子、FP32峰值、MoXing远端服务和生产AE效果仍需本次集群smoke确认。
+本次生产910B完整运行及双目录核验记录均成功；本地仍缺9张VAE PNG和`.pt`
+payload，不能从本地下载声称已验证张量恢复或峰值显存。完整数值可用于审阅，
+不需要重跑计算。机制效果和优化预算的边界见实测报告。
