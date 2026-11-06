@@ -3,6 +3,84 @@
 Read this file first. It defines the active project context, current goals,
 rules, and safe next steps for future agents.
 
+## Stage65: train the edit-state interface inside VACE (2026-11-06)
+
+User authorized implementation, matched RGB control, tests and cluster script.
+Read docs/VACE_EDIT_STATE_RUNBOOK.md; run STATE_STAGE=smoke && all through
+scripts/scale/65_train_vace_edit_state.sh on existing three nodes x eight NPUs.
+No new bootstrap, external weights, dataset downloads, or cluster launch here.
+Native VACE14B is frozen; train rank16 attention LoRA and a zero-output state
+bridge added after vace_patch_embedding, before all control blocks. Both CFG
+branches use the wrapper at every denoising step. No late writeback. RGB and
+RAE arms share source-inactive/reference-reactive RGB context, anchor/mask/seed.
+Native baseline shares source/anchor/mask/seed with original source-reactive
+context. This compares the full method to native and RAE separately to RGB.
+
+Reuse read-only Stage60 bank, Stage64 source/proposal cache and group split,
+Stage63 legal dev anchors. Encode the COMPLETE source-flow RGB proposal into
+Scene C256, not the tiny learned Stage64 bypass residual. Frozen decoder fits
+edit differences for four per-frame latent steps, keeping best finite states;
+shared RGB proposal stays unchanged. Source256 + edit256 + confidence/mask =
+514 channels; RGB patch control = 1538 channels. Same bridge width128, slightly
+more RGB input projection parameters; runtime reports actual trainable counts.
+Explicit native pad16/RAE letterbox mapping; video times0/4/8/12/16 plus separate
+reference prefix. Prefix excluded from video flow loss and removed before VAE
+decode. Future edited labels are separate loss-only artifacts; train anchor is
+declared target first frame, dev anchor is model/user output, no target oracle.
+
+Main1920train/24 held-out train-group monitor/24dev, smoke48train/2monitor/24dev.
+Each arm max1500 steps, min500, eval250 with four fixed sigmas, save125, EMA.99,
+preview eight dev every500, final all24 three-way videos. Both start native;
+identity examples use empty text and zero edit delta. State dropout retains
+bridge computation for DDP. Save optimizer/EMA/all-rank RNG; bad sample skips
+collectively; independent arms continue after failures. Metrics/TensorBoard,
+DI with units, idle guard, dual IO and receipt/SHA reconciliation retained.
+Lossless generated_frames.npz supplements MP4; interrupted NPZ commits repair
+from saved RGB without sampling again. Preview media is also reconciled.
+
+Local tests cover real tiny VACE/UniPC, actual state influence/gradients, target
+isolation, coordinates, two-rank Gloo exact4-vs2+2 resume and bad reads, full
+pipeline/media repair, and actual Bash with cluster stubs. Heavy codecs in the
+pipeline test are explicit fixtures, not production teacher validation. Actual
+14B peak HBM,910B/HCCL,OBS and final quality remain for cluster smoke/full run.
+No claim that Stage65 already beats native or establishes unique RAE benefit.
+
+## User scope clarification: focused gains over native VACE (2026-11-06)
+
+User wants reliable numeric improvement and representative favorable cases,
+not universal superiority over the base model. Separate fullmethod-vs-native
+progress from RAE-specific attribution. Current matched-reference native
+keep_change .03224018->learned .03019709 (-6.337%,24/24lower), edit change also
+-2.200%; source-preservation signal, not totaleditingquality. RGBkeep .03018289
+is essentially equal/slightlybetter, so cannot attribute fullgain toRAE.
+Shamrock andpinkwater numericcandidates retain/increaseedit-change; verify
+correctediting visually. Focusfixedwindowappearance editing/preservation;
+reportfixedsetquantitative withrepresentativecases andRGBcontrol. No newrun.
+
+## Stage64 actual result reviewed (2026-11-06)
+
+Read docs/EDIT_TRANSPORT_LEARNED_RESULTS_20261106.md. User supplied local
+D:/中转站/VGGAE/scale. Main1920train/128monitor/24dev allprepared,2500updates,
+0skip,3nodesexit0; all24predict/72render/24comparisons complete. EMA1500selected;
+2250slightlylower score belowrelativeimprovementthreshold, notselectionbug.
+Main/smoke each120receipts/216files SHA+sizepass, all240MP4 decode17frames8FPS;
+dualpublication recordedallpass, OBSnotrechecked. No localptpayloads; do not
+claimtensor/resumevalidation.96nonzerowritebacks; sharedinputidentity/seed.
+MonitorRGBL1 .02324685 ->learned .02293442 (-1.344%),15/24better; top3cases
+accountfornetgain. Fixed24/128monitor,twoframesonly. Devmean decodedcorrection
+.00129538 (~.33/255global), notzero/no-training but verysmall. Approx31.25epochs,
+all56m35s,train30m03s,lastDI68.54supervisedframes/s24ranks. Convergenceflag onlyrule.
+Visual: no clearstableRAE advantageoverRGB. Butterflytransportpatchy; ice/wood
+referenceeffects surviveintermediate but disappearinfrozenVACE; bluepenanchor
+alreadywrongpaper. Stage63firstframeattenuationfixedbyRGBbypass/hardanchor, not
+uniqueRAEgain. Gate protects sourceflowconfidence, noteditcorrectness; trainloss
+endsatintermediateRGB; latewritebackdoesnotensureeffectretention. Coarse9training
+vsfull17predictionproposal mismatch is additionalunmeasuredrisk. Nextcandidate
+majorstep should trainactualreferencecondition-to-generatorinterface; no more
+same residual scaling without evidence. No runtimechange/newrun thisreview.
+Gallery D:/workspace/VggAE_DataAudit/learned_review_20261106/index.html.
+LossyMP4difference contaminatedbycodec evenidenticalSOURCE, notqualityevidence.
+
 ## Stage64 trainable edit transport implemented (2026-11-05)
 
 User says continue after distinguishing Stage63 per-video optimization from

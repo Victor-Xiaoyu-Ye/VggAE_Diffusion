@@ -1,5 +1,99 @@
 # Project Context
 
+## Stage65 implemented: optimize VACE with decodable editing states (2026-11-06)
+
+The user asks to connect RAE editing states to VACE, prioritize visible gains
+over native, keep an RGB control, test the implementation and provide launch
+commands. See docs/VACE_EDIT_STATE_RUNBOOK.md and script65. Existing three-node
+startup is unchanged; STATE_STAGE=smoke && all uses separate namespaces. No
+cluster run, new model downloads, or paper claims were made during development.
+
+The change addresses Stage64's untrained renderer interface: train rank16 LoRA
+and a zero-initialized control-token bridge under the actual native flow loss.
+The state is added immediately after VACE condition patch embedding and passes
+through its control blocks and main DiT at every denoising step, including both
+CFG evaluations. Frozen StreamVGGT/Scene C256 produce source and full edited
+reference states. Four-step decoder calibration optimizes a latent edit whose
+decoded difference fits the legal source-flow RGB proposal; future edited
+targets never enter this operation. Calibration leaves the shared RGB proposal
+unchanged. Neither the Stage64 small residual nor late writeback is used.
+
+Both learned arms use the same source-inactive/reference-reactive native VACE
+condition, first-frame reference, mask and seed. RAE state has514 channels
+(source256/edit difference256/confidence/mask); RGB has1538 from16x16 pixel
+patches and the same auxiliaries. Same128-wide bridge and rank16 LoRA, with
+slightly more RGB projection parameters. Native retains original source-reactive
+conditioning plus the same anchor; it is a full-method baseline, not a pure
+representation ablation. Preserve this distinction when claiming improvements.
+
+Inputs are read-only Stage60 bank, Stage64 source/proposal cache and partition,
+Stage63 legal dev anchors. Main uses1920train,24 of128 group-held-out monitor,
+24dev. Train/monitor first edited target frame is a declared reference input;
+future edited frames are only flow labels in separate supervision artifacts.
+Explicit coordinate mapping preserves aspect ratio and padding. Nine RAE states
+align to native video frames0/4/8/12/16 plus a separate reference-prefix state;
+the reference prefix is excluded from video loss and removed before VAE decode.
+
+Two arms start from the same native weights, train at most1500 steps each with
+lr5e-5, EMA.99, fixed-noise four-sigma monitor every250, save every125, eight-case
+preview every500. Independent early stopping after500 may yield different actual
+budgets. State/text dropout and empty-text identity examples are included.
+Decoder/encoder, native VAE cache, training and final generation run in separate
+processes. The full14B model is never duplicated in saved checkpoints. Optimizer,
+EMA, RNG, intermediate previews, DI units, metrics/TensorBoard, idle protection,
+bad-data skipping and dual read/write recovery are retained. All successful
+preview/final media are reconciled across both roots. Lossless RGB NPZ removes
+MP4 encoding as a future numerical-comparison confound; interrupted publication
+can rebuild it from saved result tensors without new generation.
+
+Local validation uses real tiny VACE/UniPC and real Gloo collectives, with
+explicit lightweight substitutes for unavailable production codecs. It verifies
+actual bridge/LoRA updates, frozen weights, matched inputs, target isolation,
+prefix loss, FP16 cache/BF16 execution, exact checkpoint recovery and media repair.
+It does not establish14B peak HBM,910B/HCCL/OBS or visual gains. Expected output:
+scale/vace_edit_state_v1/report.html and comparisons/*/native_rgb_rae.mp4.
+Final selection uses train-group monitor, not development-case cherry-picking.
+Read final videos before asserting native improvement, RAE benefit or geometry.
+
+## Narrowed near-term success criterion (2026-11-06)
+
+User explicitly seeks some defensible quantitative gains and goodcases over
+nativeVACE, notuniversal superiority. Fullmethod-vs-native and RAE-vs-RGB are
+separatequestions. ExactStage64keep_change .03224018->.03019709 (-6.337%),
+24/24lower;edit-change simultaneously-2.200%, so noaggregatequalityclaim.
+RGBkeep .03018289, meaningcurrentpreservationgainisnot uniquelyRAE. Shamrock/
+pinkwater provide numericcandidates withnondecreasingedit-change; notyet
+validated as strongvisualwins. Focusfixedwindowlocalappearance/preservation
+andtemporalstability, keepmatchedinputs/fixedsetquantitative/RGBablation.
+No newtraining orruntimechange inthisclarification.
+
+## Stage64 completed: weak learned gain, renderer interface remains unresolved (2026-11-06)
+
+Review docs/EDIT_TRANSPORT_LEARNED_RESULTS_20261106.md. Local userresults main
+and smoke complete; 1920train/128monitor/24dev;2500updates0skip;3nodesexit0;
+EMA1500selected;96nonzero RGB/learnedwritebacks;24actualmatchedthreewayvideos.
+Eachrun120receipts/216registeredfilesSHApass,240totalMP4all17frames8FPS.
+Two-rootpublication records pass, no newOBS access; localptpayloadsabsent.
+
+SelectedmonitorRGBL1 .02324685->.02293442 (-1.344%),15/24improve,top3cases
+driveaggregate. 24of128monitorcases andtwoframes; notfullvideoconvergence.
+2250slightlylowerweightedscore failedrelativeimprovementthreshold; keeping1500
+isexpected. Devcorrectionmean .00129538, median .00070735. Nonzero gradients,
+updates andcorrections support actualtraining, no tensorlevelverification.
+About31.25trainepochs,all56m35s,train30m03s,finalDI68.54frames/s24ranks.
+
+Visually no clearstablelearnedRAE gainoverRGB. Butterflybluefragmentedbefore
+render; frozenVACE loses ice/wood despitevisibleintermediatereference. Bluepen
+wrongpaper originatesinmodelanchor. Hardfirstframe/RGBbypassfixedprior known
+editattenuation but doesnotestablish uniqueRAE. Methodlimitations: sourceflow
+confidencegate wronglyequatedwitheditcorrectness; intermediateL1 notfinal
+generationobjective; nine-statevs17-frameproposalcorrectionbase mismatch
+unmeasured. Next majorcandidate is trainedreferenceconditioning/renderer
+adaptation withconsistent train/inference state, notmore same residualsteps.
+No runtimeedits/newtraining/paperclaims thisreview. Report/gallery savedonD.
+MP4pixel difference unsafe forsmallgains: identicalSOURCE encodingcontrol
+already~.01L1. UseexactJSON orlossless/tensors forquantitativeeffectclaims.
+
 ## Stage64 ready: learned residual transport, frozen renderers (2026-11-05)
 
 User authorizes continuation after clarifying Stage63 had no newweighttraining.

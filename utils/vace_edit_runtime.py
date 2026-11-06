@@ -183,7 +183,7 @@ def insert_lora(model,rank=16,alpha=16):
     return changed
 
 
-def native_forward(model,x,t,vace_context,context,readout_block=None,use_checkpoint=False,context_scale=1.):
+def native_forward(model,x,t,vace_context,context,readout_block=None,use_checkpoint=False,context_scale=1.,state_tokens=None):
     """Same computation as upstream VaceWanModel.forward, exposing one hidden grid."""
     _, mm=native_modules()
     device=model.patch_embedding.weight.device
@@ -200,6 +200,10 @@ def native_forward(model,x,t,vace_context,context,readout_block=None,use_checkpo
     text=model.text_embedding(torch.stack([F.pad(u,(0,0,0,model.text_len-u.shape[0])) for u in context]))
     kw=dict(e=e0,seq_lens=seq_lens,grid_sizes=grids,freqs=model.freqs,context=text,context_lens=None)
     c=torch.cat([model.vace_patch_embedding(u[None]).flatten(2).transpose(1,2) for u in vace_context])
+    if state_tokens is not None:
+        if state_tokens.shape != c.shape:
+            raise ValueError('Edit-state tokens must match the native VACE patch grid')
+        c=c+state_tokens.to(c)
     hints=[]
     def call(block,*args,**kwargs):
         if use_checkpoint and torch.is_grad_enabled():
