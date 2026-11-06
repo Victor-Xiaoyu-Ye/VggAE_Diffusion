@@ -3,6 +3,35 @@
 Read this file first. It defines the active project context, current goals,
 rules, and safe next steps for future agents.
 
+## Stage66: retain decoder-calibrated edit states inside VACE (2026-11-06)
+
+User explicitly retains RAE edit-state + geometry/correspondence constraints;
+implement a complete next experiment, not another pivot or a new AE/DiT.
+Read docs/EDIT_STATE_FEEDBACK_RUNBOOK.md. Entry:
+FEEDBACK_STAGE=smoke then all, scripts/scale/66_refine_vace_edit_state.sh.
+Three nodes x eight910B, old bootstrap. New namespace edit_state_feedback_v1.
+Frozen FULL Stage65 selected RGB/RAE weights, source-only Stage64 statistics,
+same legal model/user anchor, same seeds and fixed24dev. Five arms native,
+rgb_base,rae_base,rgb_joint,rae_joint; compatible historical baselines reused.
+Stage63 ALREADY had offline joint calibration; Stage66 adds CURRENT VACE clean
+prediction feedback, bidirectional adjacent/anchor source correspondence graph,
+and transactional update of both trained state bridge and actual flow velocity.
+Source flow is approximate image correspondence, not certified3D geometry.
+Native RGB control stays fixed to the shared Stage65 proposal. RAE bridge and
+explicit denoising correction change; do not say native RGB context changes.
+Only decoder expansions+decoder stay with14B; Stream encoder runs in separate
+preparation. One frame backward graph, checkpointed decode; no learned weights
+updated this round. No-edit/alpha0 are sampling no-ops. Unreliable direct
+correction retains current generation, not hard source copy. Changed bridge
+can still affect all pixels downstream; no strict final preservation claim.
+Write intermediate correction tensors/videos, final losslessNPZ/MP4, DI and
+feedback applied/fallback counts; dual roots reconciled. Failed independent
+arms do not suppress others; incomplete runs are reported honestly. Interrupted
+sampling restarts same case/seed, not an invalid partial UniPC history.
+CPU fixtures exercise real tiny VACE/UniPC, projection, state influence and
+media recovery; production910B/HCCL/OBS/peakHBM/quality remain unverified.
+No SOTA, RAE superiority, or Overleaf success claim from implementation.
+
 ## Stage65: train the edit-state interface inside VACE (2026-11-06)
 
 User authorized implementation, matched RGB control, tests and cluster script.

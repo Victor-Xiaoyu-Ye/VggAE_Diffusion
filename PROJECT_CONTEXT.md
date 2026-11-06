@@ -1,5 +1,38 @@
 # Project Context
 
+## Stage66 implemented: live decoder-calibrated edit-state feedback (2026-11-06)
+
+User retains RAE editing states inside VACE with geometry/correspondence
+constraints as the method direction. Read docs/EDIT_STATE_FEEDBACK_RUNBOOK.md.
+Run scripts/scale/66_refine_vace_edit_state.sh with FEEDBACK_STAGE=smoke then
+all on existing3x8NPUs. Output edit_state_feedback_v1, smoke separate. Freeze
+the FULL Stage65 selected RGB/RAE LoRA+bridge weights; no new large training.
+Compare Native,RGBbase,RAEbase,RGBjoint,RAEjoint on identical24dev source/anchor
+inputs and seeds. Historical baselines are reused only at exact matching
+sampling/identity/checkpoint. Future edited targets never enter inference.
+
+Stage63 already solved offline joint calibration. New change is to decode the
+CURRENT VACE clean estimate at up to3 low-noise timesteps, jointly optimize
+source-conditioned edit responses along a source-only bidirectional adjacent
+and anchor graph, update the edit-state bridge, and write an encoded RGB
+correction into actual flow velocity. Keep the independent prefix intact and
+reset multistep history after a successful conditioning change. RGB solves the
+same visible-response problem, with the same anchor and graph. Native96channel
+RGB context remains the shared Stage65 proposal; only state/velocity change.
+
+Read source states/normalization from Stage64; reconstruct original-grid warm
+start once because Stage65 saved only the aligned bridge map. Keep Stream and
+full encoder out of14B sampling processes, retain only frozen expand+decoder
+with one-frame backward graphs/checkpointed decode. Alpha0/no-edit strict
+no-op; numerical failures roll back solver and preserve incoming velocity.
+Sourceflow is approximate correspondence, not true3D geometry/semantic truth.
+Intermediate states and correction videos saved; output-root and persistent
+media repaired, DI units and actual feedback/fallback health reported. Complete
+samples recover without rerunning; partial sampling restarts same seed.
+Local real-tiny sampler tests are not production quality or NPU memory evidence.
+The fixed24 are development cases; no SOTA, unique RAE benefit, or accepted
+paper contribution is claimed until natural-video results and matched controls.
+
 ## Stage65 implemented: optimize VACE with decodable editing states (2026-11-06)
 
 The user asks to connect RAE editing states to VACE, prioritize visible gains

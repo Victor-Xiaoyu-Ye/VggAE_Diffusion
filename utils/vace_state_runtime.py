@@ -137,12 +137,14 @@ class StateConditionedVACE(nn.Module):
 
 
 @torch.no_grad()
-def sample_state_native(model,condition,text,negative,state,cfg,seed,use_state=True):
+def sample_state_native(model,condition,text,negative,state,cfg,seed,use_state=True,
+                        velocity_callback=None):
     """Real native UniPC sampling through the trained wrapper in BOTH CFG arms.
 
     Conditioning retains the legal reference prefix. Return all latent slots;
     call decode_native(...,reference_count=1) to decode only video slots.
-    No late writeback or target video is used by this sampler.
+    An optional source-only feedback callback may correct velocity and update
+    the mutable state for the next pair of CFG forwards. No target is consumed.
     """
     prefix,_=native_modules()
     cls=importlib.import_module(prefix+'.utils.fm_solvers_unipc').FlowUniPCMultistepScheduler
@@ -151,6 +153,8 @@ def sample_state_native(model,condition,text,negative,state,cfg,seed,use_state=T
     x=torch.randn((16,*condition.shape[1:]),device=device,generator=generator,dtype=torch.float32)
     scheduler=cls(num_train_timesteps=1000,shift=1,use_dynamic_shifting=False)
     scheduler.set_timesteps(cfg['sample_steps'],device=device,shift=cfg['shift'])
+    if velocity_callback is not None and hasattr(velocity_callback,'set_schedule'):
+        velocity_callback.set_schedule(scheduler.sigmas[:len(scheduler.timesteps)])
     training=model.training
     model.eval()
     try:
@@ -161,6 +165,21 @@ def sample_state_native(model,condition,text,negative,state,cfg,seed,use_state=T
             velocity=u+cfg['guidance']*(c-u)
             if not bool(torch.isfinite(velocity).all()):
                 raise FloatingPointError('Nonfinite state-conditioned native velocity')
+            if velocity_callback is not None:
+                corrected=velocity_callback(step_index=i,sigma=float(scheduler.sigmas[i]),
+                    latent=x,velocity=velocity)
+                if corrected.shape!=velocity.shape or not bool(torch.isfinite(corrected).all()):
+                    raise FloatingPointError('Invalid state feedback velocity')
+                velocity=corrected
+                if (hasattr(velocity_callback,'consume_history_reset') and
+                        velocity_callback.consume_history_reset()):
+                    # The bridge condition changed. Start a first-order step
+                    # without reusing outputs under the previous condition;
+                    # preserve the actual current timestep and sigma schedule.
+                    scheduler.model_outputs=[None]*scheduler.config.solver_order
+                    scheduler.timestep_list=[None]*scheduler.config.solver_order
+                    scheduler.lower_order_nums=0
+                    scheduler.last_sample=None
             x=scheduler.step(velocity[None],t,x[None],return_dict=False,generator=generator)[0][0]
             if (i+1)%5==0:print(f'[VACE state sample] {i+1}/{cfg["sample_steps"]}',flush=True)
     finally:

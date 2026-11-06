@@ -1,0 +1,43 @@
+{
+  "schema": "edit-state-feedback-v1",
+  "seed": 42,
+  "cases": 24,
+  "frames": 17,
+  "fps": 8,
+  "sample_steps": 30,
+  "shift": 3.0,
+  "guidance": 5.0,
+  "context_scale": 1.0,
+  "reuse_baselines": true,
+  "writeback_sigmas": [0.6, 0.35, 0.15],
+  "writeback_alpha": 0.35,
+  "writeback_max_clean_rms": 0.25,
+  "writeback_max_sigma": 0.75,
+  "update_bridge_state": true,
+  "decoder_checkpoint": true,
+  "solver": {
+    "sweeps": 2,
+    "steps": 2,
+    "lr": 0.03,
+    "trust": 0.25,
+    "rgb_trust": 0.25,
+    "native_weight": 0.5,
+    "observation_weight": 1.0,
+    "anchor_weight": 8.0,
+    "joint_weight": 1.0,
+    "keep_weight": 1.0,
+    "latent_weight": 0.0001,
+    "reachable_mix": 0.65,
+    "reach_min": 0.1,
+    "protect_mix": 0.0,
+    "hard_anchor": true
+  },
+  "notes": [
+    "Reuse frozen Stage65 selected RGB/RAE LoRA and bridge; no new large-model training and no future edited target conditioning.",
+    "Stage63 already had OFFLINE joint calibration. This experiment adds prediction-dependent feedback, source graph edges and synchronized state/velocity writes.",
+    "Prepare source-only correspondence and unaligned RAE edit states before loading VACE14B. Only frozen decoder components remain resident during feedback.",
+    "RGB and RAE feedback receive identical source, legal anchor, correspondence, observation support, sampling seed and schedules.",
+    "Unknown regions preserve the current VACE estimate. No claim that optical flow is ground-truth geometry or a semantic mask.",
+    "Use existing 24 internal development cases; report all successes and failures. This is not an independent SOTA benchmark."
+  ]
+}
