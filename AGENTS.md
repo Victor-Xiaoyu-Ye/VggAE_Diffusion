@@ -3,6 +3,57 @@
 Read this file first. It defines the active project context, current goals,
 rules, and safe next steps for future agents.
 
+## Stage67: adaptive backtracking for the same editing experiment (2026-11-07)
+
+User authorized the solver fix, matched RGB control, tests, push and launcher.
+Read docs/EDIT_STATE_BACKTRACKING_RUNBOOK.md. Run FEEDBACK_STAGE=smoke then all
+with scripts/scale/67_refine_vace_edit_state_backtracking.sh on three nodes,
+eight NPUs each. New namespace edit_state_feedback_bt_v2, port 30800. The
+wrapper reuses Stage66 and DEFAULT_FEEDBACK_CONFIG, preserving explicit config
+overrides and resume. Freeze the same Stage65 selected weights; retain the
+same 24 dev cases, 17 frames, 30 sampling steps, feedback strength, source graph,
+objective and reference. Both RGB joint and RAE joint use the adaptive solver;
+Native/RGB base/RAE base remain. No new AE/DiT/LoRA training or data/weights.
+
+optimizer=adaptive_backtracking performs per-frame trust-projected Armijo
+trials; reject nondecreasing candidates, shrink step, restart non-descent Adam
+direction, preserve/restore optimizer state correctly. At most eight trials,
+shrink 0.5/grow 1.5, min LR 1e-6/max LR 0.03. Trial decoding uses no_grad;
+only one frame's backward graph is needed. Final global objective/state reports
+define actual improvement; accepted trials, applied writes and committed
+improvement are separate. VAE failure rolls back the solver including adaptive
+LR. Original fixed_adam remains available with the old config. Code hash
+changes require a new namespace; never silently resume v1 with updated source.
+Dual IO, intermediate videos/states, DI, peak memory, idle guard and independent
+arm continuation remain. summary.feedback_health adds solver_improved_events,
+committed_improved_events,committed_new_state_events,accepted_block_steps,
+trial_evaluations/backtracks,cases_without_committed_improvement. No qualitygate.
+Local fixture tests verify optimization/execution, not production quality;
+new solver acceptance and final video quality on 910B require the cluster run.
+Validation: 81 related CPU/Bash tests pass together; seven Python files compile,
+Stage66/67 Bash syntax and diff checks pass. No production NPU run this turn.
+
+## Stage66 production result reviewed (2026-11-07)
+
+Read docs/EDIT_STATE_FEEDBACK_RESULTS_20261107.md. Local five arms24each complete,
+120finalMP4/120NPZ paired;530present declared files SHA/size pass,290presentMP4
+decode17frames8FPS. Intermediate feedback only98/144videos (RAE26/72), no.pt
+entities,241ptreceipts. Remote sync success is logged, not freshly OBS verified.
+Three nodesexit0,~20m03all excludingbootstrap/smoke; RAEpeakallocated40.005GiB.
+144/144writes applied,0fallback,allgradientchecked. BUT RGBonly5/72 andRAE22/72
+accepted lower-objective newstates (2/24 and10/24cases); allotherfourcandidate
+sweepsworse ->initialstate restored. RAErejected50 bridgeRMSmedian1.13e-5 while
+cleanwriteRMS.0599. Applied is not optimized; majority re-inject existingreference.
+Rejectedfirstsweep objective/initialmedianRAE2.33,RGB4.51; fixedAdamLR.03 overshoot
+is a supported candidate, not proven solecause. No connectivity failure evidence.
+RAEjointkeep .02396769 vsRAEbase .02473683(-3.109%,23/24),editchangealso-1.360%.
+RGBjointkeep .02334145(-3.198%vsbase),RAEjoint2.683%worse thanRGBjoint17/24cases.
+All24five-time actualvisual review: no stablejointuniquegain. Butterflyf16RAE
+bodyclearerthanRGB butalreadybase; woodgrain/bluebutterfly/eggs sharednativewins.
+Wrongflowers/bluepaper,erasedpier,largeiceblockpersist. Userretainsdirection;
+nextpriorityeffectiveadaptive/backtrackingstateoptimizationwithstrongRGBcontrol,
+notnewAE/DiT or blanketRAEsuperiority. Reviewonly,noruntimechange/newclusterjob.
+
 ## Stage66: retain decoder-calibrated edit states inside VACE (2026-11-06)
 
 User explicitly retains RAE edit-state + geometry/correspondence constraints;

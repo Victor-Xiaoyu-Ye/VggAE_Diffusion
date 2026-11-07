@@ -385,8 +385,42 @@ def render(a, cfg, out, device, rank, world):
         raise RuntimeError('Some '+arm+' cases failed; successful cases and other arms retained')
 
 
+def feedback_health(rows):
+    """Report writeback, candidate solving and committed optimization separately."""
+    from utils.editing_state_feedback import solver_evidence
+    def evidence(event):
+        # Works with old fixed-Adam events too, without inventing trial counts.
+        return solver_evidence(event.get('solver', {}))
+    def improved(event):
+        return (bool(event.get('applied')) and not event.get('fallback') and
+                evidence(event)['solver_objective_improved'])
+    events = [e for row in rows for e in row.get('feedback_events', [])]
+    stats = [evidence(e) for e in events]
+    committed = [evidence(e) for e in events if e.get('applied') and not e.get('fallback')]
+    def total(key, values):
+        known = [row[key] for row in values if row[key] is not None]
+        return sum(known) if known else None
+    return dict(requested_events=len(events),
+        applied=sum(bool(e.get('applied')) for e in events),
+        fallback=sum(bool(e.get('fallback')) for e in events),
+        objective_observed_events=sum(s['solver_objective_observed'] for s in stats),
+        solver_improved_events=sum(s['solver_objective_improved'] for s in stats),
+        committed_improved_events=sum(improved(e) for e in events),
+        committed_new_state_events=sum(improved(e) and
+            (evidence(e)['solver_state_delta_rms'] or 0.) > 0 for e in events),
+        applied_without_objective_improvement=sum(bool(e.get('applied')) and not improved(e) for e in events),
+        accepted_block_steps=total('solver_accepted_steps', committed),
+        rejected_block_steps=total('solver_rejected_steps', stats),
+        trial_evaluations=total('solver_trial_evaluations', stats),
+        backtracks=total('solver_backtracks', stats),
+        cases_without_applied_feedback=[r['id'] for r in rows
+            if not any(e.get('applied') for e in r.get('feedback_events', []))],
+        cases_without_committed_improvement=[r['id'] for r in rows
+            if not any(improved(e) for e in r.get('feedback_events', []))])
+
+
 def summarize(a, cfg, out):
-    m = manifest(a, cfg, out); failures = []; sync = []; means = {}; feedback_health = {}
+    m = manifest(a, cfg, out); failures = []; sync = []; means = {}; health = {}
     page = ['<!doctype html><meta charset="utf-8"><title>Stage66 feedback comparison</title>',
         '<style>body{font:16px sans-serif;max-width:1600px;margin:25px auto}video{max-width:100%}pre{white-space:pre-wrap}</style>',
         '<h1>Native / trained RGB / trained RAE / RGB feedback / RAE feedback</h1>',
@@ -402,12 +436,7 @@ def summarize(a, cfg, out):
         means[arm] = {k:sum(r[k] for r in completed)/len(completed) for k in
             ('source_change','edit_region_change','keep_change','output_frame_delta')} if completed else None
         if arm.endswith('_joint'):
-            events=[e for r in completed for e in r.get('feedback_events',[])]
-            feedback_health[arm]=dict(requested_events=len(events),
-                applied=sum(bool(e.get('applied')) for e in events),
-                fallback=sum(bool(e.get('fallback')) for e in events),
-                cases_without_applied_feedback=[r['id'] for r in completed
-                    if not any(e.get('applied') for e in r.get('feedback_events',[]))])
+            health[arm]=feedback_health(completed)
         for r in completed:
             try:
                 roots = reconcile_case(out, r['receipt'], m['identity'])
@@ -455,7 +484,7 @@ def summarize(a, cfg, out):
             failures.append(dict(id=key,phase='comparison',error=repr(exc)))
     bad=[r for r in sync if not r['ok']]
     summary=dict(status='completed' if not failures and not bad else 'incomplete',cases=len(m['records']),
-        means=means,feedback_health=feedback_health,failures=failures,media_failures=bad,
+        means=means,feedback_health=health,failures=failures,media_failures=bad,
         protocol='Frozen Stage65 weights; current prediction -> joint source-correspondence projection -> state and velocity write',
         limitations=['Internal dev; all failed cases retained. No SOTA or unique RAE benefit is assumed.',
             'Source flow is approximate correspondence, not semantic segmentation or certified 3D geometry.',

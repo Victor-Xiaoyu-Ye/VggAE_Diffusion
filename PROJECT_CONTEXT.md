@@ -1,5 +1,59 @@
 # Project Context
 
+## Stage67: backtracking solver with unchanged RGB/RAE comparison (2026-11-07)
+
+User requested implementation, tests, push and a launcher. The new wrapper
+scripts/scale/67_refine_vace_edit_state_backtracking.sh selects
+configs/edit_state_feedback_bt_v2.json and namespace edit_state_feedback_bt_v2,
+port 30800, existing three nodes x eight NPUs. Run FEEDBACK_STAGE=smoke then all;
+no new bootstrap/assets. It reuses Stage66 and retains Native/RGB base/RAE base/
+RGB joint/RAE joint, the same Stage65 selected weights, 24 dev cases, 17 frames,
+30 sampling steps, three feedback times/strength, geometry approximation and
+loss. Both joint arms use adaptive optimization. The old fixed Adam path remains
+for reproduction; new outputs are isolated from v1.
+
+Per-frame projected Armijo backtracking replaces unconditional Adam updates in
+the new configuration: at most eight trials, shrink 0.5, grow 1.5, LR 1e-6..0.03.
+The local objective contains all incoming/outgoing edges with matching global
+weights. Rejected parameters and moments restore; adaptive LR persists and
+participates in transaction rollback. Only candidate forward passes are added;
+one frame's decoder backward graph remains. Reports distinguish numerical
+candidate improvement, actual state change, real VACE writes and committed
+improvement after downstream VAE success. Complete output does not imply
+successful optimization. DI, dual sync, intermediate media and continuation
+after independent arm failures remain. Expected benefit is more effective state
+updates; visual quality and RAE-specific gains await production results.
+Validation: 81 related CPU/Bash tests pass in one run, including actual tiny
+VACE/UniPC feedback, downstream rollback and dual media recovery. Seven Python
+files compile; both launchers pass Bash syntax. Production NPU/OBS remain pending.
+
+## Stage66 actual feedback result (2026-11-07)
+
+See docs/EDIT_STATE_FEEDBACK_RESULTS_20261107.md. Local edit_state_feedback_v1:
+all5x24 finalvideos and120losslessNPZ present, paired identities/seeds/checkpoints
+correct;530present declaredfiles SHA/size pass;290presentMP4 decode17frames8FPS.
+Only98/144intermediatefeedbackvideos downloaded (RAE26/72), no.ptentities;
+loggedremote288receiptsyncsuccess is not newOBSverification. Three nodesexit0,
+all~20m03 excludesbootstrap/smoke; peakRAE40.005GiB allocated.
+
+Realfeedback144/144,gradientchecksallpass,0fallback. Effective numerical solving
+is the bottleneck: RGB5/72events,RAE22/72accept newlowerobjective states, only
+2/24 and10/24cases. Others rejectall4candidate sweeps andrestoreinitial. RAE
+rejectedbridgeRMSmedian1.13e-5,cleanwrite.0599: muchoftheactualoperation is existing
+reference reinjection. Firstsweep objective inflationmedianRGB4.51x,RAE2.33x
+supports testingoversizedfixedAdamsteps; doesnotidentifysolecause. AcceptedRAE
+temporalobjectivedecreases arenot finalqualityevidence.
+
+RAEjointkeep .02396769 vsbase .02473683(-3.109%,23/24),editmagnitudealso-1.360%.
+RGBjointkeep .02334145(-3.198%vsRGBbase); RAEjoint2.683%higher thanRGBjoint.
+RAEjoint/base pixelMAE1.09/255,includingfutureframes; notonlyhardfirstframe.
+All24cases five-timevisual review finds no clearstablejointgain. Butterflytail
+RAEclearerthanRGB is presentinbase; bluebutterfly/woodgrain/eggs are sharednative
+wins. Wronganchorsemantics,erasedpier andlargeiceartifactremain. Keepuser's
+RAE-state/VACE/correspondence direction; prioritize effective trust/backtracking
+solver and matchedstrongRGBbefore distillation/scale. Reviewdidnotchangecode or
+startnewtraining; noSOTAoruniqueRAEcontributionclaim.
+
 ## Stage66 implemented: live decoder-calibrated edit-state feedback (2026-11-06)
 
 User retains RAE editing states inside VACE with geometry/correspondence

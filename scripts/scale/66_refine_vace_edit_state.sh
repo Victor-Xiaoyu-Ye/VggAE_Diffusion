@@ -19,7 +19,7 @@ BASE_PORT="${MASTER_PORT}"
 NAMESPACE="${FEEDBACK_NAMESPACE:-edit_state_feedback_v1}"
 [[ "${STAGE}" != smoke ]] || NAMESPACE="${NAMESPACE}_smoke"
 [[ "${NAMESPACE}" =~ ^[a-zA-Z0-9_-]+$ ]] || exit 2
-CONFIG="${FEEDBACK_CONFIG:-${PROJECT}/configs/edit_state_feedback_v1.json}"
+CONFIG="${FEEDBACK_CONFIG:-${DEFAULT_FEEDBACK_CONFIG:-${PROJECT}/configs/edit_state_feedback_v1.json}}"
 CONFIG_EXPLICIT="${FEEDBACK_CONFIG+x}"
 STATE_NAMESPACE="${FEEDBACK_STATE_NAMESPACE:-vace_edit_state_v1}"
 TRANSPORT_NAMESPACE="${FEEDBACK_TRANSPORT_NAMESPACE:-edit_transport_learned_v1}"

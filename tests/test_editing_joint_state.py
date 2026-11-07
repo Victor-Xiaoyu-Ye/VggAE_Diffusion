@@ -216,5 +216,232 @@ class JointStateTests(unittest.TestCase):
         self.assertEqual(projector.calls, before['calls'])
 
 
+class AdaptiveJointStateTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        torch.set_num_threads(2)
+
+    def rgb(self, *, initial=.0495, iterations=4, **options):
+        source = torch.full((1, 3, 3, 3), .2)
+        mask = torch.ones(1, 1, 3, 3)
+        cfg = dict(optimizer='adaptive_backtracking', iterations=iterations,
+                   lr=.03, max_lr=.03, joint_weight=0., ridge=0.,
+                   native_weight=.5, observation_weight=1., anchor_weight=8.)
+        cfg.update(options)
+        p = JointEditProjector(None, None, source, source[0]+.05, mask, mask,
+            initial_effect=torch.full_like(source, initial), proposal=source+.05, cfg=cfg)
+        return p, source+.05
+
+    def assert_snapshot_equal(self, first, second, *, ignore=()):
+        def check(a, b):
+            if isinstance(a, torch.Tensor):
+                torch.testing.assert_close(a, b, rtol=0, atol=0)
+            elif isinstance(a, dict):
+                self.assertEqual(set(a), set(b))
+                for k in a:
+                    check(a[k], b[k])
+            elif isinstance(a, (tuple, list)):
+                self.assertEqual(len(a), len(b))
+                for x, y in zip(a, b):
+                    check(x, y)
+            else:
+                self.assertEqual(a, b)
+        check({k:v for k,v in first.items() if k not in ignore},
+              {k:v for k,v in second.items() if k not in ignore})
+
+    def test_block_delta_matches_global_with_bidirectional_flow_and_all_terms(self):
+        torch.manual_seed(19)
+        _, _, source, effect, mask, anchor = fixture(size=5)
+        mask[:, :, :, :2] = 0
+        valid = torch.ones_like(mask); valid[:, :, 0] = 0
+        confidence = torch.rand_like(mask)
+        graph = edges(3, 5, 5, confidence=.7)
+        graph += [dict(src=e['dst'], dst=e['src'], flow=e['flow'].clone(),
+                       confidence=e['confidence'].clone()) for e in graph]
+        for j, e in enumerate(graph):
+            e['flow'][..., 0] = .25 if j % 2 else -.3
+            e['flow'][..., 1] = .15
+        p = JointEditProjector(None, None, source, anchor, mask, confidence,
+            cfg=dict(optimizer='adaptive_backtracking', ridge=.3, keep_weight=.8,
+                     native_weight=.4, observation_weight=1.7, anchor_weight=3., joint_weight=2.3),
+            initial_effect=effect+torch.randn_like(effect)*.02, proposal=source+effect,
+            valid=valid, edges=graph)
+        effects = [v[0].detach().clone() for v in p.parameters]
+        current = torch.randn_like(source)*.03
+        energies = torch.tensor([.003, .005, .011])
+        for i, param in enumerate(p.parameters):
+            old = param.detach().clone()
+            before = p._score(effects, current, energies)['objective']
+            local_before = p._block_score(i, effects[i], param, effects, current, energies)
+            with torch.no_grad():
+                param.add_(torch.randn_like(param)*.01)
+            candidate = param[0].detach().clone()
+            local_after = p._block_score(i, candidate, param, effects, current, energies)
+            updated = list(effects); updated[i] = candidate
+            after = p._score(updated, current, energies)['objective']
+            self.assertAlmostEqual(after-before, (local_after-local_before)/p.frames, places=11)
+            with torch.no_grad():
+                param.copy_(old)
+
+    def test_near_optimum_rgb_fixed_four_sweeps_reject_but_adaptive_descends(self):
+        adaptive, current = self.rgb()
+        fixed, _ = self.rgb(optimizer='fixed_adam')
+        old = fixed.state_dict()
+        legacy = fixed.project(current)
+        self.assertEqual(legacy['diagnostics']['actual_state_delta_rms'], 0.)
+        self.assertFalse(legacy['diagnostics']['objective_improved'])
+        self.assertTrue(all(h['objective'] > legacy['diagnostics']['before']['objective']
+                            for h in legacy['diagnostics']['history']))
+        self.assert_snapshot_equal(old, fixed.state_dict(), ignore=('calls',))
+        result = adaptive.project(current)
+        d = result['diagnostics']
+        self.assertFalse(d['fallback'])
+        self.assertTrue(d['objective_improved'])
+        self.assertGreater(d['actual_state_delta_rms'], 0.)
+        self.assertGreater(d['accepted_steps'], 0)
+        self.assertGreater(d['backtracks'], 0)
+        self.assertEqual(d['accepted_steps']+d['rejected_steps'], 4)
+        self.assertLess(d['after']['objective'], d['before']['objective']*.25)
+        history = [d['before']['objective']]+[v['objective'] for v in d['history']]
+        self.assertTrue(all(a >= b for a,b in zip(history, history[1:])))
+
+    def test_nonlinear_decoder_adaptive_trials_are_no_grad_and_input_only(self):
+        decoder, z, source, effect, mask, anchor = fixture()
+        grad_modes = []
+        def decode(value):
+            grad_modes.append(torch.is_grad_enabled())
+            return decoder(value)
+        p = JointEditProjector(decode, z, source, anchor, mask, mask,
+            cfg=dict(optimizer='adaptive_backtracking', iterations=4, lr=.03,
+                     native_weight=.5, observation_weight=1., joint_weight=2.),
+            initial_delta=torch.full_like(z, .1), proposal=source+effect,
+            edges=edges(3,6,6), scale=torch.ones(3))
+        original = decoder.factor.detach().clone()
+        result = p.project(source+effect)
+        d = result['diagnostics']
+        self.assertFalse(d['fallback'])
+        self.assertTrue(d['objective_improved'])
+        self.assertGreater(d['accepted_steps'], 0)
+        self.assertLessEqual(d['trial_evaluations'], 12*8)
+        self.assertEqual(sum(grad_modes), 12)
+        self.assertIsNone(decoder.factor.grad)
+        torch.testing.assert_close(decoder.factor.detach(), original, rtol=0, atol=0)
+
+    def test_stale_adam_momentum_restarts_projected_non_descent_direction(self):
+        p, current = self.rgb(initial=.06, iterations=1)
+        parameter = p.parameters[0]
+        p.optimizers[0].state[parameter] = dict(step=torch.tensor(100.),
+            exp_avg=torch.full_like(parameter, -10.), exp_avg_sq=torch.ones_like(parameter))
+        result = p.project(current)
+        d = result['diagnostics']
+        self.assertFalse(d['fallback'])
+        self.assertEqual(d['direction_restarts'], 1)
+        self.assertEqual(d['accepted_steps'], 1)
+        self.assertTrue(d['objective_improved'])
+        self.assertLess(float(p.parameters[0].mean()), .06)
+        self.assertEqual(float(p.optimizers[0].state[parameter]['step']), 1.)
+
+    def test_projected_box_constraint_is_respected(self):
+        p, current = self.rgb(initial=0., iterations=4, rgb_trust=.001)
+        result = p.project(current)
+        self.assertFalse(result['diagnostics']['fallback'])
+        self.assertTrue(result['diagnostics']['objective_improved'])
+        self.assertLessEqual(float(p.parameters[0].abs().max()), .00100001)
+        self.assertEqual(result['diagnostics']['accepted_steps'], 1)
+        self.assertGreaterEqual(result['diagnostics']['rejected_steps'], 3)
+
+    def test_nonfinite_candidate_backtracks_without_hiding_setup_errors(self):
+        decoder, z, source, effect, mask, anchor = fixture(frames=1, size=3)
+        def decode(value):
+            output = decoder(value)
+            # Baseline and differentiable start are valid; oversized candidate
+            # steps cross a decoder numerical boundary, then smaller ones work.
+            return output*float('nan') if float(value.detach().max()) > .21 else output
+        p = JointEditProjector(decode, z, source, anchor, mask, mask,
+            cfg=dict(optimizer='adaptive_backtracking', iterations=1, lr=.03, joint_weight=0.),
+            proposal=source+effect, initial_delta=torch.zeros_like(z), scale=torch.ones(3))
+        result = p.project(source+effect)
+        d = result['diagnostics']
+        self.assertFalse(d['fallback'])
+        self.assertGreater(d['nonfinite_trials'], 0)
+        self.assertGreater(d['backtracks'], 0)
+        self.assertEqual(d['accepted_steps'], 1)
+        self.assertTrue(d['objective_improved'])
+        # Explicit numerical exceptions also backtrack; other error types do
+        # not. This wrapper's invalid region is the same as the NaN fixture.
+        def throws_numeric(value):
+            if float(value.detach().max()) > .21:
+                raise FloatingPointError('Synthetic nonlinear decoder overflow')
+            return decoder(value)
+        numeric = JointEditProjector(throws_numeric, z, source, anchor, mask, mask,
+            cfg=dict(optimizer='adaptive_backtracking', iterations=1, lr=.03, joint_weight=0.),
+            proposal=source+effect, initial_delta=torch.zeros_like(z), scale=torch.ones(3))
+        retried = numeric.project(source+effect)
+        self.assertFalse(retried['diagnostics']['fallback'])
+        self.assertGreater(retried['diagnostics']['nonfinite_trials'], 0)
+        self.assertTrue(retried['diagnostics']['objective_improved'])
+        def wrong_shape(value):
+            out = decoder(value)
+            return out[:, :, :2] if float(value.detach().max()) > .201 else out
+        broken = JointEditProjector(wrong_shape, z, source, anchor, mask, mask,
+            cfg=dict(optimizer='adaptive_backtracking', iterations=1, lr=.03, joint_weight=0.),
+            proposal=source+effect, initial_delta=torch.zeros_like(z), scale=torch.ones(3))
+        original = broken.state_dict()
+        bad = broken.project(source+effect)
+        self.assertTrue(bad['diagnostics']['fallback'])
+        self.assertIn('changed shape', bad['diagnostics']['error'])
+        self.assertEqual(bad['diagnostics']['backtracks'], 0)
+        self.assert_snapshot_equal(original, broken.state_dict(), ignore=('calls',))
+
+    def test_all_rejected_restores_parameters_moments_but_keeps_smaller_lr(self):
+        p, current = self.rgb(initial=.049999, iterations=1, backtrack_max_trials=1)
+        before = p.state_dict()
+        result = p.project(current)
+        after = p.state_dict()
+        d = result['diagnostics']
+        self.assertFalse(d['fallback'])
+        self.assertFalse(d['objective_improved'])
+        self.assertEqual(d['accepted_steps'], 0)
+        self.assertEqual(d['rejected_steps'], 1)
+        self.assertEqual(d['actual_state_delta_rms'], 0.)
+        self.assertEqual(d['trial_evaluations'], 1)
+        self.assertLess(after['step_sizes'][0], before['step_sizes'][0])
+        self.assert_snapshot_equal(before, after, ignore=('calls','step_sizes'))
+
+    def test_adaptive_snapshot_replay_and_downstream_failure_rollback(self):
+        p, current = self.rgb()
+        p.project(current)
+        before = p.state_dict()
+        expected = p.project(current+.001)
+        expected_state = p.state_dict()
+        p.load_state_dict(before)  # Caller rolls back after its VAE write fails.
+        self.assert_snapshot_equal(before, p.state_dict())
+        replay = p.project(current+.001)
+        self.assert_snapshot_equal(expected_state, p.state_dict())
+        torch.testing.assert_close(expected['reference'], replay['reference'], rtol=0, atol=0)
+        self.assertEqual(expected['diagnostics']['step_sizes'], replay['diagnostics']['step_sizes'])
+        prior = p.state_dict()
+        def fail_after_update(event):
+            raise RuntimeError('Synthetic downstream bookkeeping failure')
+        bad = p.project(current+.01, progress=fail_after_update)
+        self.assertTrue(bad['diagnostics']['fallback'])
+        self.assertFalse(bad['diagnostics']['objective_improved'])
+        self.assertEqual(bad['diagnostics']['actual_state_delta_rms'], 0.)
+        self.assert_snapshot_equal(prior, p.state_dict(), ignore=('calls',))
+
+    def test_default_fixed_path_matches_explicit_fixed_exactly(self):
+        explicit, current = self.rgb(optimizer='fixed_adam')
+        source = explicit.source
+        cfg = dict(explicit.cfg); cfg.pop('optimizer')
+        implicit = JointEditProjector(None, None, source, explicit.anchor,
+            explicit.masks, explicit.confidence, initial_effect=explicit.initial,
+            proposal=explicit.proposal, cfg=cfg)
+        for value in (current, current+.006):
+            first = implicit.project(value)
+            second = explicit.project(value)
+            torch.testing.assert_close(first['reference'], second['reference'], rtol=0, atol=0)
+            self.assert_snapshot_equal(implicit.state_dict(), explicit.state_dict())
+
+
 if __name__ == '__main__':
     unittest.main()

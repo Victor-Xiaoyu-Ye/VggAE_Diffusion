@@ -5,6 +5,7 @@ to the current VACE prediction is mapped through the two image canvases, so
 resampling itself never restores the source or introduces a writeback residual.
 """
 import json
+import math
 import time
 
 import torch
@@ -144,6 +145,30 @@ def _device_memory(device):
     return result
 
 
+def solver_evidence(diagnostics):
+    """Report optimization separately from later VAE/writeback success.
+
+    Derive the objective comparison from finite measured values, not a solver's
+    claimed success flag. A downstream failure can still roll this candidate
+    back; consumers must additionally check applied and not fallback.
+    """
+    before = diagnostics.get('before', {}).get('objective')
+    after = diagnostics.get('after', {}).get('objective')
+    valid = (isinstance(before, (int, float)) and isinstance(after, (int, float))
+             and math.isfinite(before) and math.isfinite(after))
+    improved = bool(valid and after < before and not diagnostics.get('fallback'))
+    return dict(solver_objective_observed=valid, solver_objective_improved=improved,
+        solver_objective_before=before if valid else None,
+        solver_objective_after=after if valid else None,
+        solver_relative_decrease=(before-after)/max(abs(before), 1e-12) if valid else None,
+        solver_accepted_steps=diagnostics.get('accepted_steps'),
+        solver_rejected_steps=diagnostics.get('rejected_steps'),
+        solver_trial_evaluations=diagnostics.get('trial_evaluations'),
+        solver_backtracks=diagnostics.get('backtracks'),
+        solver_state_delta_rms=diagnostics.get('actual_state_delta_rms'),
+        solver_step_sizes=diagnostics.get('step_sizes'))
+
+
 class StateFeedback:
     """Transactional callback: solver -> reference -> bridge + clean residual.
 
@@ -235,6 +260,7 @@ class StateFeedback:
             projected = self.projector.project(current9, progress=solver_progress)
             diagnostics = projected.get('diagnostics', {})
             event['solver'] = diagnostics
+            event.update(solver_evidence(diagnostics))
             if diagnostics.get('fallback'):
                 raise RuntimeError('Joint solver fallback: '+str(diagnostics.get('error', 'unspecified')))
             corrected9 = torch.as_tensor(projected['reference']).detach().float().cpu()
@@ -314,7 +340,8 @@ class StateFeedback:
         except Exception as exc:
             if snapshot is not None:
                 self.projector.load_state_dict(snapshot)
-            event.update(fallback=True, error=repr(exc), reason='feedback_failed_preserved_native')
+            event.update(applied=False, fallback=True, solver_rolled_back=snapshot is not None,
+                error=repr(exc), reason='feedback_failed_preserved_native')
             corrected = velocity
         self._event(event, started)
         return corrected

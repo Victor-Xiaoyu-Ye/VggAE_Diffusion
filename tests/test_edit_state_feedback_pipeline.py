@@ -55,10 +55,12 @@ class FeedbackPipelineTests(unittest.TestCase):
             side_effect=lambda *_, **__:rae_decoder(TinyRAE())))
         self.device = torch.device('cpu')
 
-    def old_run(self):
+    def old_run(self, config_name='edit_state_feedback_v1.json', sample_steps=None):
         old_root = self.root/'stage65'
         old_root.mkdir()
         base, args, old = fixture(old_root)
+        if sample_steps is not None:
+            base['sample_steps'] = int(sample_steps)
         stage65.states(args, base, old, self.device, 0, 1)
         stage65.cache(args, base, old, self.device, 0, 1)
         m = stage65.checked_manifest(old, base)
@@ -81,7 +83,7 @@ class FeedbackPipelineTests(unittest.TestCase):
         stage65.render(args, base, old, self.device, 0, 1)
         ArtifactStore(args.transport, args.transport_root).write_json('prepared.json',
             dict(source_scale=[1.]*256))
-        cfg = json.loads((REPO/'configs/edit_state_feedback_v1.json').read_text())
+        cfg = json.loads((REPO/'configs'/config_name).read_text())
         cfg.update({key:base[key] for key in
             ('seed', 'frames', 'fps', 'sample_steps', 'shift', 'guidance', 'context_scale')})
         cfg.update(cases=1)
@@ -184,6 +186,61 @@ class FeedbackPipelineTests(unittest.TestCase):
         self.assert_mirrors(out, ['render/native/dev-0/comparison.mp4',
             'render/native/dev-0/generated_frames.npz'])
 
+    def test_v2_adaptive_solver_reaches_real_sampling_and_reports_new_states(self):
+        """A successful writeback alone must not stand in for solver progress."""
+        cfg, a, out, old = self.old_run('edit_state_feedback_bt_v2.json', sample_steps=5)
+        self.assertEqual(cfg['solver']['optimizer'], 'adaptive_backtracking')
+        runner.prepare(a, cfg, out, self.device, 0, 1)
+        manifest = out.json('manifest.json')
+        self.assertEqual(manifest['config']['solver']['optimizer'], 'adaptive_backtracking')
+        outputs = {}
+        for arm in runner.ARMS:
+            self.render(a, cfg, out, arm)
+            outputs[arm] = out.load('render/'+arm+'/dev-0/result.pt', manifest['identity'], True)
+        runner.summarize(a, cfg, out)
+        summary = out.json('summary.json')
+        self.assertEqual(summary['status'], 'completed')
+        for family in ('rgb', 'rae'):
+            arm = family+'_joint'
+            events = outputs[arm]['events']
+            self.assertTrue(events)
+            self.assertTrue(all(e['applied'] and not e['fallback'] for e in events), events)
+            for event in events:
+                solver = event['solver']
+                self.assertEqual(solver['optimizer'], 'adaptive_backtracking')
+                self.assertEqual(event['solver_objective_improved'],
+                    solver['after']['objective'] < solver['before']['objective'])
+                self.assertEqual(event['solver_state_delta_rms'], solver['actual_state_delta_rms'])
+                self.assertLessEqual(solver['after']['objective'], solver['before']['objective'])
+                self.assertTrue(event['reference_prefix_preserved'])
+                self.assertEqual(event['prefix_delta_rms'], 0.)
+                self.assertGreater(event['clean_delta_rms'], 0.)
+                # All retries have a finite budget independent of objective
+                # difficulty; a rejected block cannot silently loop forever.
+                blocks = solver['accepted_steps']+solver['rejected_steps']
+                self.assertLessEqual(solver['trial_evaluations'],
+                    blocks*cfg['solver']['backtrack_max_trials'])
+            committed = [e for e in events if e['applied'] and not e['fallback'] and
+                         e['solver']['after']['objective'] < e['solver']['before']['objective']]
+            self.assertTrue(committed, family+' fixture failed to improve its numerical objective')
+            changed = [e for e in committed if e['solver']['actual_state_delta_rms'] > 0]
+            self.assertTrue(changed)
+            health = summary['feedback_health'][arm]
+            self.assertEqual(health['objective_observed_events'], len(events))
+            self.assertEqual(health['solver_improved_events'], len(committed))
+            self.assertEqual(health['committed_improved_events'], len(committed))
+            self.assertEqual(health['committed_new_state_events'], len(changed))
+            self.assertEqual(health['applied_without_objective_improvement'], len(events)-len(committed))
+            self.assertEqual(health['accepted_block_steps'], sum(e['solver']['accepted_steps'] for e in events))
+            self.assertEqual(health['trial_evaluations'], sum(e['solver']['trial_evaluations'] for e in events))
+            self.assertEqual(health['cases_without_committed_improvement'], [])
+            self.assertGreater(float((outputs[arm]['generated']-outputs[family+'_base']['generated']).abs().sum()), 0.)
+            self.assert_mirrors(out, ['render/'+arm+'/dev-0/comparison.mp4',
+                                     'render/'+arm+'/dev-0/generated_frames.npz'])
+        # Native and no-feedback baselines retain their own Stage65 identities.
+        for arm in ('native', 'rgb_base', 'rae_base'):
+            self.assertTrue(outputs[arm]['historical_reused'])
+
     def test_prepare_failure_preserves_independent_baselines(self):
         cfg, a, out, _ = self.old_run()
         with patch.object(runner, 'load_teacher', side_effect=RuntimeError('fixture teacher unavailable')):
@@ -199,6 +256,64 @@ class FeedbackPipelineTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             runner.summarize(a, cfg, out)
         self.assertEqual(out.json('summary.json')['status'], 'incomplete')
+
+    def test_real_adaptive_solver_downstream_failure_restores_moments_and_lr(self):
+        from utils.editing_joint_state import JointEditProjector
+        from utils.editing_state_feedback import StateFeedback
+        cfg, a, out, old = self.old_run('edit_state_feedback_bt_v2.json')
+        runner.prepare(a, cfg, out, self.device, 0, 1)
+        manifest = out.json('manifest.json')
+        inputs = out.load('prepared/dev-0.pt', manifest['identity'], True)['inputs']
+        old_state = old.load('states/dev-0.pt', manifest['stage65'], True)
+        reference = stage65.decoded_reference(old_state['reference'])
+        source = runner._rgb(inputs['source'])
+        valid = source.new_zeros(len(source), 1, *source.shape[-2:])
+        y, x, h, w = inputs['valid_rect']; valid[:, :, y:y+h, x:x+w] = 1
+        projector = JointEditProjector(rae_decoder(TinyRAE()), inputs['source_z'].float(),
+            source, runner._rgb(inputs['anchor']), inputs['masks'].float(), inputs['confidence'].float(),
+            cfg=cfg['solver'], initial_delta=inputs['initial_delta'].float(), valid=valid,
+            proposal=runner._rgb(inputs['proposal']), edges=inputs['edges'], scale=inputs['scale'])
+        primed = projector.project((source-.1).clamp(0, 1))
+        self.assertFalse(primed['diagnostics']['fallback'])
+        self.assertGreater(primed['diagnostics']['accepted_steps'], 0)
+        self.assertTrue(any(optimizer.state for optimizer in projector.optimizers))
+        before = projector.state_dict()
+        features = old_state['rae_state'].float().clone()
+        state_before = features.clone()
+
+        class FailingCodec(TinyCodec):
+            def encode(self, values):
+                raise RuntimeError('injected downstream VAE encoder failure')
+
+        feedback = StateFeedback(FailingCodec(), projector, inputs, reference, features, cfg, 'rae_joint')
+        feedback.set_schedule([.6])
+        velocity = torch.zeros(16, 6, 2, 4)
+        result = feedback(step_index=0, sigma=.6, latent=velocity.clone(), velocity=velocity)
+        self.assertIs(result, velocity)
+        self.assertTrue(feedback.events[-1]['fallback'])
+        self.assertIn('downstream VAE encoder failure', feedback.events[-1]['error'])
+        self.assertGreater(feedback.events[-1]['solver']['accepted_steps'], 0)
+        torch.testing.assert_close(features, state_before, rtol=0, atol=0)
+
+        def exact(left, right):
+            if isinstance(left, torch.Tensor):
+                torch.testing.assert_close(left, right, rtol=0, atol=0)
+            elif isinstance(left, dict):
+                self.assertEqual(left.keys(), right.keys())
+                for key in left:
+                    exact(left[key], right[key])
+            elif isinstance(left, (tuple, list)):
+                self.assertEqual(len(left), len(right))
+                for item, other in zip(left, right):
+                    exact(item, other)
+            else:
+                self.assertEqual(left, right)
+
+        exact(before, projector.state_dict())
+        health = runner.feedback_health([dict(id='dev-0', feedback_events=feedback.events)])
+        self.assertEqual(health['committed_improved_events'], 0)
+        self.assertEqual(health['committed_new_state_events'], 0)
+        self.assertFalse(feedback.consume_history_reset())
 
     def test_configuration_change_requires_fresh_namespace(self):
         cfg, a, out, _ = self.old_run()
