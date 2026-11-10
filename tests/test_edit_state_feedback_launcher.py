@@ -104,6 +104,7 @@ case "$1" in
    esac
   done
   call="${phase}${arm:+:${arm}}"
+  echo "phase environment: ${phase} cpu=${VGGAE_CPU_ONLY:-unset} autoload=${TORCH_DEVICE_BACKEND_AUTOLOAD:-unset}"
   if [[ "$phase" == summarize ]];then
    echo "summary diagnostics: fault=${PYTHONFAULTHANDLER:-} unbuffered=${PYTHONUNBUFFERED:-}"
   fi
@@ -113,7 +114,8 @@ case "$1" in
  *) echo "Unexpected command $*";exit 99 ;;
 esac
 ''')
-            env={k:v for k,v in os.environ.items() if not k.startswith(('FEEDBACK_','EDIT_'))}
+            env={k:v for k,v in os.environ.items() if not k.startswith(('FEEDBACK_','EDIT_'))
+                 and k not in ('VGGAE_CPU_ONLY','TORCH_DEVICE_BACKEND_AUTOLOAD')}
             env.update(FEEDBACK_STAGE=stage,FEEDBACK_NAMESPACE='fixture',FAIL_PHASE=fail,
                 REAL_PYTHON=Path(sys.executable).as_posix(),SCENE_HELPER_STOP_TIMEOUT='1',MASTER_PORT='30700')
             if extra:env.update(extra)
@@ -153,6 +155,9 @@ esac
         result,calls,ports,cfg,args,_=self.run_fixture()
         self.assertEqual(result.returncode,0,result.stdout+result.stderr)
         self.assertIn('summary diagnostics: fault=1 unbuffered=1',result.stdout)
+        self.assertIn('phase environment: summarize cpu=1 autoload=0',result.stdout)
+        self.assertIn('phase environment: render cpu=unset autoload=unset',result.stdout)
+        self.assertIn('phase environment: prepare cpu=unset autoload=unset',result.stdout)
         phases=[c for c in calls if c not in ('publish','guard-start','guard-stop')]
         self.assertEqual(phases,['asset','asset','prepare','render:native','render:rgb_base',
                                 'render:rae_base','render:rgb_joint','render:rae_joint','summarize'])

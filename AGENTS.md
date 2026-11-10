@@ -3,6 +3,19 @@
 Read this file first. It defines the active project context, current goals,
 rules, and safe next steps for future agents.
 
+## Stage68 smoke completed artifacts, abnormal summary exit (2026-11-10)
+
+Read docs/EDIT_STATE_CONTEXT_SMOKE_REVIEW_20261110.md. Download confirms actual
+Stage68 seven arms x3cases, all preparation/render phases exit0. Summary/media
+sync complete; all12 comparisonMP4 hash and17f8fps decode pass. Only final
+summary child exits1 after report publication, near a platform core event;
+native stack/raw signal absent, exact library/root cause NOT established.
+CPU summary unnecessarily loaded Ascend runtime. Stage30 now alone opts into
+VGGAE_CPU_ONLY=1/TORCH_DEVICE_BACKEND_AUTOLOAD=0, retaining failure propagation
+and crash diagnostics; render/idle guard unchanged, generation hashes preserved.
+Local34tests pass. Restore smoke summary then Stage68 all; no need to rerender
+the smoke. Sync path ran6/6events per family but no quality gain claim from6steps.
+
 ## Stage68: priority three-node context synchronization (2026-11-10)
 
 User now requests the highest-priority3node runnable script; other8nodes are

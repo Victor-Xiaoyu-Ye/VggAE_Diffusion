@@ -17,6 +17,8 @@ class ContextLauncherTests(unittest.TestCase):
     def test_full_priority_run_has_real_fixed_and_sync_controls(self):
         result, calls, ports, cfg, args, _ = self.run_fixture()
         self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
+        self.assertIn('phase environment: summarize cpu=1 autoload=0', result.stdout)
+        self.assertIn('phase environment: render cpu=unset autoload=unset', result.stdout)
         arms = ['native','rgb_base','rae_base','rae_joint','rae_sync','rgb_joint','rgb_sync']
         phases = [c for c in calls if c not in ('publish','guard-start','guard-stop')]
         self.assertEqual(phases, ['asset','asset','prepare', *['render:'+a for a in arms], 'summarize'])

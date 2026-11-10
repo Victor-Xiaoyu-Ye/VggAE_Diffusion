@@ -166,9 +166,12 @@ if [[ "${STAGE}" =~ ^(all|smoke|render)$ ]]; then
   done
 fi
 if [[ "${STAGE}" =~ ^(all|smoke|summarize)$ ]]; then
-  # Keep CPU media/serialization crashes diagnosable without changing the
-  # generation code signature (completed cases remain resumable).
-  PYTHONFAULTHANDLER=1 PYTHONUNBUFFERED=1 \
+  # Scope CPU-only imports to summary and its TCPStore coordinator. Sampling
+  # and the already-running idle guard keep their normal accelerator backend.
+  # Do not hide a nonzero exit just because summary.json was already written.
+  echo 'Stage66 summary: CPU only; accelerator backend autoload disabled.'
+  VGGAE_CPU_ONLY=1 TORCH_DEVICE_BACKEND_AUTOLOAD=0 \
+    PYTHONFAULTHANDLER=1 PYTHONUNBUFFERED=1 \
     coordinate 30 "${PYTHON_BIN}" "${ARGS[@]}" --phase summarize || FINAL_CODE=$?
 fi
 echo "Stage66 finished ${MIRROR}; exit=${FINAL_CODE}"

@@ -1,5 +1,25 @@
 # Project Context
 
+## Stage68 smoke artifacts complete; CPU summary isolation (2026-11-10)
+
+New local logs in edit_state_context_sync_v1_smoke confirm the actual seven-arm
+Stage68 recipe (3cases,17frames,6steps). Preparation/all seven arms exit0;
+21 case reports complete, summary completed/no failures, 48 media receipts
+reported synced. All12 downloaded comparisonMP4 match SHA/size and decode17f
+8fps. No render/ raw payloads downloaded and no fresh OBS verification.
+Final report dual publication16:07:23.244 precedes core event16:07:24 and
+summary coordinator exit1 at16:07:27.105. Failure is in final publication/exit
+tail; native stack and raw signal remain unavailable. Do not equate files with
+a successful exit or claim a proven NPU destructor bug. CPU summary did load
+Ascend runtime via automatic torch backend loading and utils.device's eager
+torch_npu import. Scope VGGAE_CPU_ONLY=1/TORCH_DEVICE_BACKEND_AUTOLOAD=0 to
+stage30 coordinator+summary; keep sampling and idle guard normal. Preserve
+failure propagation, raw signal diagnostics and generation hashes/resume.
+RGB/RAE sync6/6 context updates each, no fallback; quality gain not established
+by3case/6step smoke. Local34tests pass (3fresh-process backend,7tiny pipeline,
+24Bash); production CPU-summary recovery remains pending. See
+docs/EDIT_STATE_CONTEXT_SMOKE_REVIEW_20261110.md.
+
 ## Smoke summary failure diagnostics (2026-11-10)
 
 User reports stage66_30 node0 exit1, peers0 and a ModelArts core-file event in

@@ -1,15 +1,27 @@
 """Unified accelerator management for CUDA and Ascend NPU."""
 
+import os
+
+# CPU postprocessing must opt in before the first torch import. The launcher
+# also sets the upstream switch for modules that import torch before us.
+_CPU_ONLY = os.environ.get('VGGAE_CPU_ONLY') == '1'
+if _CPU_ONLY:
+    os.environ['TORCH_DEVICE_BACKEND_AUTOLOAD'] = '0'
+
 import torch
 
-try:
-    import torch_npu  # noqa: F401
-except ImportError:
-    torch_npu = None
+torch_npu = None
+if not _CPU_ONLY:
+    try:
+        import torch_npu  # noqa: F401
+    except ImportError:
+        pass
 
 
 def get_device_name():
     """Return the available accelerator backend."""
+    if _CPU_ONLY:
+        return 'cpu'
     if hasattr(torch, 'npu') and torch.npu.is_available():
         return 'npu'
     if torch.cuda.is_available():
@@ -27,6 +39,8 @@ def get_device(local_rank=0):
 
 def configure_backend_compatibility(device_type=None):
     """Apply backend-specific compatibility settings once per process."""
+    if _CPU_ONLY:
+        return
     device_type = device_type or get_device_name()
     if device_type != 'npu':
         return
@@ -70,6 +84,8 @@ def create_grad_scaler(enabled=True):
 
 def is_available():
     """Check if any accelerator is available."""
+    if _CPU_ONLY:
+        return False
     return torch.cuda.is_available() or (
         hasattr(torch, 'npu') and torch.npu.is_available()
     )

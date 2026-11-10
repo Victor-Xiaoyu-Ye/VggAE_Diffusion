@@ -107,6 +107,7 @@ case "$1" in
     *) shift ;;
    esac
   done
+  echo "phase environment: ${phase} cpu=${VGGAE_CPU_ONLY:-unset} autoload=${TORCH_DEVICE_BACKEND_AUTOLOAD:-unset}"
   echo "${phase}${arm:+:${arm}}" >> "${PROJECT}/calls"
   [[ -z "${STUB_FAIL_ARM:-}" || "${arm}" != "${STUB_FAIL_ARM}" ]] || exit 17
   sleep .05 ;;
@@ -114,7 +115,8 @@ case "$1" in
 esac
 ''')
             env = {k:v for k,v in os.environ.items() if not k.startswith(('FEEDBACK_','EDIT_'))
-                and k not in ('MASTER_PORT','DEFAULT_FEEDBACK_CONFIG','DEFAULT_FEEDBACK_ARMS','STUB_FAIL_ARM')}
+                and k not in ('MASTER_PORT','DEFAULT_FEEDBACK_CONFIG','DEFAULT_FEEDBACK_ARMS','STUB_FAIL_ARM',
+                              'VGGAE_CPU_ONLY','TORCH_DEVICE_BACKEND_AUTOLOAD')}
             env.update(FEEDBACK_STAGE=stage, REAL_PYTHON=Path(sys.executable).as_posix(),
                 SCENE_HELPER_STOP_TIMEOUT='1')
             if extra:
@@ -162,6 +164,8 @@ esac
     def test_default_full_delegation_config_ports_and_lifecycle(self):
         result,calls,ports,cfg,args,_=self.run_fixture()
         self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        self.assertIn('phase environment: summarize cpu=1 autoload=0',result.stdout)
+        self.assertIn('phase environment: render cpu=unset autoload=unset',result.stdout)
         phases=[c for c in calls if c not in ('publish','guard-start','guard-stop')]
         self.assertEqual(phases,['asset','asset','prepare','render:native','render:rgb_base',
             'render:rae_base','render:rgb_joint','render:rae_joint','summarize'])
