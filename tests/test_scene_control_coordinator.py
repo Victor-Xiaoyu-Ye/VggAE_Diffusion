@@ -93,6 +93,40 @@ class SceneControlCoordinatorTests(unittest.TestCase):
                                  status_file='fixture.json'),0)
         self.assertTrue(store.check(['ack0']))
 
+    def test_signal_exit_preserves_raw_cause_and_child_phase(self):
+        # A POSIX subprocess killed by SIGSEGV reports -11, not exit status 1.
+        # Simulate that Popen result on all test hosts without crashing Python.
+        store = SharedStore()
+        child = Mock(pid=4321); child.poll.return_value = -11
+        text = io.StringIO()
+        with tempfile.TemporaryDirectory() as temp:
+            status = Path(temp)/'status.json'
+            with patch('scripts.coordinated_scene_controls.subprocess.Popen',
+                       return_value=child), redirect_stdout(text):
+                code = run(['python', 'refine_vace_edit_state.py', '--phase', 'summarize'],
+                           store, 0, 1, 1, .02, .2, phase='stage66_30', status_file=status)
+            value = json.loads(status.read_text())
+        self.assertEqual(code, 1)
+        self.assertEqual(value['child_returncode'], -11)
+        self.assertEqual(value['child_signal'], 'SIGSEGV')
+        self.assertEqual(value['child_pid'], 4321)
+        self.assertEqual(value['job']['phase'], 'summarize')
+        self.assertEqual(value['termination_reason'], 'signal')
+        self.assertTrue(value['all_results_observed'])
+        self.assertIn('child_returncode=-11 child_signal=SIGSEGV', text.getvalue())
+
+    def test_regular_exit_does_not_masquerade_as_signal(self):
+        store = SharedStore()
+        with tempfile.TemporaryDirectory() as temp:
+            status = Path(temp)/'status.json'
+            self.assertEqual(run([sys.executable, '-c', 'raise SystemExit(7)'],
+                                 store, 0, 1, 3, .02, .2, status_file=status), 7)
+            value = json.loads(status.read_text())
+        self.assertEqual(value['child_returncode'], 7)
+        self.assertIsNone(value['child_signal'])
+        self.assertEqual(value['termination_reason'], 'exited')
+        self.assertEqual(store.get('result0'), b'7')
+
 
 if __name__ == '__main__':
     unittest.main()

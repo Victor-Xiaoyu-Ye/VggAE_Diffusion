@@ -1,5 +1,20 @@
 # Project Context
 
+## Smoke summary failure diagnostics (2026-11-10)
+
+User reports stage66_30 node0 exit1, peers0 and a ModelArts core-file event in
+edit_state_context_sync_v1_smoke while quoting the Stage67 command. This is
+summary/media reconciliation, not sampling; only node0 summarizes. Nonzero
+smoke correctly prevents the chained all command. Namespace differs from67's
+default; recorded effective_config/manifest, not name alone, determine recipe.
+The tail does not identify the crashing process or root cause. Coordinator now
+retains child PID/raw returncode/signal/termination reason and --phase in job
+metadata while preserving collective failure semantics. Summary enables Python
+faulthandler/unbuffered output. This is diagnostics, not a verified crash fix;
+need earlier node0 logs or a summary-only recovery. No generation code/hash,
+checkpoint, solver, metric or experiment changes. Existing outputs can resume.
+See docs/EDIT_STATE_BACKTRACKING_RUNBOOK.md for exact recovery and evidence.
+
 ## Priority3node delivery: Stage68 (2026-11-10)
 
 Latest user request narrows execution to a ready priority3node script and a

@@ -162,6 +162,10 @@ def run(command, store, rank, nodes, timeout, heartbeat=30, stop_grace=10,
         phase='preparation', status_file=None, joined_nodes=None, run_id=''):
     started = time.monotonic()
     child = None
+    child_pid = None
+    child_returncode = None
+    child_signal = None
+    termination_reason = None
     local_code = None
     phase_code = None
     reported = False
@@ -173,13 +177,15 @@ def run(command, store, rank, nodes, timeout, heartbeat=30, stop_grace=10,
     results = {}
     job=dict(program=Path(str(command[0])).name if command else None,
              entry=next((Path(str(arg)).name for arg in command if str(arg).endswith(('.py','.sh'))),None))
-    for flag in ('--stage','--arm','--stop-after'):
+    for flag in ('--stage','--phase','--arm','--stop-after'):
         if flag in command and command.index(flag)+1<len(command):
             job[flag[2:]]=str(command[command.index(flag)+1])
 
     def status(state):
         value=dict(phase=phase,run_id=run_id,joined_nodes=joined_nodes,
             job=job,node=rank,state=state,local_exit=local_code,
+            child_pid=child_pid,child_returncode=child_returncode,
+            child_signal=child_signal,termination_reason=termination_reason,
             phase_exit=phase_code,all_results_observed=confirmed,results=results,
             local_error=local_error,coordinator_error=coordinator_error,
             hostname=socket.gethostname(),pid=os.getpid(),
@@ -187,15 +193,38 @@ def run(command, store, rank, nodes, timeout, heartbeat=30, stop_grace=10,
             elapsed_seconds=time.monotonic()-started,time=time.time())
         write_status(status_file, value)
 
+    def record_child_exit(code):
+        nonlocal child_returncode, child_signal, termination_reason
+        if code is None or child_returncode is not None:
+            return
+        child_returncode = code
+        # Popen uses negative signal numbers on POSIX. Keep large Windows
+        # exception/status codes verbatim, without mislabeling them as signals.
+        if -128 < code < 0:
+            try:
+                child_signal = signal.Signals(-code).name
+            except ValueError:
+                child_signal = f'SIGNAL_{-code}'
+        if termination_reason is None:
+            termination_reason = 'signal' if child_signal else 'exited'
+        if code:
+            print(f'[control preparation coordinator] node{rank} phase={phase} '
+                  f'child_pid={child_pid} child_returncode={code} '
+                  f'child_signal={child_signal} reason={termination_reason} '
+                  f'job={job}', flush=True)
+
     try:
         status('starting')
         try:
             child = subprocess.Popen(command, start_new_session=os.name == 'posix')
+            pid = getattr(child, 'pid', None)
+            child_pid = pid if isinstance(pid, int) else None
         except Exception:
             # In particular, the node0 TCPStore owner must NOT unwind here.
             # Publish the launch failure through the normal result/ack protocol
             # so every live peer can read it before the server is destroyed.
             local_code = 1
+            termination_reason = 'launch_failure'
             local_error = traceback.format_exc()
             print(f'[control preparation coordinator] node{rank} phase={phase} child launch failed:\n{local_error}',flush=True)
         while True:
@@ -203,10 +232,12 @@ def run(command, store, rank, nodes, timeout, heartbeat=30, stop_grace=10,
             if local_code is None:
                 child_code = child.poll()
                 if child_code is not None:
+                    record_child_exit(child_code)
                     local_code = child_code if 0 <= child_code <= 255 else 1
                 elif now-started > timeout:
                     print('[control preparation coordinator] command timed out', flush=True)
                     local_code = 124
+                    termination_reason = 'timeout'
                     stop_child(child, stop_grace)
             if local_code is not None and not reported:
                 store.set(keys[rank], str(local_code))
@@ -220,6 +251,7 @@ def run(command, store, rank, nodes, timeout, heartbeat=30, stop_grace=10,
             failed = next((results[i] for i in sorted(results) if results[i]), None)
             if failed is not None and local_code is None:
                 print('[control preparation coordinator] peer failed; stopping local workers', flush=True)
+                termination_reason = 'peer_failure'
                 stop_child(child, stop_grace)
                 local_code = failed
                 store.set(keys[rank], str(local_code))
@@ -256,7 +288,11 @@ def run(command, store, rank, nodes, timeout, heartbeat=30, stop_grace=10,
         raise
     finally:
         try:
+            if child is not None and child.poll() is None and termination_reason is None:
+                termination_reason = 'coordinator_cleanup'
             stop_child(child, stop_grace)
+            if child is not None:
+                record_child_exit(child.poll())
         except BaseException:
             phase_code = phase_code if phase_code else 1
             coordinator_error = coordinator_error or traceback.format_exc()
@@ -264,8 +300,9 @@ def run(command, store, rank, nodes, timeout, heartbeat=30, stop_grace=10,
         finally:
             if phase_code is None: phase_code=1
             status('completed' if phase_code==0 else 'failed')
-            print('[control preparation coordinator] node%d phase=%s exit=%s local_exit=%s all_results_observed=%s results=%s' %
-                  (rank,phase,phase_code,local_code,confirmed,results),flush=True)
+            print('[control preparation coordinator] node%d phase=%s exit=%s local_exit=%s all_results_observed=%s results=%s child_pid=%s child_returncode=%s child_signal=%s' %
+                  (rank,phase,phase_code,local_code,confirmed,results,
+                   child_pid,child_returncode,child_signal),flush=True)
 
 
 def main():

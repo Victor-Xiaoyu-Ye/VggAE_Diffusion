@@ -166,7 +166,10 @@ if [[ "${STAGE}" =~ ^(all|smoke|render)$ ]]; then
   done
 fi
 if [[ "${STAGE}" =~ ^(all|smoke|summarize)$ ]]; then
-  coordinate 30 "${PYTHON_BIN}" "${ARGS[@]}" --phase summarize || FINAL_CODE=$?
+  # Keep CPU media/serialization crashes diagnosable without changing the
+  # generation code signature (completed cases remain resumable).
+  PYTHONFAULTHANDLER=1 PYTHONUNBUFFERED=1 \
+    coordinate 30 "${PYTHON_BIN}" "${ARGS[@]}" --phase summarize || FINAL_CODE=$?
 fi
 echo "Stage66 finished ${MIRROR}; exit=${FINAL_CODE}"
 exit "${FINAL_CODE}"

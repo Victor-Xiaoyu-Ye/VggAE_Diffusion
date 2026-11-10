@@ -104,6 +104,9 @@ case "$1" in
    esac
   done
   call="${phase}${arm:+:${arm}}"
+  if [[ "$phase" == summarize ]];then
+   echo "summary diagnostics: fault=${PYTHONFAULTHANDLER:-} unbuffered=${PYTHONUNBUFFERED:-}"
+  fi
   echo "$call" >> "${PROJECT}/calls"
   sleep .05
   [[ "${FAIL_PHASE}" != "$call" ]] || exit 7 ;;
@@ -149,6 +152,7 @@ esac
     def test_full_pipeline_dual_roots_and_readonly_sources(self):
         result,calls,ports,cfg,args,_=self.run_fixture()
         self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        self.assertIn('summary diagnostics: fault=1 unbuffered=1',result.stdout)
         phases=[c for c in calls if c not in ('publish','guard-start','guard-stop')]
         self.assertEqual(phases,['asset','asset','prepare','render:native','render:rgb_base',
                                 'render:rae_base','render:rgb_joint','render:rae_joint','summarize'])

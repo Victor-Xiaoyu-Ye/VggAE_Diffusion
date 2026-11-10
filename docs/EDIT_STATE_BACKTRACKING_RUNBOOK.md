@@ -57,6 +57,42 @@ wrapper 的默认配置通过 `DEFAULT_FEEDBACK_CONFIG` 传给66，不设置用�
 
 ## 结果与保留策略
 
+### smoke 在 `stage66_30` 结束并返回 1（2026-11-10）
+
+`stage66_30` 是汇总、对比视频制作与媒体副本核对阶段；只有 node0
+执行汇总，另两节点的 0 不能证明各生成臂成功。`smoke && all` 中 smoke
+非零会阻止 all，不能把 `&&` 改为 `;` 当作修复。Stage67/68 都委托66，
+所以阶段名中的66正常。目录 `edit_state_context_sync_v1_smoke` 是68的
+默认目录，与67默认不同；应查看 `launcher/node0/effective_config.json`
+和 `manifest.json` 中的配置，不能仅按目录名判断实际实验。
+
+ModelArts 的 CoreDumpUpload 记录只说明发生了 core 文件事件，尚不能把
+它归因于汇总子进程、OOM、NPU idle guard 或权重加载。旧协调器会将负数
+信号退出码归一化为1；新版额外保存 `child_pid`、`child_returncode`、
+`child_signal`、`termination_reason` 和 `job.phase`，协议退出码保持原样。
+汇总子进程开启 Python faulthandler 和无缓冲输出；这是诊断补强，不是
+本次崩溃根因已修复的声明。Python 捕获到的缺失产物仍在 `summary.json`
+与 `media_sync.json` 中报告，原生崩溃需看 `pipeline.log` 的堆栈。
+
+只恢复用户这次已观察到的目录，三节点均执行下面命令；默认入口66从保存的
+manifest 恢复有效配置，不需要判断当时用了67还是68：
+
+```bash
+env -u FEEDBACK_CONFIG FEEDBACK_NAMESPACE=edit_state_context_sync_v1_smoke \
+  FEEDBACK_STAGE=summarize MASTER_PORT=30900 \
+  bash scripts/scale/66_refine_vace_edit_state.sh
+```
+
+这不会重新采样或加载14B权重；它会读取已有结果张量、补齐媒体副本、重做
+缺失的对比视频。若生成臂本身缺失，汇总仍应报告失败，按实际失败臂恢复
+render 后再次汇总。保留此前日志；同目录恢复会追加 pipeline 日志并更新
+阶段状态。诊断补丁不改生成代码签名，不要求新命名空间。
+
+本次诊断补丁覆盖12项协调器测试与24项66/67/68启动、恢复测试，所有测试
+均已有通过记录。首次批测有一项 Windows/Bash 的 `guard-stop` 标记缺失，
+未改代码的单项复测通过；该现象不作为本次集群崩溃的解释。三个Python
+文件编译、66 Bash语法和diff检查通过。未在910B上复现原始失败。
+
 双读双写、NPU idle guard、失败案例记录、逐阶段继续、DI throughput、中间状态和反馈视频保存全部继承66。准备或某臂失败后仍执行独立臂和汇总，最终用非零退出标记实际失败，不新增画质门槛阻止后续阶段。
 
 优先检查所有24例五臂最终视频、无损NPZ和反馈中间视频，而后比较旧66与新67的候选接受比例、最终输出和耗时。保持指标与编辑幅度仅作诊断，需要同时核对目标对象是否正确、编辑是否完成、结构及运动是否保持。仍属内部开发案例，不直接作为独立benchmark或SOTA证据。
