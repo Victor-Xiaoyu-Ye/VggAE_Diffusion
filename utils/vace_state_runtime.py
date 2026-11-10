@@ -60,6 +60,40 @@ def pack_edit_context(vae, source, reference, mask, anchor):
     return torch.cat((first.to(context),context),dim=1)
 
 
+@torch.no_grad()
+def refresh_reactive_context(vae, condition, reference, mask):
+    """Replace only the video reactive encoding from the live edited reference.
+
+    Preserve the independent anchor prefix, inactive source encoding and mask
+    channels bit-for-bit. This is the same masked RGB encoding as
+    pack_edit_context, not an unmasked clean-latent substitution. Return a
+    candidate: the caller commits it together with the state/velocity update.
+    """
+    if reference.ndim != 4 or reference.shape[0] != 3:
+        raise ValueError('Live reference must be [3,T,H,W]')
+    _, frames, height, width = reference.shape
+    if frames < 1 or (frames-1) % 4 or height % 16 or width % 16:
+        raise ValueError('Live reference requires native 4n+1 times and pad16')
+    _rgb(reference, reference.shape, 'live reference')
+    expected = (96, 1+(frames-1)//4+1, height//8, width//8)
+    if tuple(condition.shape) != expected or not bool(torch.isfinite(condition).all()):
+        raise ValueError('Live context has an incompatible native/prefix lattice')
+    if (mask.shape != (1, frames, height, width) or
+            not bool(torch.isfinite(mask).all()) or bool(((mask < 0) | (mask > 1)).any())):
+        raise ValueError('Live context needs finite source support in [0,1]')
+    if condition.device != reference.device or mask.device != reference.device:
+        raise ValueError('Live context, reference and mask must share a device')
+    encoded = vae.encode([reference*(mask > .5).to(reference)])
+    if len(encoded) != 1 or encoded[0].shape != condition[16:32, 1:].shape:
+        raise ValueError('Reactive encoding changed the native video lattice')
+    reactive = encoded[0].to(condition)
+    if not bool(torch.isfinite(reactive).all()):
+        raise FloatingPointError('Nonfinite reactive context in storage dtype')
+    result = condition.clone()
+    result[16:32, 1:].copy_(reactive)
+    return result
+
+
 def prepend_reference_clean(video_clean,condition,reference_count=1):
     """Build the training clean latent; future video target stays supervision.
 
@@ -144,7 +178,8 @@ def sample_state_native(model,condition,text,negative,state,cfg,seed,use_state=T
     Conditioning retains the legal reference prefix. Return all latent slots;
     call decode_native(...,reference_count=1) to decode only video slots.
     An optional source-only feedback callback may correct velocity and update
-    the mutable state for the next pair of CFG forwards. No target is consumed.
+    the mutable state/context for the next pair of CFG forwards. A context
+    bound to the callback is a per-call copy. No target is consumed.
     """
     prefix,_=native_modules()
     cls=importlib.import_module(prefix+'.utils.fm_solvers_unipc').FlowUniPCMultistepScheduler
@@ -153,6 +188,11 @@ def sample_state_native(model,condition,text,negative,state,cfg,seed,use_state=T
     x=torch.randn((16,*condition.shape[1:]),device=device,generator=generator,dtype=torch.float32)
     scheduler=cls(num_train_timesteps=1000,shift=1,use_dynamic_shifting=False)
     scheduler.set_timesteps(cfg['sample_steps'],device=device,shift=cfg['shift'])
+    if velocity_callback is not None and hasattr(velocity_callback,'bind_condition'):
+        # Own the mutable context for this one sampling trajectory; never
+        # corrupt a cached caller tensor or a later same-seed comparison.
+        condition=condition.clone()
+        velocity_callback.bind_condition(condition)
     if velocity_callback is not None and hasattr(velocity_callback,'set_schedule'):
         velocity_callback.set_schedule(scheduler.sigmas[:len(scheduler.timesteps)])
     training=model.training
@@ -173,7 +213,7 @@ def sample_state_native(model,condition,text,negative,state,cfg,seed,use_state=T
                 velocity=corrected
                 if (hasattr(velocity_callback,'consume_history_reset') and
                         velocity_callback.consume_history_reset()):
-                    # The bridge condition changed. Start a first-order step
+                    # The bridge/native condition changed. Start a first-order step
                     # without reusing outputs under the previous condition;
                     # preserve the actual current timestep and sigma schedule.
                     scheduler.model_outputs=[None]*scheduler.config.solver_order

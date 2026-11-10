@@ -30,6 +30,18 @@ from edit_reference_video import (crop_video, crop_float, output_metrics,
     publish_case, recovered_case, tensor_hash, failure)
 
 ARMS = ('native', 'rgb_base', 'rae_base', 'rgb_joint', 'rae_joint')
+ALL_ARMS = (*ARMS, 'rgb_sync', 'rae_sync')
+
+
+def experiment_arms(cfg):
+    arms = tuple(cfg.get('arms', ARMS))
+    if not arms or len(set(arms)) != len(arms) or any(arm not in ALL_ARMS for arm in arms):
+        raise ValueError('Need unique, supported feedback experiment arms')
+    return arms
+
+
+def has_feedback(arm):
+    return arm.endswith(('_joint', '_sync'))
 
 
 def write_panels(path, panels, labels, fps):
@@ -76,6 +88,7 @@ def manifest(a, cfg, out):
     Also callable from baseline render if teacher preparation failed. Missing
     selected weights fail their own arm without suppressing the native arm.
     """
+    experiment_arms(cfg)
     states, transport = input_stores(a)
     old = states.json('manifest.json', True)
     legacy = transport.json('manifest.json', True)
@@ -257,7 +270,9 @@ def render(a, cfg, out, device, rank, world):
     m = saved_manifest(a, cfg, out, rank, world)
     states, _ = input_stores(a)
     arm = a.arm; family = 'native' if arm == 'native' else arm.split('_')[0]
-    joint = arm.endswith('_joint')
+    if arm not in experiment_arms(cfg):
+        raise ValueError('Render arm is not declared in this experiment config')
+    joint = has_feedback(arm)
     sampler_cfg = sampling_config(m, cfg)
     checkpoint = 'native' if family == 'native' else m['selected'][family]
     model = vae = decoder = None; reports = []; started = time.monotonic()
@@ -332,6 +347,7 @@ def render(a, cfg, out, device, rank, world):
                             if event.get('applied') and feedback.last_reference is not None:
                                 snapshot = _cpu_snapshot(dict(reference=feedback.last_reference,
                                     state=feedback.state, projection=feedback.last_projection,
+                                    native_context=feedback.condition if feedback.update_native_context else None,
                                     event=event, generation_identity=generation))
                                 # Persist every completed correction before subsequent denoising.
                                 out.save(folder+f'/feedback/step_{step:03d}.pt', snapshot, m['identity'])
@@ -345,7 +361,12 @@ def render(a, cfg, out, device, rank, world):
                                 seal(out.local,receipt,m['identity'],[preview],dict(id=key,arm=arm,event=event))
                                 out.publish([preview,receipt])
                             progress(out, f'feedback_{family}_r{rank}', dict(event,id=key,arm=arm))
-                        feedback = StateFeedback(vae, projector, inputs, ref, features, cfg, family, observer=observer)
+                        # Both sync families use the SAME update rule; the
+                        # existing _joint arms retain their fixed RGB context.
+                        sync_context = arm.endswith('_sync')
+                        feedback_cfg = dict(cfg, update_native_context=sync_context,
+                            feedback=dict(cfg.get('feedback', {}), update_native_context=sync_context))
+                        feedback = StateFeedback(vae, projector, inputs, ref, features, feedback_cfg, family, observer=observer)
                     with torch.no_grad():
                         if family == 'native':
                             latent = sample_native(model, native['native_context'].to(device), state['text'].to(device),
@@ -403,6 +424,9 @@ def feedback_health(rows):
     return dict(requested_events=len(events),
         applied=sum(bool(e.get('applied')) for e in events),
         fallback=sum(bool(e.get('fallback')) for e in events),
+        context_requested_events=sum(bool(e.get('update_native_context')) for e in events),
+        context_updated_events=sum(bool(e.get('applied')) and bool(e.get('context_updated')) for e in events),
+        context_delta_rms_max=max((e.get('context_delta_rms', 0.) for e in events), default=0.),
         objective_observed_events=sum(s['solver_objective_observed'] for s in stats),
         solver_improved_events=sum(s['solver_objective_improved'] for s in stats),
         committed_improved_events=sum(improved(e) for e in events),
@@ -421,11 +445,12 @@ def feedback_health(rows):
 
 def summarize(a, cfg, out):
     m = manifest(a, cfg, out); failures = []; sync = []; means = {}; health = {}
+    arms = experiment_arms(cfg)
     page = ['<!doctype html><meta charset="utf-8"><title>Stage66 feedback comparison</title>',
         '<style>body{font:16px sans-serif;max-width:1600px;margin:25px auto}video{max-width:100%}pre{white-space:pre-wrap}</style>',
-        '<h1>Native / trained RGB / trained RAE / RGB feedback / RAE feedback</h1>',
+        '<h1>'+escape(' / '.join(arms))+'</h1>',
         '<p>Same source, legal anchor, original proposal and seed. Base and feedback arms share each representation\'s selected weights. Internal development set; no SOTA claim.</p>']
-    for arm in ARMS:
+    for arm in arms:
         report = out.json('phases/render_'+arm+'.json') or {}
         rows = report.get('cases',[])
         if (len(rows) != len(m['records']) or
@@ -435,7 +460,7 @@ def summarize(a, cfg, out):
         failures.extend(r for r in rows if r['status']!='completed')
         means[arm] = {k:sum(r[k] for r in completed)/len(completed) for k in
             ('source_change','edit_region_change','keep_change','output_frame_delta')} if completed else None
-        if arm.endswith('_joint'):
+        if has_feedback(arm):
             health[arm]=feedback_health(completed)
         for r in completed:
             try:
@@ -451,10 +476,10 @@ def summarize(a, cfg, out):
     for row in m['records']:
         key = row['id']; folder='comparisons/'+key
         try:
-            payloads = [out.load('render/'+arm+'/'+key+'/result.pt',m['identity'],True) for arm in ARMS]
+            payloads = [out.load('render/'+arm+'/'+key+'/result.pt',m['identity'],True) for arm in arms]
             if len({p['input_identity'] for p in payloads}) != 1:
                 raise ValueError('Unmatched comparison inputs')
-            for arm,payload in zip(ARMS,payloads):
+            for arm,payload in zip(arms,payloads):
                 checkpoint='native' if arm=='native' else m['selected'][arm.split('_')[0]]
                 if (payload['checkpoint'] != checkpoint or payload['generation_identity'] !=
                         digest([payload['input_identity'],arm,checkpoint])):
@@ -467,13 +492,21 @@ def summarize(a, cfg, out):
                 rect=payloads[0]['spatial']['valid_rect']
                 frames=[crop_video(p['generated'],rect) for p in payloads]
                 movie=folder+'/native_base_feedback.mp4'
-                write_panels(out.local/movie,frames,['NATIVE','RGB BASE','RAE BASE','RGB FEEDBACK','RAE FEEDBACK'],cfg['fps'])
+                write_panels(out.local/movie,frames,[arm.upper().replace('_',' ') for arm in arms],cfg['fps'])
                 # Also publish compact causal comparisons, not only a tiny five-column grid.
                 files=[movie]
-                for family,indices in [('rgb',(1,3,4)),('rae',(2,4,3))]:
-                    name=folder+'/'+family+'_base_feedback.mp4'
-                    write_video(out.local/name,*[frames[i] for i in indices],cfg['fps'],
-                        labels=[ARMS[i].upper() for i in indices]);files.append(name)
+                groups = cfg.get('comparison_groups', {
+                    'rgb_base_feedback': ['rgb_base','rgb_joint','rae_joint'],
+                    'rae_base_feedback': ['rae_base','rae_joint','rgb_joint']})
+                for label, members in groups.items():
+                    if not all(member in arms for member in members):
+                        continue
+                    if not label.replace('_','').isalnum():
+                        raise ValueError('Unsafe comparison group name')
+                    name=folder+'/'+label+'.mp4'
+                    write_panels(out.local/name,[frames[arms.index(member)] for member in members],
+                        [member.upper().replace('_',' ') for member in members],cfg['fps'])
+                    files.append(name)
                 record=seal(out.local,folder+'/receipt.json',m['identity'],files,dict(id=key,generations=generations))
             out.publish([*record['files'],folder+'/receipt.json'])
             roots=reconcile_case(out,folder+'/receipt.json',m['identity'])
@@ -483,9 +516,9 @@ def summarize(a, cfg, out):
         except Exception as exc:
             failures.append(dict(id=key,phase='comparison',error=repr(exc)))
     bad=[r for r in sync if not r['ok']]
-    summary=dict(status='completed' if not failures and not bad else 'incomplete',cases=len(m['records']),
+    summary=dict(status='completed' if not failures and not bad else 'incomplete',cases=len(m['records']), arms=list(arms),
         means=means,feedback_health=health,failures=failures,media_failures=bad,
-        protocol='Frozen Stage65 weights; current prediction -> joint source-correspondence projection -> state and velocity write',
+        protocol='Frozen Stage65 weights; projection -> state/velocity write; _sync also refreshes masked reactive RGB context, _joint keeps it fixed',
         limitations=['Internal dev; all failed cases retained. No SOTA or unique RAE benefit is assumed.',
             'Source flow is approximate correspondence, not semantic segmentation or certified 3D geometry.',
             'Intermediate solver states are saved; interrupted sampling restarts the case from the same seed, not from an invalid partial UniPC history.',
@@ -500,7 +533,7 @@ def summarize(a, cfg, out):
 def build_parser():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--phase',choices=('prepare','render','summarize'),required=True)
-    p.add_argument('--arm',choices=ARMS,default='native')
+    p.add_argument('--arm',choices=ALL_ARMS,default='native')
     for name in ('config','output','states','transport'):
         p.add_argument('--'+name,required=True)
     for name in ('rae','encoder','model'):

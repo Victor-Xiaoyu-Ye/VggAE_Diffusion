@@ -3,6 +3,44 @@
 Read this file first. It defines the active project context, current goals,
 rules, and safe next steps for future agents.
 
+## Stage68: priority three-node context synchronization (2026-11-10)
+
+User now requests the highest-priority3node runnable script; other8nodes are
+TODO, not implemented jobs. Read docs/EDIT_STATE_CONTEXT_SYNC_RUNBOOK.md and
+docs/SUBMISSION_TODO_20261110.md. FEEDBACK_STAGE=smoke then all via
+scripts/scale/68_refine_vace_edit_state_context.sh, namespace
+edit_state_context_sync_v1, port30900. Frozen productionStage65 selected
+RGB/RAE checkpoints, same24dev/17frames/30steps and Stage67 adaptive solver.
+NO new training or independent test claim. Seven arms include legacy fixed
+RGB context and new RGB/RAE_sync; RAE main contrasts run before RGBfeedback.
+Successful sync re-encodes only masked reactive video context channels16:32,
+preserving source-inactive/mask channels and anchor prefix exactly. A per-call
+context copy is read by both CFG branches on subsequent forwards; committed
+state/context/velocity changes reset UniPC history. Encoding/solver failures
+roll back state/context/solver; alpha0/no-edit are exact no-ops. Native context
+updates and tensors are logged/saved separately from solver improvements.
+Same outputs/dualIO/intermediate media/DI/idle guard lifecycle, no newweights.
+Local101unique relevant CPU/Bash tests pass;7Python compile,3Bash syntax pass.
+Small codecs/AE are explicit fixtures; production910B/HCCL/OBS/peakHBM/quality
+remain unverified. Stage68 closes an observed stale-condition path; whether
+it caused the weak final gain is still a hypothesis. Prioritize independent
+main table/matchedSFT/representation controls next; do not claim RAE superiority.
+
+## Submission experiment schedule (2026-11-10; planning only)
+
+User asks which submission experiments remain and how to schedule the newly
+available8nodes PLUS the original3 idle nodes, all starting together:11x8 NPUs
+for only a few days. Read docs/SUBMISSION_EXPERIMENT_SCHEDULE_20261110.md.
+Plan 48h core evidence, 72h strengthened package: group-disjoint main cohort,
+matched-reference SFT/RGB/RAE controls, decoder/correspondence/writeback
+ablations, independent quality/human/runtime evaluation. Use3+3+3+2 groups
+for RAE/RGB/matchedSFT/evaluation; existing Stage65/66/67 reject8/11-node launch and need
+explicit grouping or separate jobs. Only proposed effect improvement is
+consistent reference/native-context/state/velocity updates, matched in RGB.
+No implementation, training launch, new benchmark results or quality promise
+this planning turn. Old24 remains dev; native/reference/SFT confounds must be
+separated. VAE representation and external-method extensions follow core work.
+
 ## Stage67: adaptive backtracking for the same editing experiment (2026-11-07)
 
 User authorized the solver fix, matched RGB control, tests, push and launcher.

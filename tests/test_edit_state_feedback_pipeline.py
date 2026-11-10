@@ -186,6 +186,50 @@ class FeedbackPipelineTests(unittest.TestCase):
         self.assert_mirrors(out, ['render/native/dev-0/comparison.mp4',
             'render/native/dev-0/generated_frames.npz'])
 
+    def test_context_sync_seven_arms_actual_outputs_and_dual_recovery(self):
+        cfg, a, out, old = self.old_run('edit_state_context_sync_v1.json', sample_steps=5)
+        # A generic nested override must not silently disable a declared sync
+        # arm (or enable the matched fixed-context arm).
+        cfg['feedback'] = {'update_native_context': False}
+        runner.prepare(a, cfg, out, self.device, 0, 1)
+        m = out.json('manifest.json')
+        outputs = {}
+        for arm in runner.experiment_arms(cfg):
+            self.render(a, cfg, out, arm)
+            outputs[arm] = out.load('render/'+arm+'/dev-0/result.pt',m['identity'],True)
+        for family in ('rae','rgb'):
+            events = outputs[family+'_sync']['events']
+            self.assertTrue(events)
+            self.assertTrue(all(e['applied'] and not e['fallback'] for e in events),events)
+            self.assertTrue(any(e['context_updated'] for e in events),events)
+            self.assertTrue(all(e['context_prefix_preserved'] and e['context_inactive_preserved']
+                and e['context_mask_preserved'] for e in events),events)
+            self.assertFalse(any(e['context_updated'] for e in outputs[family+'_joint']['events']))
+            self.assertGreater(float((outputs[family+'_sync']['generated']-
+                outputs[family+'_joint']['generated']).abs().mean()),0.)
+            steps=list((out.local/'render'/str(family+'_sync')/'dev-0/feedback').glob('step_*.pt'))
+            self.assertTrue(steps)
+            value=out.load(steps[0].relative_to(out.local).as_posix(),m['identity'],True)
+            self.assertEqual(value['native_context'].shape[0],96)
+        runner.summarize(a,cfg,out)
+        summary=out.json('summary.json')
+        self.assertEqual(summary['status'],'completed')
+        self.assertEqual(summary['arms'],cfg['arms'])
+        for family in ('rae','rgb'):
+            self.assertGreater(summary['feedback_health'][family+'_sync']['context_updated_events'],0)
+            self.assertEqual(summary['feedback_health'][family+'_joint']['context_requested_events'],0)
+        names=['comparisons/dev-0/'+name+'.mp4' for name in cfg['comparison_groups']]
+        self.assert_mirrors(out,names)
+        movie='render/rae_sync/dev-0/comparison.mp4'
+        (out.local/movie).unlink()
+        (Path(out.roots[0])/movie).unlink()
+        (Path(out.roots[1])/names[0]).unlink()
+        with patch.object(runner,'load_backbone',side_effect=AssertionError('Resume must not resample')):
+            self.render(a,cfg,out,'rae_sync')
+            runner.summarize(a,cfg,out)
+        self.assert_mirrors(out,[movie,*names])
+        self.assertEqual(out.json('summary.json')['status'],'completed')
+
     def test_v2_adaptive_solver_reaches_real_sampling_and_reports_new_states(self):
         """A successful writeback alone must not stand in for solver progress."""
         cfg, a, out, old = self.old_run('edit_state_feedback_bt_v2.json', sample_steps=5)

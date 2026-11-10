@@ -17,15 +17,19 @@ BACKTRACK = dict(optimizer='adaptive_backtracking', backtrack_max_trials=8,
 
 @unittest.skipUnless(BASH, 'Bash required')
 class EditStateBacktrackingLauncherTests(unittest.TestCase):
-    def run_fixture(self, stage='all', extra=None, resume=None, remote=None, explicit=None):
+    def run_fixture(self, stage='all', extra=None, resume=None, remote=None, explicit=None,
+                    entry='67_refine_vace_edit_state_backtracking.sh',
+                    config_name='edit_state_feedback_bt_v2.json', namespace_default='edit_state_feedback_bt_v2'):
         with tempfile.TemporaryDirectory(prefix='edit backtracking shell ', dir=REPO.parent) as temp:
             root = Path(temp)
             for directory in ('scripts/scale','scripts/lib','configs','utils'):
                 (root/directory).mkdir(parents=True)
             for name in ('scripts/scale/66_refine_vace_edit_state.sh',
                     'scripts/scale/67_refine_vace_edit_state_backtracking.sh',
+                    'scripts/scale/68_refine_vace_edit_state_context.sh',
                     'scripts/stage_editing_teacher.sh','scripts/lib/job_cleanup.sh',
-                    'configs/edit_state_feedback_v1.json','configs/edit_state_feedback_bt_v2.json'):
+                    'configs/edit_state_feedback_v1.json','configs/edit_state_feedback_bt_v2.json',
+                    'configs/edit_state_context_sync_v1.json'):
                 shutil.copyfile(REPO/name, root/name)
             (root/'utils/__init__.py').write_text('')
             (root/'scripts/window_run_io.py').write_text('''
@@ -104,19 +108,20 @@ case "$1" in
    esac
   done
   echo "${phase}${arm:+:${arm}}" >> "${PROJECT}/calls"
+  [[ -z "${STUB_FAIL_ARM:-}" || "${arm}" != "${STUB_FAIL_ARM}" ]] || exit 17
   sleep .05 ;;
  *) echo "Unexpected command $*";exit 99 ;;
 esac
 ''')
             env = {k:v for k,v in os.environ.items() if not k.startswith(('FEEDBACK_','EDIT_'))
-                and k not in ('MASTER_PORT','DEFAULT_FEEDBACK_CONFIG')}
+                and k not in ('MASTER_PORT','DEFAULT_FEEDBACK_CONFIG','DEFAULT_FEEDBACK_ARMS','STUB_FAIL_ARM')}
             env.update(FEEDBACK_STAGE=stage, REAL_PYTHON=Path(sys.executable).as_posix(),
                 SCENE_HELPER_STOP_TIMEOUT='1')
             if extra:
                 env.update(extra)
-            namespace = env.get('FEEDBACK_NAMESPACE','edit_state_feedback_bt_v2')+('_smoke' if stage=='smoke' else '')
+            namespace = env.get('FEEDBACK_NAMESPACE',namespace_default)+('_smoke' if stage=='smoke' else '')
             config_path = root/'output'/namespace/'launcher/node0/effective_config.json'
-            main = json.loads((root/'configs/edit_state_feedback_bt_v2.json').read_text())
+            main = json.loads((root/'configs'/config_name).read_text())
             def config(kind):
                 value = json.loads(json.dumps(main))
                 if kind == 'smoke':
@@ -134,7 +139,7 @@ esac
                 path = root/'custom configuration with spaces.json'
                 path.write_text(json.dumps(config(explicit)),encoding='utf8')
                 env['FEEDBACK_CONFIG'] = path.as_posix()
-            command = [BASH,(root/'scripts/scale/67_refine_vace_edit_state_backtracking.sh').as_posix()]
+            command = [BASH,(root/'scripts/scale'/entry).as_posix()]
             result = subprocess.run(command,env=env,cwd=REPO.parent,capture_output=True,text=True,timeout=45)
             effective = json.loads(config_path.read_text()) if config_path.exists() else None
             second = None

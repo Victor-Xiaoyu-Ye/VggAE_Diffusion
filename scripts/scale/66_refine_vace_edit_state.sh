@@ -35,11 +35,11 @@ PRIMARY="${SCALE_REMOTE_ROOT}/${NAMESPACE}"
 MIRROR="${SCALE_MIRROR_ROOT}/${NAMESPACE}"
 MODEL="${EDIT_MODEL:-${VGGAE_REF_ROOT}/Wan2.1-VACE-14B}"
 export EDIT_RAE="${EDIT_RAE:-${LOCAL_CACHE_ROOT}/editing_teacher/scene_c256_best_joint.pt}"
-read -r -a RENDER_ARMS <<< "${FEEDBACK_ARMS:-native rgb_base rae_base rgb_joint rae_joint}"
+read -r -a RENDER_ARMS <<< "${FEEDBACK_ARMS:-${DEFAULT_FEEDBACK_ARMS:-native rgb_base rae_base rgb_joint rae_joint}}"
 [[ "${#RENDER_ARMS[@]}" -gt 0 ]] || exit 2
 declare -A SEEN_ARMS=()
 for arm in "${RENDER_ARMS[@]}"; do
-  [[ "${arm}" =~ ^(native|rgb_base|rae_base|rgb_joint|rae_joint)$ ]] || {
+  [[ "${arm}" =~ ^(native|rgb_base|rae_base|rgb_joint|rae_joint|rgb_sync|rae_sync)$ ]] || {
     echo "Invalid FEEDBACK_ARMS: ${arm}"; exit 2;
   }
   [[ -z "${SEEN_ARMS[${arm}]+present}" ]] || { echo "Duplicate FEEDBACK_ARMS: ${arm}"; exit 2; }
@@ -159,6 +159,8 @@ if [[ "${STAGE}" =~ ^(all|smoke|render)$ ]]; then
       rae_base) offset=22 ;;
       rgb_joint) offset=23 ;;
       rae_joint) offset=24 ;;
+      rgb_sync) offset=25 ;;
+      rae_sync) offset=26 ;;
     esac
     distributed_phase "${offset}" render --arm "${arm}" || FINAL_CODE=$?
   done

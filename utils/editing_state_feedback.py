@@ -16,6 +16,7 @@ from utils.editing_data import rae_canvas
 from utils.editing_video_transport import warp_flow
 from utils.vace_edit_runtime import decode_native
 from utils.vace_state_data import align_rae_state, build_rgb_state
+from utils.vace_state_runtime import refresh_reactive_context
 
 
 class SceneDecoderOnly(nn.Module):
@@ -170,7 +171,7 @@ def solver_evidence(diagnostics):
 
 
 class StateFeedback:
-    """Transactional callback: solver -> reference -> bridge + clean residual.
+    """Transactional solver -> reference -> bridge/context + clean residual.
 
     ``reference`` is the decoded Stage65 source/shared-proposal payload. Its
     target video is neither accessed nor accepted as an inference condition.
@@ -186,6 +187,8 @@ class StateFeedback:
         self.max_sigma = float(self.cfg.get('max_sigma', self.cfg.get('writeback_max_sigma', .75)))
         self.requested = tuple(float(v) for v in self.cfg.get('sigmas', self.cfg.get('writeback_sigmas', (.6, .35, .15))))
         self.update_bridge_state = bool(self.cfg.get('update_bridge_state', True))
+        self.update_native_context = bool(self.cfg.get('update_native_context', False))
+        self.condition = None
         self.reset_history = bool(self.cfg.get('reset_solver_history', True))
         if not 0 <= self.alpha <= 1 or self.max_rms <= 0 or not 0 < self.max_sigma < 1:
             raise ValueError('Invalid feedback alpha, clean RMS cap or maximum sigma')
@@ -194,6 +197,12 @@ class StateFeedback:
         self.events, self.selected_steps, self.applied = [], set(), set()
         self.last_reference, self.last_projection = None, None
         self._reset_requested = False
+
+    def bind_condition(self, condition):
+        """Bind the actual sampling context, shared by both CFG evaluations."""
+        if condition.ndim != 4 or condition.shape[0] != 96:
+            raise ValueError('Feedback needs the actual 96-channel native context')
+        self.condition = condition
 
     def set_schedule(self, sigmas):
         schedule = torch.as_tensor(sigmas).detach().float().cpu().flatten().tolist()
@@ -225,7 +234,9 @@ class StateFeedback:
         started = time.monotonic()
         event = dict(phase='state_feedback', arm=self.arm, step_index=int(step_index),
             sigma=float(sigma), alpha=self.alpha, applied=False, fallback=False,
-            state_delta_rms=0., clean_delta_rms=0., prefix_delta_rms=0.)
+            state_delta_rms=0., clean_delta_rms=0., prefix_delta_rms=0.,
+            update_native_context=self.update_native_context, context_updated=False,
+            context_delta_rms=0., reactive_context_delta_rms=0.)
         if self.alpha == 0:
             event['reason'] = 'alpha_zero_exact_noop'
             self._event(event, started)
@@ -327,6 +338,22 @@ class StateFeedback:
             corrected = velocity.float().clone()
             corrected[:, 1:] -= change/float(sigma)
             _finite(corrected, 'corrected sampling velocity')
+            new_context = None
+            if self.update_native_context:
+                if self.condition is None:
+                    raise ValueError('Native context update requested without sampling-context binding')
+                new_context = refresh_reactive_context(self.vae, self.condition,
+                    (updated['reference']*2-1).permute(1, 0, 2, 3).to(decoded),
+                    self.reference['masks'].permute(1, 0, 2, 3).to(decoded))
+                difference = new_context.float()-self.condition.float()
+                event.update(context_updated=bool(difference.abs().max() > 0),
+                    context_delta_rms=float(difference.square().mean().sqrt()),
+                    reactive_context_delta_rms=float(difference[16:32, 1:].square().mean().sqrt()),
+                    context_prefix_preserved=bool(torch.equal(new_context[:, :1], self.condition[:, :1])),
+                    context_inactive_preserved=bool(torch.equal(new_context[:16], self.condition[:16])),
+                    context_mask_preserved=bool(torch.equal(new_context[32:], self.condition[32:])),
+                    context_reference='same_live_corrected_RGB_readout',
+                    context_applies_from_step=int(step_index)+1)
             event.update(applied=True, clean_delta_rms=float(change.square().mean().sqrt()),
                 state_delta_rms=float((new_state.float()-self.state.float()).square().mean().sqrt()),
                 pixel_correction_l1=float(correction.abs().mean()),
@@ -334,13 +361,26 @@ class StateFeedback:
                 solver_history_reset=self.reset_history, update_bridge_state=self.update_bridge_state)
             # Commit only after every decode, projection, alignment, encoding
             # and finite check succeeded. Any earlier exception is a no-op.
-            self.state.copy_(new_state)
+            # Roll back both mutable inputs even if a device copy fails during
+            # commit. Expensive VAE/solver work has already succeeded above.
+            old_state = self.state.clone()
+            old_context = self.condition.clone() if new_context is not None else None
+            try:
+                self.state.copy_(new_state)
+                if new_context is not None:
+                    self.condition.copy_(new_context)
+            except Exception:
+                self.state.copy_(old_state)
+                if old_context is not None:
+                    self.condition.copy_(old_context)
+                raise
             self.last_reference, self.last_projection = updated, projected
             self._reset_requested = self.reset_history
         except Exception as exc:
             if snapshot is not None:
                 self.projector.load_state_dict(snapshot)
-            event.update(applied=False, fallback=True, solver_rolled_back=snapshot is not None,
+            event.update(applied=False, fallback=True, context_updated=False,
+                context_delta_rms=0., reactive_context_delta_rms=0., solver_rolled_back=snapshot is not None,
                 error=repr(exc), reason='feedback_failed_preserved_native')
             corrected = velocity
         self._event(event, started)

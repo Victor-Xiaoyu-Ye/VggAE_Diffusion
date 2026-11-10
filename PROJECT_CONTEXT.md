@@ -1,5 +1,41 @@
 # Project Context
 
+## Priority3node delivery: Stage68 (2026-11-10)
+
+Latest user request narrows execution to a ready priority3node script and a
+TODO list for the other8nodes. Stage68 is implemented in
+scripts/scale/68_refine_vace_edit_state_context.sh, using frozen Stage65
+selectedRGB/RAE weights and the Stage67 adaptive solver on24dev. No newtrain.
+Seven matched arms isolate fixed vs live native reactive context for both
+representations. Sync encodes corrected reference through the original mask,
+updates only reactivevideo channels16:32, preserves prefix/inactive/mask
+channels, and copies context per sampling call. Both CFG branches see updated
+context on subsequent steps; state/context/velocity transaction and solver
+rollback/history reset are tested. Saved events and tensors expose actual
+context changes; all intermediate/final media keep dual publication/repair.
+Local101unique CPU/Bash tests,7Pythoncompile/3Bashsyntax pass; production NPU
+runtime and finalquality pending. Entry, outputs, recovery and bounds in
+docs/EDIT_STATE_CONTEXT_SYNC_RUNBOOK.md. Other work explicitly pending in
+docs/SUBMISSION_TODO_20261110.md; this supersedes blindly starting6000-step
+training before checking the changed conditioning contract. No cluster run
+has been launched by the assistant and no manuscript result is promoted.
+
+## Submission evidence plan (2026-11-10; not launched)
+
+User has8new nodes plus original3idle nodes, wants simultaneous startup of all
+11nodes/88Ascend910B for only a few days, and requests an experiment
+schedule. See docs/SUBMISSION_EXPERIMENT_SCHEDULE_20261110.md:48h core/72h
+extension, initial3+3+3+2 allocation forRAE/RGB/matchedSFT/evaluation,
+128 independent source-video target,
+same-reference Native/SFT/RGB/RAE table, final-output decoder/graph/path
+ablations, independent quality and blind preference, costs and failure coverage.
+Old128reserved-test requires scene/near-duplicate/frontend-overlap audit;
+old24dev cannot become test. Preserve existing AE and fixed-window task.
+Plan one matched effect change: synchronize corrected reference into native
+RGB condition alongside bridge/velocity. Its value remains unverified.
+Existing3-node launchers cannot directly run8/11nodes. No runtime changes,
+cluster submission, new measured values or Overleaf manuscript changes here.
+
 ## Stage67: backtracking solver with unchanged RGB/RAE comparison (2026-11-07)
 
 User requested implementation, tests, push and a launcher. The new wrapper
