@@ -1,5 +1,23 @@
 # Project Context
 
+## Stage69 paired evidence is now in the manuscript (2026-11-11)
+
+Read docs/EDITING_PAPER_EVIDENCE_RESULTS_20261111.md. PRE-REPAIR run remains
+1266/1277outputs,123planned sources; mainall7arms common121,17-arm subset31,
+two-seed common31. RAE LPIPS.450219 vsRGB.456232(-1.318%,106/121wins),
+Native.478027(-5.817%),SFT.461369(-2.417%). Feedback interaction-.008044,
+120/121 largerRAEgains supports decoded-effect execution beyond conditioning.
+Velocity-only≈both; initial calibrated-state reuse≈full inLPIPS and halves
+matched31samplingtime94.4vs188.3s, excluding prep/loading. Initial4stepdecoder
+calibration remains in reuse; extraonlineupdates notnecessaryproved. Shuffle/
+unitconfidence improveLPIPS so onlinegeometrynecessity unsupported. Keepworse
+Native andnotstatisticallybetterRGB. Human/public/3D/VAE-DINOresultsabsent.
+Paper8pagebody nowincludesactualmain/controls/interaction/selectedfigures and
+RAEtrainingcredit.189means+denominators independentlyagree; all121overview
+sourcesreviewed,sharedreferencefailuresremain. Local265emptyfilesawaituser
+redownload,phaseJSONcomplete. No trainingruntimechange/newjob thisreview.
+Existing3node repair stillneededfor11missingoutputs; neverclaimrepairran.
+
 ## Stage69 first run: two sources fail strict edge-confidence bounds (2026-11-11)
 
 User supplies D:/中转站/summary.json and media_sync.json. Actual cohort123,

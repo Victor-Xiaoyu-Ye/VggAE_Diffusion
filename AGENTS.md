@@ -1,5 +1,22 @@
 # Agent Handoff
 
+## Stage69 paired results and manuscript update (2026-11-11)
+
+Read docs/EDITING_PAPER_EVIDENCE_RESULTS_20261111.md. Local full export remains
+PRE-REPAIR1266/1277,123planned; compare common121 main/31ablations/31two-seed,
+not unequal-N original rows. RAEfull LPIPS.450219 vsRGB.456232(-1.318%,106/121),
+Native.478027,SFT.461369. Representation-by-feedback interaction-.008044,
+120/121 larger RAE gains. Online velocity carries gain; bridge-only weak.
+Reinject RETAINS initial4-step decoder fit; LPIPS.438028≈full.438185 on31,
+sampling94.4vs188.3seconds excludes initialprep/loading. Do not claim extra
+online optimization necessary. Shuffledgraph/unitconfidence beatfullLPIPS;
+correct online geometry necessity and VGGT-specific advantage NOT established.
+Keep is worse thanNative, inconclusivevsRGB. Metrics target/flowproxies, nohuman.
+265empty localfiles persist; userredownloading. All121overview sources reviewed,
+subtleRGB/RAEdifferences; selectedactualbrush/fabricfigures. Paper main8pages
+updated withdata,plots,writeback/completecontrols; redundantdebughistory removed.
+189mean/count pairs independentlyagree. Runtimeunchanged, repairunverified.
+
 Read this file first. It defines the active project context, current goals,
 rules, and safe next steps for future agents.
 
