@@ -1,0 +1,32 @@
+{
+  "schema": "editing-paper-suite-v1",
+  "cases": 128,
+  "frames": 17,
+  "fps": 8,
+  "seed": 42,
+  "second_seed": 43,
+  "sample_steps": 30,
+  "lpips": true,
+  "main_arms": ["native", "native_reference", "sft", "rgb_base", "rae_base", "rgb_full", "rae_full"],
+  "ablation_arms": ["rae_reinject", "rae_no_temporal", "rae_no_graph", "rae_shuffle_graph", "rae_no_reliability", "rae_bridge_only", "rae_velocity_only", "rae_zero_edit", "rae_no_state", "native_reference_60"],
+  "second_seed_arms": ["native", "rgb_full", "rae_full"],
+  "anchor": {"anchor_support_threshold": 0.06, "support_dilation": 9},
+  "feedback": {
+    "writeback_sigmas": [0.6, 0.35, 0.15],
+    "writeback_alpha": 0.35,
+    "writeback_max_clean_rms": 0.25,
+    "writeback_max_sigma": 0.75,
+    "update_bridge_state": true,
+    "update_native_context": false,
+    "decoder_checkpoint": true,
+    "solver": {
+      "sweeps": 2, "steps": 2, "lr": 0.03, "trust": 0.25, "rgb_trust": 0.25,
+      "native_weight": 0.5, "observation_weight": 1.0, "anchor_weight": 8.0,
+      "joint_weight": 1.0, "keep_weight": 1.0, "latent_weight": 0.0001,
+      "reachable_mix": 0.65, "reach_min": 0.1, "protect_mix": 0.0, "hard_anchor": true,
+      "optimizer": "adaptive_backtracking", "backtrack_max_trials": 8,
+      "backtrack_shrink": 0.5, "step_grow": 1.5, "min_lr": 0.000001,
+      "max_lr": 0.03, "armijo": 0.0001
+    }
+  }
+}

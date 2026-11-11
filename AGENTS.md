@@ -3,6 +3,28 @@
 Read this file first. It defines the active project context, current goals,
 rules, and safe next steps for future agents.
 
+## Stage69 paper evidence on three nodes (2026-11-11)
+
+User fixes current results and budgets ONLY3nodes. Read
+docs/EDITING_PAPER_EVIDENCE_RUNBOOK.md; launch PAPER_STAGE=smoke then all with
+scripts/scale/69_complete_editing_paper.sh. One sequential3x8 job, namespace
+editing_paper_evidence_v1, port31000. Freeze Stage67 adaptive/fixed native context;
+Stage68 synchronization ran but added no stable quality gain (report retained).
+Only new training is LoRA-only reference SFT using exactStage65 examples,
+monitor/noise/dropout/maximum-update/stopping budgets. RGB/RAE selected weights
+and trainedSceneC256 codec reused. Source-only screening of reserved byte groups
+targets <=128, input-fixed subset<=32, main7arms/ablations10/extra seed3arms.
+Old24 remainsdev; parent-scene separation unverified. New cohort anchors use
+frozen nativeVACE for ALLarms; disclose difference from older dev frontend.
+Datasetfuturelabels read only after generation for independent diagnostics.
+Matchedseed/source bootstrap, failure coverage, CPU metrics/summary, blinded
+human packet and real-rating scorer, exactmedia dualread/write/reconcile,
+intermediate snapshots, successful-only DI and idle guard retained. Main and
+subset/multiseed tables separate; 60stepnative is NOT automatically equal cost.
+No external editor/VAE/DINO/token-only/independent3D results supplied. Paper
+protocol implemented, production evaluation NOT run; local tiny-codec/NPU limits
+and55unique relevant CPU/Bash tests are recorded in runbook. No quality promises.
+
 ## Stage68 smoke completed artifacts, abnormal summary exit (2026-11-10)
 
 Read docs/EDIT_STATE_CONTEXT_SMOKE_REVIEW_20261110.md. Download confirms actual

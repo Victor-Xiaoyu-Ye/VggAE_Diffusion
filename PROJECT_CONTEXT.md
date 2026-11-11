@@ -1,5 +1,28 @@
 # Project Context
 
+## Stage69: freeze method, complete evidence with 3 nodes (2026-11-11)
+
+Latest budget is3x8 only, superseding the earlier11-node schedule. Stage68
+context updates changed outputs but showed no stable gain; retain adaptive
+feedback with unchanged native reference condition. See
+docs/EDITING_PAPER_EVIDENCE_RUNBOOK.md and scripts/scale/69_complete_editing_paper.sh.
+One sequential job prepares source-only reserved candidates, trains ONLY a
+matched-reference no-state LoRA SFT, then generates7main and10subset control
+arms with existingStage65 RGB/RAE, independent diagnostics, paired source/seed
+statistics and blinded human packets. At most128source-byte groups, subset32,
+secondseed32 forNative/RGBfull/RAEfull; actual coverage explicit. Near-duplicate
+screening is not a parent-scene guarantee. Old24dev never relabeledtest. Frozen
+native anchor frontend shared across allnew arms, disclosed difference fromdev.
+Targets only enter post-generation evaluation; targetmask is not semanticGT,
+Farneback flow not3Dtruth. CPU-only evaluation/summary avoids Ascend teardown;
+separate encoder/VAE/14B stages preserve memory isolation. Stageckpts, state/media
+intermediates, dualread/write+readback, success-onlyDI andidle guard retained.
+Run smoke thenall. Partial inputs/sft/render/evaluate/summarize modes preserve
+frozen config; failedarms do not blockindependentarms butfinalstatus lists gaps.
+No new clusterresults yet. External/VAE/DINO/token-only/geometry/AEtrick causal
+controls remain pending; no claimed SOTA or RAE-exclusive benefit. Paper now
+records Stage68 negativefinding and concrete pending experiment protocol.
+
 ## Stage68 smoke artifacts complete; CPU summary isolation (2026-11-10)
 
 New local logs in edit_state_context_sync_v1_smoke confirm the actual seven-arm
