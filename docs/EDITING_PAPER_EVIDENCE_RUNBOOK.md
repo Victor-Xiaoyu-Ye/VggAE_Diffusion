@@ -2,7 +2,21 @@
 
 2026-11-11。当前预算 **3 节点 × 8 张 910B**，各阶段顺序运行。
 固定 Stage67 自适应回溯、native RGB 条件不额外同步的版本。Stage68 同步路径
-实际生效但未带来稳定质量增益，本轮不继续调它。尚未提交集群任务。
+实际生效但未带来稳定质量增益，本轮不继续调它。首轮已运行，恢复说明见下。
+
+## 首轮只补缺项（2026-11-11）
+
+本轮SFT完成1500更新、采样1266/1277、媒体核对3321项无失败。缺失11条均为两个源的
+边置信度越界；合法FP32双线性运算可产生1+1ULP，严格边界检查已修复。详见
+`docs/EDITING_PAPER_RECOVERY_20261111.md`。更新代码后，三节点相同命令：
+
+```bash
+PAPER_STAGE=repair bash scripts/scale/69_complete_editing_paper.sh
+```
+
+保留原namespace和成功结果；恢复缺失输入/权重，只补失败采样、评价及报告，不重训SFT。
+已完成采样直接复用phase记录，不加载14B重采样。仅此已审阅数值修复允许精确代码SHA
+兼容迁移；一般配置/算法变更仍须新namespace。本次无需再次执行smoke→all。
 
 ## 启动
 
@@ -73,7 +87,7 @@ PAPER_STAGE=summarize bash scripts/scale/69_complete_editing_paper.sh
 PAPER_NAMESPACE=editing_paper_evidence_v1_smoke PAPER_STAGE=summarize bash scripts/scale/69_complete_editing_paper.sh
 ```
 
-还支持 `PAPER_STAGE=inputs|sft|dry`。部分恢复从已有 manifest 读取 effective config。
+还支持 `PAPER_STAGE=inputs|sft|repair|dry`。部分恢复从已有 manifest 读取 effective config。
 脚本失败意味着缺产物/运行异常；不会用“低分”阻止其他训练或采样。
 
 ## 消融的精确定义

@@ -32,6 +32,7 @@ from utils.native_audit_io import seal
 
 
 REPO = Path(__file__).resolve().parent
+_RESUME_NOTICES = set()
 
 
 def code_signature():
@@ -54,9 +55,36 @@ def stores(a):
 
 def checked(a, cfg, out):
     m = out.json('manifest.json', True)
-    if m['config'] != cfg or m['code'] != code_signature():
+    current = code_signature()
+    if m['config'] != cfg:
         raise ValueError('Paper suite code/config changed; use a fresh PAPER_NAMESPACE')
+    if m['code'] != current:
+        # Explicit, exact-hash migration for the FP32 edge-boundary fix only.
+        # Preserve the original manifest/input/generation identities and samples.
+        # Unknown edits to either these files or any other dependency still fail.
+        migration = json.loads((REPO/'configs/editing_paper_resume_compat.json').read_text())
+        changed = {n for n in set(current) | set(m['code']) if current.get(n) != m['code'].get(n)}
+        allowed = set(migration['before'])
+        if (changed != allowed or any(m['code'].get(n) != migration['before'][n] or
+                current.get(n) != migration['after'][n] for n in allowed)):
+            raise ValueError('Paper suite code/config changed; use a fresh PAPER_NAMESPACE')
+        node = int(os.environ.get('NODE_RANK', os.environ.get('VC_TASK_INDEX', 0)))
+        rank = int(os.environ.get('RANK', 0))
+        key = (str(out.local), m['identity'], node, rank)
+        if key not in _RESUME_NOTICES:
+            out.write_json(f'recovery/compat_node{node}_rank{rank:03d}.json', dict(
+                identity=m['identity'], migration=migration, retained_original_manifest=True))
+            print('[paper recovery] '+migration['name']+'; retaining completed samples', flush=True)
+            _RESUME_NOTICES.add(key)
     return m
+
+
+def repair_inputs(a, cfg, out):
+    """Restore raw evaluation data on a fresh job; never reselect or retrain."""
+    checked(a, cfg, out)
+    if not cfg.get('skip_staging', False):
+        from prepare_vace_edit import stage_data
+        stage_data(a.source, a.data)
 
 
 def cohort(out):
@@ -407,9 +435,22 @@ def render(a,cfg,out,device,rank,world):
         checkpoint=arm_store(out,'sft').json('selected.pt.json',True)['sha256']
     else:checkpoint='native'
     model=vae=decoder=None; reports=[]; started=time.monotonic()
+    retained=[]
+    previous=(out.json('phases/render_'+a.arm+'.json') or {}).get('records',[]) if getattr(a,'missing_only',False) else []
+    complete={(r['id'],r['seed_base']):r for r in previous if r.get('status')=='completed'}
+    pending=[]
+    for row,seed_base in tasks[rank::world]:
+        prior=complete.get((row['id'],seed_base))
+        if prior is not None:
+            retained.append(prior)
+        else:
+            pending.append((row,seed_base))
+    if getattr(a,'missing_only',False):
+        print('[paper repair] '+json.dumps(dict(arm=a.arm,rank=rank,
+            retained=len(retained),pending=len(pending),new_training=False)),flush=True)
     settings=dict(m['base_config'],sample_steps=cfg['sample_steps'])
     if spec['sample_steps'] and not cfg.get('smoke'):settings['sample_steps']=spec['sample_steps']
-    for row,seed_base in tasks[rank::world]:
+    for row,seed_base in pending:
         key=row['id']; folder=f'render/{a.arm}/seed{seed_base}/{key}'
         feedback=projector=features=latent=prepared=None
         try:
@@ -490,12 +531,14 @@ def render(a,cfg,out,device,rank,world):
                 if device.type!='cpu':getattr(torch,device.type).synchronize()
                 if generated.shape!=ref['source'].shape or not bool(torch.isfinite(generated).all()):raise ValueError('Invalid generated video')
                 payload=dict(generated=generated,spatial=ref['spatial'],input_identity=input_id,generation_identity=generation,
+                    runtime_code=code_signature(),
                     checkpoint=checkpoint,seed=seed,seed_base=seed_base,events=events,
                     sampling_seconds=time.monotonic()-sample_started,setup_seconds=setup_seconds,
                     sample_steps=settings['sample_steps'],reference_count=1,
                     peak_allocated_gib=(getattr(torch,device.type).max_memory_allocated()/2**30 if device.type!='cpu' else None))
             rect=ref['spatial']['valid_rect']
             metrics=dict(id=key,group=row['group'],status='completed',arm=a.arm,seed_base=seed_base,seed=seed,
+                runtime_code=payload.get('runtime_code',m['code']),
                 input_identity=input_id,generation_identity=generation,checkpoint=checkpoint,
                 feedback_events=payload['events'],sampling_seconds=payload['sampling_seconds'],setup_seconds=payload['setup_seconds'],
                 peak_allocated_gib=payload['peak_allocated_gib'],sample_steps=payload['sample_steps'],
@@ -512,7 +555,8 @@ def render(a,cfg,out,device,rank,world):
             feedback=projector=features=latent=prepared=None
             release(device)
         tick(out,'render_'+a.arm,rank,reports,started,cfg['frames'],id=key,seed_base=seed_base)
-    save_phase(out,'render_'+a.arm,reports,len(tasks),rank,world)
+    # Reused entries are not counted as newly generated DI throughput.
+    save_phase(out,'render_'+a.arm,retained+reports,len(tasks),rank,world)
 
 
 def evaluate(a,cfg,out,device,rank,world):
@@ -554,8 +598,9 @@ def evaluate(a,cfg,out,device,rank,world):
 
 def build_parser():
     p=argparse.ArgumentParser(__doc__)
-    p.add_argument('--phase',required=True,choices=('index','screen','sources','select','text','anchors','prepare','cache','sft','weights','render','evaluate','summarize'))
+    p.add_argument('--phase',required=True,choices=('index','screen','sources','select','text','anchors','prepare','cache','sft','weights','render','evaluate','summarize','repair_inputs'))
     p.add_argument('--arm',default='native',choices=MAIN_ARMS+ABLATION_ARMS)
+    p.add_argument('--missing-only',action='store_true',help='Reuse completed phase rows; repair missing/failed renders only')
     for name in ('config','output'):p.add_argument('--'+name,required=True)
     for name in ('bank','states','transport','model','rae','encoder','data','source'):p.add_argument('--'+name,default='')
     for name in ('root','bank-root','state-root','transport-root'):p.add_argument('--'+name,action='append',default=[])
@@ -565,6 +610,7 @@ def build_parser():
 def main():
     a=build_parser().parse_args(); cfg=json.loads(Path(a.config).read_text(encoding='utf8'))
     out=ArtifactStore(a.output,a.root)
+    if a.phase=='repair_inputs':return repair_inputs(a,cfg,out)
     if a.phase=='index':return index(a,cfg,out)
     if a.phase=='weights':return weights(a,cfg,out)
     if a.phase=='select':

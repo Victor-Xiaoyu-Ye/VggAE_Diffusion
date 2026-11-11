@@ -10,7 +10,7 @@ export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 TOKENIZERS_PARALLELISM=false
 export MASTER_PORT="${MASTER_PORT:-31000}" HCCL_EXEC_TIMEOUT="${HCCL_EXEC_TIMEOUT:-7200}"
 configure_modelarts_distributed
 STAGE="${PAPER_STAGE:-all}"
-[[ "${STAGE}" =~ ^(all|smoke|inputs|sft|render|evaluate|summarize|dry)$ ]] || exit 2
+[[ "${STAGE}" =~ ^(all|smoke|inputs|sft|render|evaluate|summarize|repair|dry)$ ]] || exit 2
 [[ "${NNODES}" == 3 && "${NUM_NPUS}" == 8 && "${NODE_RANK}" =~ ^[0-2]$ ]] || {
   echo 'Stage69 requires three nodes x eight NPUs.'; exit 2;
 }
@@ -139,6 +139,12 @@ cpu_phase() {
   VGGAE_CPU_ONLY=1 TORCH_DEVICE_BACKEND_AUTOLOAD=0 PYTHONFAULTHANDLER=1 PYTHONUNBUFFERED=1 "$@"
 }
 FINAL_CODE=0
+if [[ "${STAGE}" == repair ]]; then
+  # A new ModelArts job may have an empty local cache. Restore only assets/data;
+  # all source selection, prepared states, SFT and completed samples stay frozen.
+  cpu_phase coordinate 1 "${PYTHON_BIN}" "${ARGS[@]}" --phase repair_inputs || FINAL_CODE=$?
+  coordinate 5 bash "${PROJECT}/scripts/stage_editing_teacher.sh" || FINAL_CODE=$?
+fi
 if [[ "${STAGE}" =~ ^(all|smoke|inputs)$ ]]; then
   cpu_phase coordinate 1 "${PYTHON_BIN}" "${ARGS[@]}" --phase index || FINAL_CODE=$?
   cpu_phase distributed_phase 2 screen || FINAL_CODE=$?
@@ -154,19 +160,21 @@ if [[ "${STAGE}" =~ ^(all|smoke|sft)$ ]]; then
   distributed_phase 10 sft || FINAL_CODE=$?
 fi
 # Independent cached arms continue after another arm fails. No quality gate.
-if [[ "${STAGE}" =~ ^(all|smoke|render)$ ]]; then
+if [[ "${STAGE}" =~ ^(all|smoke|render|repair)$ ]]; then
   cpu_phase coordinate 11 "${PYTHON_BIN}" "${ARGS[@]}" --phase weights || FINAL_CODE=$?
+  RENDER_EXTRA=()
+  [[ "${STAGE}" != repair ]] || RENDER_EXTRA=(--missing-only)
   offset=20
   for arm in "${ARMS[@]}"; do
-    distributed_phase "${offset}" render --arm "${arm}" || FINAL_CODE=$?
+    distributed_phase "${offset}" render --arm "${arm}" "${RENDER_EXTRA[@]}" || FINAL_CODE=$?
     offset=$((offset+1))
   done
 fi
-if [[ "${STAGE}" =~ ^(all|smoke|evaluate)$ ]]; then
+if [[ "${STAGE}" =~ ^(all|smoke|evaluate|repair)$ ]]; then
   # CPU/Gloo avoids reloading Ascend for small independent evaluation models.
   cpu_phase distributed_phase 60 evaluate || FINAL_CODE=$?
 fi
-if [[ "${STAGE}" =~ ^(all|smoke|evaluate|summarize)$ ]]; then
+if [[ "${STAGE}" =~ ^(all|smoke|evaluate|summarize|repair)$ ]]; then
   cpu_phase coordinate 61 "${PYTHON_BIN}" "${ARGS[@]}" --phase summarize || FINAL_CODE=$?
 fi
 echo "Stage69 finished ${MIRROR}; exit=${FINAL_CODE}"

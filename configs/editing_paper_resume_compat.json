@@ -1,0 +1,12 @@
+{
+  "name": "stage69-fp32-edge-confidence-roundoff-v1",
+  "reason": "Only bound FP32 edge-confidence roundoff within eight epsilons and add missing-case recovery. Valid edge weights, method settings, weights, cohort and existing output identities are unchanged.",
+  "before": {
+    "paper_editing_suite.py": "ccd8e541ca91e1da73dda67560dbe18f89aee1e7bc549985a9e2f69c10b5da94",
+    "utils/editing_joint_state.py": "8c54661d76db86291269d28279c801e581374172aa0b7faac02358b2a93d2569"
+  },
+  "after": {
+    "paper_editing_suite.py": "f7252e2718e770ef45e00c032de00330e2a4cafe19e7f17d0a2ac0f0830359d3",
+    "utils/editing_joint_state.py": "98d6e84524bf90d79e58e0b8051166ebc2bfd7374f16d109715e6fae99761b35"
+  }
+}

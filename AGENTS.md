@@ -3,6 +3,28 @@
 Read this file first. It defines the active project context, current goals,
 rules, and safe next steps for future agents.
 
+## Stage69 incomplete run: bounded confidence repair (2026-11-11)
+
+Read docs/EDITING_PAPER_RECOVERY_20261111.md. User supplied summary/media_sync
+at D:/中转站. SFT completed1500updates, converged=false;123sources,1266/1277
+renders,3321media checks with0failures. Eleven missing outputs on only2sources
+all raise Edge confidence must be in[0,1]; comparison/human gaps are downstream.
+Real FP32 bilinear propagation locally reproduces1.000000119 confidence.
+Joint solver now accepts/logs only<=8FP32eps roundoff, preserving valid values
+and cached inputs; nonfinite/materially invalid confidence still fails with range.
+Production failed-tensor min/max not yet read; patched production run pending.
+PAPER_STAGE=repair bash scripts/scale/69_complete_editing_paper.sh on3nodes
+uses SAME namespace, exact-hash reviewed code migration, original contract,
+restages required data/assets and renders ONLY missing/failed cases. No SFT,
+new anchors/cohort/state recache. Reused cases excluded from new-generationDI.
+Then evaluate/summarize/dual-media-reconcile and rebuild96humantrials (was93).
+60local tests pass incl actual tiny VACE, missing-seed recovery, unchanged
+successful payload, corrupt confidence rejection and unknown-code rejection;
+5Python compile/Bash syntax pass. No NPU/OBS completion or quality claim yet.
+Do not rerun smoke/all against the old namespace or append new research jobs
+before recovering and reviewing this evidence. Existing low scores remain valid
+observations; missing outcomes must not be dropped from coverage.
+
 ## Stage69 paper evidence on three nodes (2026-11-11)
 
 User fixes current results and budgets ONLY3nodes. Read

@@ -3,6 +3,7 @@ import copy
 import unittest
 from unittest.mock import patch
 
+import numpy as np
 import torch
 from torch import nn
 
@@ -41,6 +42,42 @@ class JointStateTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         torch.set_num_threads(2)
+
+    def test_real_bilinear_confidence_roundoff_is_bounded_without_mutating_cache(self):
+        # Actual propagation arithmetic, with a reproducible subpixel source
+        # correspondence. An all-ones pull can exceed one by one FP32 ULP.
+        size=32
+        source=torch.zeros(2,3,size,size);mask=torch.ones(2,1,size,size)
+        flow=np.empty((size,size,2),np.float32)
+        flow[:]=[.2761695384979248,.11719518899917603]
+        with patch('cv2.calcOpticalFlowFarneback',side_effect=[-flow.copy(),flow.copy()]*2):
+            graph=build_source_edges(source,dict(flow_backend='farneback',flow_max_side=size))
+        original=[e['confidence'].clone() for e in graph]
+        self.assertGreater(float(original[0].max()),1.)
+        common=dict(cfg=dict(iterations=2),proposal=source+.05)
+        p=JointEditProjector(None,None,source,source[0]+.05,mask,mask,edges=graph,**common)
+        corrected=[dict(e,confidence=e['confidence'].clamp(0,1)) for e in graph]
+        q=JointEditProjector(None,None,source,source[0]+.05,mask,mask,edges=corrected,**common)
+        for before,e in zip(original,graph):torch.testing.assert_close(before,e['confidence'],rtol=0,atol=0)
+        self.assertTrue(p.edge_confidence_roundoff)
+        self.assertFalse(q.edge_confidence_roundoff)
+        got,expected=p.project(source+.05),q.project(source+.05)
+        self.assertFalse(got['diagnostics']['fallback'])
+        self.assertTrue(got['diagnostics']['edge_confidence_roundoff'])
+        for key in ('reference','raw_effect','effect'):
+            torch.testing.assert_close(got[key],expected[key],rtol=0,atol=0)
+
+    def test_confidence_roundoff_does_not_hide_corrupt_or_nonfinite_inputs(self):
+        _,_,source,effect,mask,anchor=fixture()
+        for value in (1.001,-.001,float('inf'),float('nan')):
+            with self.subTest(value=value),self.assertRaisesRegex(ValueError,'[Ee]dge confidence'):
+                JointEditProjector(None,None,source,anchor,mask,mask,
+                    proposal=source+effect,edges=edges(3,6,6,confidence=value))
+        graph=edges(3,6,6,confidence=.7)
+        graph[0]['confidence'][0,0,0]=-torch.finfo(torch.float32).eps
+        p=JointEditProjector(None,None,source,anchor,mask,mask,proposal=source+effect,edges=graph)
+        self.assertEqual(p.edges[0]['confidence'][0,0,0].item(),0.)
+        self.assertEqual(p.edge_confidence_roundoff[0]['corrected_values'],1)
 
     def test_nonlinear_response_is_calibrated_on_destination_and_freezes_decoder(self):
         decoder, z, source, effect, mask, anchor = fixture()

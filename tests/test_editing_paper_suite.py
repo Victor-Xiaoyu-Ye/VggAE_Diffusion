@@ -33,6 +33,33 @@ SCRATCH=REPO.parent/'VggAE_DataAudit'/'paper_suite_validation'
 
 
 class PaperContractTests(unittest.TestCase):
+    def test_only_reviewed_exact_hash_recovery_preserves_original_identity(self):
+        migration=json.loads((REPO/'configs/editing_paper_resume_compat.json').read_text())
+        current=run.code_signature()
+        for name,sha in migration['after'].items():self.assertEqual(current[name],sha)
+        SCRATCH.mkdir(parents=True,exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=SCRATCH) as directory:
+            out=ArtifactStore(directory,[]);cfg={'cases':123}
+            prior=dict(current,**migration['before'])
+            manifest=dict(code=prior,config=cfg,identity='original-frozen-contract')
+            out.write_json('manifest.json',manifest)
+            self.assertEqual(run.checked(None,cfg,out),manifest)
+            self.assertEqual(out.json('manifest.json'),manifest)
+            self.assertTrue(list((out.local/'recovery').glob('compat_*.json')))
+            with self.assertRaisesRegex(ValueError,'code/config changed'):run.checked(None,{'cases':122},out)
+            for name in ('paper_editing_suite.py','utils/editing_joint_state.py','utils/vace_edit_runtime.py'):
+                changed=dict(current,**{name:'unreviewed-edit'})
+                with self.subTest(name=name),patch.object(run,'code_signature',return_value=changed),self.assertRaisesRegex(ValueError,'code/config changed'):
+                    run.checked(None,cfg,out)
+
+    def test_repair_restores_only_data_and_does_not_reselect_or_train(self):
+        with patch.object(run,'checked'),patch('prepare_vace_edit.stage_data') as staged,\
+             patch.object(run,'index',side_effect=AssertionError('Do not reselect')),\
+             patch.object(run,'sft',side_effect=AssertionError('Do not retrain')):
+            a=SimpleNamespace(source='remote-pilot',data='local-pilot')
+            run.repair_inputs(a,{},None);staged.assert_called_once_with(a.source,a.data)
+            staged.reset_mock();run.repair_inputs(a,{'skip_staging':True},None);staged.assert_not_called()
+
     def test_real_cli_phase_dispatch_including_text(self):
         import sys
         SCRATCH.mkdir(parents=True,exist_ok=True)
@@ -187,6 +214,35 @@ class PaperPipelineTests(unittest.TestCase):
             if arm=='rae_velocity_only':self.assertTrue(all(e['state_delta_rms']==0 for e in applied))
         self.assertGreater(float((outputs['rae_full']['generated']-outputs['rae_base']['generated']).abs().sum()),0.)
         self.assertGreater(float((outputs['rae_base']['generated']-outputs['rae_no_state']['generated']).abs().sum()),0.)
+        # A repair reruns only the missing seed, retaining the other seed's
+        # receipt and payload bytes, without repeating SFT or completed samples.
+        phase_name='phases/render_rae_full.json';prior=out.json(phase_name)
+        retained=next(r for r in prior['records'] if r['seed_base']==42)
+        completed_file=out.local/'render/rae_full/seed42/test-0/result.pt'
+        completed_sha=file_hash(completed_file)
+        missing_folder='render/rae_full/seed43/test-0'
+        for root_path in [out.local,*map(Path,out.roots)]:
+            for name in ('result.pt','result.pt.json','receipt.json','generated_frames.npz','comparison.mp4'):
+                (root_path/missing_folder/name).unlink(missing_ok=True)
+        prior['records']=[retained,dict(id='test-0',seed_base=43,status='failed',error='interrupted')]
+        prior['completed']=1;out.write_json(phase_name,prior)
+        a.arm='rae_full';a.missing_only=True
+        recover=run.recovered_case
+        def missing_case_only(store,folder,identity):
+            self.assertEqual(folder,missing_folder)
+            return recover(store,folder,identity)
+        with patch.object(run,'recovered_case',side_effect=missing_case_only) as recovered:
+            run.render(a,cfg,out,device,0,1)
+            self.assertEqual(recovered.call_count,1)
+        self.assertEqual(file_hash(completed_file),completed_sha)
+        repaired=out.json(phase_name)
+        self.assertEqual(repaired['completed'],2,repaired)
+        self.assertEqual(next(r for r in repaired['records'] if r['seed_base']==42),retained)
+        self.assertEqual(sft.json('training_summary.json')['updates'],2)
+        with patch.object(run,'load_backbone',side_effect=AssertionError('All cases complete')),\
+             patch.object(run,'recovered_case',side_effect=AssertionError('Do not load completed tensors')):
+            run.render(a,cfg,out,device,0,1)
+        a.missing_only=False
         target_path.write_bytes(saved)
         run.evaluate(a,cfg,out,device,0,1)
         report=out.json('phases/evaluate.json');self.assertEqual(report['completed'],report['requested'],report)

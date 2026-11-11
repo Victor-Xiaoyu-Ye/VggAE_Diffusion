@@ -1,5 +1,32 @@
 # Project Context
 
+## Stage69 first run: two sources fail strict edge-confidence bounds (2026-11-11)
+
+User supplies D:/中转站/summary.json and media_sync.json. Actual cohort123,
+SFT1500updates/0skipped/convergedfalse,1266/1277renders,3321media checks/0failed,
+human93/96. All11render gaps are2sources with Edge confidence must be in[0,1];
+summary's26failure entries include downstream coverage/evaluation/comparisons.
+This is not a media sync or SFT failure. No fresh full-video quality review yet.
+See docs/EDITING_PAPER_RECOVERY_20261111.md for source IDs/report hashes.
+
+Local actual bilinear/propagation code with valid subpixel source flow produces
+1.000000119: strict bounds erroneously reject FP32roundoff. Solver now bounds
+only8FP32eps excursions, logs exact min/max/count and does not mutate caches.
+Larger/nonfinite invalids still fail. Production tensors' actual range pending;
+do not expand tolerance blindly if that differs. Valid inputs are unchanged.
+
+Same3node Stage69 now supports PAPER_STAGE=repair. Recover rawpilot/teacher and
+selected weights on fresh jobs; reuse completed phase records and render only
+missing source/seed pairs, then fill metrics/comparisons/human packet/media sync.
+Original manifest/identities stay; an exact two-file SHA migration admits this
+reviewed numeric patch, rejects other edits and records pernode/rank recovery.
+New payloads record runtime code; successful outputs retain bytes. No reselect,
+reference regeneration, state cache rebuild or SFT training. Reuse is excluded
+from generated DI_throughput; previous IO/idle guard/coordinator contracts kept.
+60targeted localCPU/Bash tests plus5Python compile/Bash syntax pass. NPU/OBS
+repair is not yet run. Need1277coverage/zero failures/human96 before final review;
+empty keep regions legitimately yield null metrics, not zero or failed sampling.
+
 ## Stage69: freeze method, complete evidence with 3 nodes (2026-11-11)
 
 Latest budget is3x8 only, superseding the earlier11-node schedule. Stage68

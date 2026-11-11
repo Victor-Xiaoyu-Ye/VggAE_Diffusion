@@ -133,5 +133,17 @@ esac
         result,_,_,calls,_,_,_=self.launch(stage='dry')
         self.assertEqual(result.returncode,0);self.assertEqual(calls,[])
 
+    def test_repair_restores_assets_fills_missing_cases_and_evaluates_without_training(self):
+        result,_,_,calls,env,args,_=self.launch(stage='repair')
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        self.assertIn('repair_inputs',calls);self.assertIn('asset',calls)
+        self.assertIn('repair_inputs cpu=1 autoload=0',env)
+        for phase in ('index','screen','sources','select','text','anchors','prepare','cache','sft'):
+            self.assertNotIn(phase,calls)
+        renders=[line for line in args.splitlines() if '--phase render' in line]
+        self.assertTrue(renders)
+        self.assertTrue(all('--missing-only' in line for line in renders))
+        self.assertIn('evaluate',calls);self.assertIn('summarize',calls)
+
 
 if __name__=='__main__':unittest.main()

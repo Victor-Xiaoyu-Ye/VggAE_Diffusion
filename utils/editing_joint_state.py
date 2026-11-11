@@ -251,6 +251,10 @@ class JointEditProjector:
                         confidence=self.confidence[i],
                         provenance='caller_adjacent_flow_with_supplied_confidence'))
         result = []
+        self.edge_confidence_roundoff = []
+        # Four nonnegative bilinear terms can sum to 1 + one FP32 ULP.
+        # Accept only roundoff, leaving valid inputs bit-for-bit unchanged.
+        tolerance = 8 * torch.finfo(torch.float32).eps
         for edge in edges:
             a, b = int(edge['src']), int(edge['dst'])
             if a == b or min(a, b) < 0 or max(a, b) >= self.frames:
@@ -263,7 +267,17 @@ class JointEditProjector:
                 raise ValueError('Source edge canvas differs')
             _finite(flow, 'flow'); _finite(weight, 'edge confidence')
             if bool(((weight < 0) | (weight > 1)).any()):
-                raise ValueError('Edge confidence must be in [0,1]')
+                low, high = float(weight.min()), float(weight.max())
+                if low < -tolerance or high > 1 + tolerance:
+                    raise ValueError(f'Edge confidence must be in [0,1]; '
+                                     f'src={a} dst={b} min={low:.9g} max={high:.9g} '
+                                     f'roundoff_tolerance={tolerance:.9g}')
+                diagnostic = dict(src=a, dst=b, minimum=low, maximum=high,
+                    corrected_values=int(((weight < 0) | (weight > 1)).sum()),
+                    tolerance=tolerance)
+                self.edge_confidence_roundoff.append(diagnostic)
+                print('[edge confidence roundoff] '+str(diagnostic), flush=True)
+                weight = weight.clamp(0, 1)
             result.append(dict(src=a, dst=b, stencil=_stencil(flow), confidence=weight,
                 provenance=edge.get('provenance', 'caller_source_only_edges')))
         return result
@@ -498,6 +512,7 @@ class JointEditProjector:
             objective_improved=False, actual_state_delta_rms=0.,
             step_sizes=dict(before=list(self.step_sizes), after=list(self.step_sizes), accepted=[]),
             graph_edges=len(self.edges), iterations=self.steps, fallback=False,
+            edge_confidence_roundoff=list(self.edge_confidence_roundoff),
             no_edit=no_edit, gradient_checked=False, history=[],
             observed_fraction=float((self.observed > .1).float().mean()),
             reachable_fraction=float((self.reachable > 0).float().mean()),
