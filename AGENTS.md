@@ -1,5 +1,22 @@
 # Agent Handoff
 
+## Three-node evidence closure and table style (2026-11-12)
+
+Read docs/EDITING_PAPER_THREE_NODE_PLAN_20261112.md. User requests a prioritized
+3x8 plan, not another broad method pivot. System/feedback claims have paired
+evidence; Stage62 H1 already supports synthetic state-dependent calibration
+(64.09% edit-region error reduction), not natural-video or VAE superiority.
+Priority: existing Stage69 missing-only repair; initial-calibration x online-
+solve final-output controls; RGB/native full-video VAE/C256 feedback under ONE
+reference-SFT generator; real blinded ratings and compatible public evaluation.
+Human packet currently has Native/RGB/RAEbase controls; add SFT if collecting
+the proposed32x4x5 judgments. Initial fitting remains in rae_reinject.
+Groups A/B/C are SPECIFIED, not implemented launchers or completed runs.
+Only Stage69 repair can be launched now. Plan2-3days includes engineering/I/O,
+not multi-day new model training. Geometry/encoder superiority remains conditional.
+All8 paper table captions moved ABOVE contents, figures stay below; paper body
+remains8pages. No empirical numbers or training runtime changed by this update.
+
 ## Stage69 paired results and manuscript update (2026-11-11)
 
 Read docs/EDITING_PAPER_EVIDENCE_RESULTS_20261111.md. Local full export remains

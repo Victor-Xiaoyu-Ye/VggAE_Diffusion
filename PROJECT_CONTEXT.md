@@ -1,5 +1,22 @@
 # Project Context
 
+## Three-node submission evidence priority (2026-11-12)
+
+Plan: docs/EDITING_PAPER_THREE_NODE_PLAN_20261112.md. Current contribution is a
+trained decodable scene state with effective native-denoising execution. Stage62
+synthetic response-calibration evidence exists; do not spend the next run simply
+repeating that probe. Missing causal links are initial calibration -> final video
+and decoder-space controls under the same generator, plus real editing judgments.
+Run existing Stage69 repair first (same namespace,11missing outputs), then planned
+A(initial calibration x online solve), B(RGB/native17frameVAE/C256 on same SFT),
+C(compatible public sources/external baseline). Three nodes work as one sharded
+job group, human review parallel. Five raters x128pairs is a target, no ratings yet.
+New A/B/C launchers NOT implemented; estimates include engineering/staging and
+must be revised after smoke. No new AE/DiT/DINO training in this priority plan.
+VGGT-specific geometry and individual recipe tricks are not newly established.
+Paper table-caption-above rule applies to main and supplement;8tables corrected,
+8page main body retained. This update changes planning/docs/layout only.
+
 ## Stage69 paired evidence is now in the manuscript (2026-11-11)
 
 Read docs/EDITING_PAPER_EVIDENCE_RESULTS_20261111.md. PRE-REPAIR run remains
