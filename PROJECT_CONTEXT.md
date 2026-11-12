@@ -1,5 +1,23 @@
 # Project Context
 
+## Stage70 calibration attribution implementation (2026-11-12)
+
+Added scripts/scale/70_audit_edit_attribution.sh and
+docs/EDITING_ATTRIBUTION_RUNBOOK.md. Three nodes, 24 NPUs; fixed Stage69
+32-source subset, 14 arms / 448 outputs (smoke 3 sources / 42 outputs).
+Nine P0 arms isolate initial decoder calibration, online solving, fixed bridge,
+and correction magnitude. Five P1 arms share reference-SFT without a state
+bridge: no feedback, RGB, Gaussian RGB, full-video native VAE, RAE.
+Re-encode raw shared proposals; never substitute cached calibrated states for
+calibration-off. Source/reference only until evaluation. No model retraining.
+Parent editing_paper_evidence_v1 remains read-only; output editing_attribution_v1.
+Dual publication, intermediate snapshots, DI_throughput, bounded cleanup and
+completed-case resume are retained. Independent arms continue after failures.
+P1 is initial effect reuse; smoothing is not bandwidth-matched and cost is not
+wall-clock-matched. Production NPU/HCCL/OBS still require cluster smoke.
+No new experimental gains or paper numbers are asserted before results.
+
+
 ## Three-node submission evidence priority (2026-11-12)
 
 Plan: docs/EDITING_PAPER_THREE_NODE_PLAN_20261112.md. Current contribution is a

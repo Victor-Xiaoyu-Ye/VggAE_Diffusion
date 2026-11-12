@@ -1,0 +1,21 @@
+{
+  "schema": "editing-attribution-v1",
+  "frames": 17, "fps": 8, "sample_steps": 30, "seeds": [42], "lpips": true,
+  "arms": ["cal_on_online_on", "cal_on_online_off", "cal_off_online_on", "cal_off_online_off", "cal_off_magnitude", "cal_off_fixed_bridge_on", "cal_off_fixed_bridge_off", "cal_on_fixed_bridge_on", "cal_on_fixed_bridge_off", "op_sft", "op_rgb", "op_rgb_smooth", "op_vae", "op_rae"],
+  "rgb_smoothing_sigma": 2.0,
+  "vae_calibration": {"steps": 4, "lr": 0.03, "trust": 0.25, "latent_weight": 0.0001},
+  "feedback": {
+    "writeback_sigmas": [0.6, 0.35, 0.15], "writeback_alpha": 0.35,
+    "writeback_max_clean_rms": 0.25, "writeback_max_sigma": 0.75,
+    "update_native_context": false,
+    "solver": {
+      "sweeps": 2, "steps": 2, "lr": 0.03, "trust": 0.25, "rgb_trust": 0.25,
+      "native_weight": 0.5, "observation_weight": 1.0, "anchor_weight": 8.0,
+      "joint_weight": 1.0, "keep_weight": 1.0, "latent_weight": 0.0001,
+      "reachable_mix": 0.65, "reach_min": 0.1, "protect_mix": 0.0, "hard_anchor": true,
+      "optimizer": "adaptive_backtracking", "backtrack_max_trials": 8,
+      "backtrack_shrink": 0.5, "step_grow": 1.5, "min_lr": 0.000001,
+      "max_lr": 0.03, "armijo": 0.0001
+    }
+  }
+}
