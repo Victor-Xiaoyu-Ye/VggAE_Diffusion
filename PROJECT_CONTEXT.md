@@ -1,5 +1,30 @@
 # Project Context
 
+## Stage71 public colorization transfer prepared (2026-11-13)
+
+Read docs/EDITING_PUBLIC_COLORIZATION_RUNBOOK.md. User requests a three-node
+public generalization experiment with Native/SFT/RGB/RAE, tests and push.
+Audited official VACE-Benchmark272 tasks: derived depth/pose/etc conditions
+are not arbitrary RGB-edit pairs. Select all20 V2V/gray cases,10real/10synthetic,
+using official descriptions/full-white masks and RGB original ONLY for evaluation.
+All60 selected files/20 physical17frame8fps windows verified locally on D.
+No overlap found against2199 completed prior screen/cohort records and old
+benchmark IDs/assets; runtime repeats selection from actual cluster metadata.
+OBS502 locally, so official HF snapshot used; cluster snapshot not yet verified.
+New scripts/scale/71_audit_public_editing.sh, PUBLIC_STAGE=smoke then all, 3x8,
+namespace editing_public_colorization_v1, port31500. Frozen Stage69 referenceSFT,
+Stage65 RGB/RAE, trainedSceneC256/Stream, and TRAIN normalization. New generated
+anchors shared across all4arms; no benchmark finetuning or ground-truth anchor.
+Native includes that shared anchor. Custom colorization transfer, NOT official
+leaderboard or arbitrary-instruction editing generalization. Native/SFT/RGB
+run before RAE preparation, CPU phases isolated, idle guard, dual verified media,
+intermediates, cache-excluding DI, exact durable-config/case resume retained.
+Report all cases, paired bootstrap/real-synthetic strata, chroma/gray-structure,
+RGB metrics and future-only diagnostics. Local functional tests use explicit
+tiny model/codec fixtures;46 CPU/Bash tests,6Python compile,launcher syntax and
+cross-directory dry run pass. Production910B/HCCL/OBS and quality unverified.
+No Stage69/70 runtime changes or new manuscript numbers in this implementation.
+
 ## Stage70 complete attribution and paper integration (2026-11-13)
 
 Read docs/EDITING_ATTRIBUTION_RESULTS_20261113.md. Export editing_attribution_v1
