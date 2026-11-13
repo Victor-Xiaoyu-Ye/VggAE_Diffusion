@@ -36,6 +36,29 @@ failed feedback from successful means and retries those cases. A phase failure
 does not stop independent arms; final exit status remains nonzero when incomplete.
 The `&&` intentionally prevents launching full work after a failed cluster smoke.
 
+### Recovery from the 2026-11-13 preview-writer failure
+
+The original Stage70 code omitted the shared-reference panel from the three-panel
+`write_video` call. All 39 feedback outputs stopped at their first preview;
+3 SFT outputs and both preparation phases completed. This was a driver IO bug,
+not an empirical comparison or a VAE/RAE fitting failure.
+
+After updating the code, run the same smoke/all command above on all three nodes,
+with the original namespace. The exact-hash compatibility entry in
+`configs/editing_attribution_resume_compat.json` retains the old manifest and
+generation identities. Completed RAE/VAE preparation and SFT outputs are reused;
+only missing or failed outputs are sampled. No manual deletion, namespace change
+or relaxed success criterion is needed. This also works on a fresh job when the
+original caches remain accessible in the configured durable roots.
+
+The user's downloaded folder was named `editing_paper_evidence_v1_smoke`, but its
+manifest/logs are Stage70 `editing_attribution_v1_smoke`. Use the runtime namespace,
+not the downloaded folder name, when restarting.
+
+New logs include `[attribution phase]` with completion counts and error causes;
+`summary.json` includes upstream `phase_failures` and `failure_causes` alongside
+missing-media diagnostics. Unrelated code/config/weight changes are still rejected.
+
 ## Fixed protocol
 
 - Existing Stage69 32-source ablation subset, seed 42 with the existing per-case
@@ -97,3 +120,9 @@ actual tiny VACE sampling with live writeback, prefix preservation,
 rollback, intervention state isolation, and real Bash stage/failure/cleanup
 execution using bounded process stubs. They do not validate production NPU
 memory, native 910B VAE autograd, HCCL or OBS. The three-node smoke does that.
+
+The repair adds actual Stage70 driver coverage for all 14 arms, their real media
+callbacks and MP4 decoding (17 frames, 8 fps, three panels, valid crop), full
+evaluation/reporting, dual-root readback/repair, and byte-preserving completed-case
+resume. The 2026-11-13 production smoke confirms 3/3 RAE and native-video VAE
+preparations, but the repaired end-to-end NPU render still needs to run.

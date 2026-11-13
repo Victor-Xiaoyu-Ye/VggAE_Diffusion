@@ -1,5 +1,21 @@
 # Project Context
 
+## Stage70 smoke preview writer repair (2026-11-13)
+
+Local export editing_paper_evidence_v1_smoke is actual Stage70 namespace
+editing_attribution_v1_smoke. RAE/VAE preparation each3/3; SFT3/3 complete.
+All39feedback outputs fail at preview write_video missing fps: Stage70 supplied
+two panels to the shared three-panel writer. Final summary correctly rejected
+3/42 coverage, so && did not start full. This is a code/observer-test omission,
+not a quality finding. See docs/EDITING_ATTRIBUTION_SMOKE_RECOVERY_20261113.md.
+Restore shared-reference panel and keyword fps; exact-hash compatibility retains
+original manifest, prepared states and completed SFT generation identities.
+Same smoke && all command resumes the old namespace, including fresh nodes via
+durable roots. Add per-phase error counts and summary upstream failure causes.
+Integration now covers actual Stage70 all14arms, real MP4 writer/readback, dual
+publication/reconciliation and completed-case resume; production rerun pending.
+
+
 ## Stage70 calibration attribution implementation (2026-11-12)
 
 Added scripts/scale/70_audit_edit_attribution.sh and

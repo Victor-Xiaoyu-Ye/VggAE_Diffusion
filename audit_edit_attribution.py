@@ -4,6 +4,7 @@ Stage69 is a read-only parent. No training, new anchors, cohort selection or
 future-target conditioning. All new states/results live in a fresh namespace.
 """
 import argparse
+from collections import Counter
 import copy
 import json
 import os
@@ -28,6 +29,7 @@ from paper_editing_suite import code_signature as parent_code_signature, release
 from utils.native_audit_io import seal
 
 REPO=Path(__file__).resolve().parent
+_RESUME_NOTICES=set()
 
 
 def signature():
@@ -46,9 +48,30 @@ def validate_config(cfg):
     if cfg['sample_steps']<2 or cfg['rgb_smoothing_sigma']<=0:raise ValueError('Invalid sampling/smoothing settings')
 
 
+def check_contract(m,cfg,out):
+    """Accept only the reviewed media-writer repair without changing identities."""
+    current=signature()
+    if m['config']!=cfg:
+        raise ValueError('Stage70 contract changed; use a fresh namespace')
+    if m['code']==current:return
+    migration=json.loads((REPO/'configs/editing_attribution_resume_compat.json').read_text())
+    changed={name for name in set(m['code'])|set(current) if m['code'].get(name)!=current.get(name)}
+    allowed=set(migration['before'])
+    if changed!=allowed or any(m['code'].get(name)!=migration['before'][name] or
+            current.get(name)!=migration['after'][name] for name in allowed):
+        raise ValueError('Stage70 contract changed; use a fresh namespace')
+    node=int(os.environ.get('NODE_RANK',os.environ.get('VC_TASK_INDEX',0)))
+    rank=int(os.environ.get('RANK',0));key=(str(out.local),m['identity'],node,rank)
+    if key not in _RESUME_NOTICES:
+        out.write_json(f'recovery/compat_node{node}_rank{rank:03d}.json',dict(
+            identity=m['identity'],migration=migration,retained_original_manifest=True))
+        print('[attribution recovery] '+migration['name']+'; retaining prepared states and completed samples',flush=True)
+        _RESUME_NOTICES.add(key)
+
+
 def checked(a,cfg,out):
     m=out.json('manifest.json',True)
-    if m['config']!=cfg or m['code']!=signature():raise ValueError('Stage70 contract changed; use a fresh namespace')
+    check_contract(m,cfg,out)
     if parent(a).json('manifest.json',True)['identity']!=m['parent']['identity']:
         raise ValueError('Parent input identity changed')
     return m
@@ -68,6 +91,15 @@ def tick(out,phase,rank,rows,started,new_frames):
         throughput_unit='new completed frames/s/rank including phase IO; cache hits excluded'))
 
 
+def finish_phase(out,phase,rows,requested,rank,world):
+    all_rows=save_phase(out,phase,rows,requested,rank,world)
+    if rank==0:
+        errors=Counter(r.get('error',r.get('status','unknown')) for r in all_rows if r.get('status')!='completed')
+        print('[attribution phase] '+json.dumps(dict(phase=phase,requested=requested,
+            completed=sum(r.get('status')=='completed' for r in all_rows),errors=dict(errors))),flush=True)
+    return all_rows
+
+
 def index(a,cfg,out):
     p=parent(a); pm=p.json('manifest.json',True); cohort=p.json('cohort.json',True)
     ids=cohort['ablation_ids'][:3] if cfg.get('smoke') else cohort['ablation_ids']
@@ -83,8 +115,14 @@ def index(a,cfg,out):
         operator_scope='shared reference-SFT without state bridge; initial effect fitting, no online solve; not retrained VAE system',
         smoothing='predeclared spatial sigma; NOT bandwidth-matched or test-target-tuned',
         cost_scope='equal event schedule; measured cost, NOT wall-clock-matched')
-    m['identity']=digest(m)
     previous=out.json('manifest.json')
+    if previous:
+        check_contract(previous,cfg,out)
+        # Keep cached artifact and generation identities. Only the approved
+        # reporting fix may differ; cohort, weights and every other input must
+        # still reproduce the original contract exactly.
+        m['code']=previous['code']
+    m['identity']=digest(m)
     if previous and previous['identity']!=m['identity']:raise ValueError('Changed inputs/checkpoints; choose a fresh namespace')
     out.write_json('manifest.json',m)
     if a.source:
@@ -147,7 +185,7 @@ def prepare(a,cfg,out,device,rank,world):
             rows.append(dict(id=key,status='completed'))
         except Exception as exc:rows.append(failure(out,'prepare',row,exc))
         tick(out,'prepare',rank,rows,start,frames)
-    save_phase(out,'prepare',rows,len(m['records']),rank,world)
+    finish_phase(out,'prepare',rows,len(m['records']),rank,world)
 
 
 def prepare_vae(a,cfg,out,device,rank,world):
@@ -169,7 +207,7 @@ def prepare_vae(a,cfg,out,device,rank,world):
             rows.append(dict(id=key,status='completed'))
         except Exception as exc:rows.append(failure(out,'prepare_vae',row,exc));release(device)
         tick(out,'prepare_vae',rank,rows,start,frames)
-    save_phase(out,'prepare_vae',rows,len(m['records']),rank,world)
+    finish_phase(out,'prepare_vae',rows,len(m['records']),rank,world)
 
 
 def projector(inputs,cal,decoder,options,device,calibrated,online):
@@ -238,8 +276,9 @@ def render(a,cfg,out,device,rank,world):
                                 state=feedback.state,event=event,generation_identity=generation))
                             out.save(base+'.pt',snapshot,m['identity'])
                             rect=ref['spatial']['valid_rect']
-                            write_video(out.local/(base+'.mp4'),crop_video(ref['source'],rect),crop_video(snapshot['reference']['reference'],rect),
-                                cfg['fps'],labels=['SOURCE','LIVE CORRECTION'])
+                            write_video(out.local/(base+'.mp4'),crop_video(ref['source'],rect),
+                                crop_video(ref['reference'],rect),crop_video(snapshot['reference']['reference'],rect),
+                                fps=cfg['fps'],labels=['SOURCE','SHARED REFERENCE','LIVE CORRECTION'])
                             seal(out.local,base+'.json',m['identity'],[base+'.mp4'],dict(event=event))
                             out.publish([base+'.mp4',base+'.json'])
                         progress(out,'feedback_r'+str(rank),dict(event,id=key,arm=a.arm))
@@ -269,6 +308,7 @@ def render(a,cfg,out,device,rank,world):
                     if generated.shape!=ref['source'].shape or not torch.isfinite(generated).all():raise ValueError('Invalid output video')
                     payload=dict(generated=generated,spatial=ref['spatial'],seed=seed,seed_base=seed_base,
                         input_identity=input_id,generation_identity=generation,checkpoint=m['checkpoint'][spec['family']],
+                        runtime_code=signature(),
                         events=events,setup_seconds=setup_seconds,sampling_seconds=time.monotonic()-sampling,
                         peak_allocated_gib=getattr(torch,device.type).max_memory_allocated()/2**30 if device.type!='cpu' else None)
                 bad=[e for e in payload['events'] if e.get('fallback')]
@@ -285,7 +325,7 @@ def render(a,cfg,out,device,rank,world):
             except Exception as exc:rows.append(dict(failure(out,'render_'+a.arm,row,exc),arm=a.arm,seed_base=seed_base))
             finally:feedback=proj=features=latent=None;release(device)
             tick(out,'render_'+a.arm,rank,rows,start,frames)
-    save_phase(out,'render_'+a.arm,rows,len(m['records'])*len(cfg['seeds']),rank,world)
+    finish_phase(out,'render_'+a.arm,rows,len(m['records'])*len(cfg['seeds']),rank,world)
 
 
 def evaluate(a,cfg,out,device,rank,world):
@@ -318,7 +358,7 @@ def evaluate(a,cfg,out,device,rank,world):
                     except Exception as exc:rows.append(dict(id=row['id'],arm=arm,seed_base=seed,status='failed',error=repr(exc)))
         except Exception as exc:rows.append(failure(out,'evaluation_source',row,exc))
         tick(out,'evaluate',rank,rows,start,frames)
-    save_phase(out,'evaluate',rows,len(m['records'])*len(cfg['arms'])*len(cfg['seeds']),rank,world)
+    finish_phase(out,'evaluate',rows,len(m['records'])*len(cfg['arms'])*len(cfg['seeds']),rank,world)
 
 
 def summarize(a,cfg,out):
@@ -348,11 +388,20 @@ def summarize(a,cfg,out):
                 except Exception as exc:failures.append(dict(arm=arm,id=row['id'],seed=seed,error=repr(exc)))
     expected=len(cfg['arms'])*len(m['records'])*len(cfg['seeds'])
     successful=sum(r.get('status')=='completed' for r in evaluations)
+    # Preserve upstream exceptions next to downstream missing receipts; the
+    # summary must explain the first failing stage, not just "incomplete".
+    phase_failures=[]
+    for phase in ['prepare','prepare_vae',*('render_'+arm for arm in cfg['arms']),'evaluate']:
+        for row in (out.json('phases/'+phase+'.json') or {}).get('records',[]):
+            if row.get('status')!='completed':phase_failures.append(dict(row,phase=phase))
     summary=dict(expected=expected,evaluated=successful,failures=failures,tables=tables,costs=costs,
+        phase_failures=phase_failures,failure_causes=dict(Counter(r.get('error',r['status']) for r in phase_failures)),
         complete=successful==expected and not failures and all(r['ok'] for r in media),
         limitations=[m['operator_scope'],m['smoothing'],m['cost_scope'],'No new human ratings or external benchmark results.'])
     out.write_json('media_sync.json',dict(cases=media,failures=failures))
     out.write_json('summary.json',summary)
+    print('[attribution summary] '+json.dumps(dict(expected=expected,evaluated=successful,
+        complete=summary['complete'],first_failure=phase_failures[0] if phase_failures else None)),flush=True)
     if not summary['complete']:raise RuntimeError('Attribution suite incomplete; successful outputs retained; use resume')
 
 

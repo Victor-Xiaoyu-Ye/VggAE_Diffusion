@@ -1,0 +1,10 @@
+{
+  "name": "stage70-feedback-preview-writer-repair-v1",
+  "before": {
+    "audit_edit_attribution.py": "9899d4db03ef0502c700c08ed7efe940a7c3569abcc21e512cd8651d2960911d"
+  },
+  "after": {
+    "audit_edit_attribution.py": "5d1b4703558146a0bfc4f15978616796a1e068e66df34ee14afc11ba4ebb9e57"
+  },
+  "scope": "Fix three-panel feedback video writer call and failure reporting only; preserve sampling, weights, prepared states, manifest and generation identities."
+}
