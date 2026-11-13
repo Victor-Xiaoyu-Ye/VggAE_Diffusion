@@ -1,5 +1,23 @@
 # Project Context
 
+## Stage70 complete attribution and paper integration (2026-11-13)
+
+Read docs/EDITING_ATTRIBUTION_RESULTS_20261113.md. Export editing_attribution_v1
+completes448/448 outputs on32fixed sources, all1248feedback events applied with
+no fallback. All2592declared media hashes/sizes pass,448NPZ valid, no empty files.
+The smoke writer repair is verified in this production run. Under one identical
+reference-SFT checkpoint without a bridge, RAE LPIPS.436730 vsRGB.443932,
+smoothedRGB.441117,native full-video VAE.443928: -1.62/0.99/1.62%,32/32 lower
+against each. Keep improves; Track does not beat smoothedRGB. Practical operator
+advantage, not VGGT-only attribution or equal codec capacity/temporal lattice.
+Initial-fit x online-solve controls do NOT establish either optimization as
+necessary: off/off LPIPS.434379 vsfull.436943, with slight Track tradeoff; fixed
+bridge retains ordering. Paper adds shared-generator table and full supplement,
+keeps123-source main system results and user figures. No new runtime/training.
+Next3node priority: unused compatible public editing sources after task/target
+and exposure audit; fallback remaining91-source operator extension. No next
+launcher implemented or job launched; Stage70 is complete, do not rerun it.
+
 ## Stage70 smoke preview writer repair (2026-11-13)
 
 Local export editing_paper_evidence_v1_smoke is actual Stage70 namespace
