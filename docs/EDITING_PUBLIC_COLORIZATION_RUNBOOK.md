@@ -224,3 +224,16 @@ compile; launcher Bash syntax and execution from another working directory
 pass. Public feedback configuration exactly equals the frozen Stage69 config,
 including bridge updates and decoder checkpointing. Resume preserves successful
 result hashes and restores a smoke config from durable storage on a fresh node.
+
+## Completed production run, reviewed 2026-11-14
+
+See `EDITING_PUBLIC_COLORIZATION_RESULTS_20261114.md`. All 80 outputs on 20
+sources, all 120 feedback events, and all three node exits are complete.
+Local verification covers 420 receipt-declared files, 240 decoded movies and
+80 lossless archives, with no empty files. Runtime source/code/checkpoint
+identities match the frozen manifest and official benchmark snapshot.
+RAE improves SFT LPIPS by 2.46% on all 20 sources; overall RGB difference is
+uncertain, Native LPIPS is tied and Native preserves gray structure better.
+The complete public-transfer result is integrated into the manuscript with
+its real/synthetic strata and unchanged-gray diagnostic. Earlier pending
+validation statements above describe the pre-run state, now superseded here.

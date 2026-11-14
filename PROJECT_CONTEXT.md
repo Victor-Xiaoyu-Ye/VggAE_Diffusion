@@ -1,5 +1,28 @@
 # Project Context
 
+## Stage71 complete public transfer and consolidated paper evidence (2026-11-14)
+
+Read docs/EDITING_PUBLIC_COLORIZATION_RESULTS_20261114.md. Export
+editing_public_colorization_v1 completes80/80 outputs on20 official gray cases
+(10real/10synthetic), all3nodes exit0. Verified240receipt bundles/420files,
+240decoded17frame8fps videos,80NPZ,120applied feedback events,no fallback/empty
+files. Four-arm input/seed identities, code and checkpoints match manifests;
+official source/target/index bytes match earlier local audit. Preserve ratios:
+19valid352x627,dragon403x527. RAE LPIPS.303414 vsNative.303504,SFT.311052,
+RGB.305136: SFT -2.46%,20/20lower; RGB -0.56% butCIcrosses0. SyntheticRGB
+-1.46%;realRGB inconclusive. Native LPIPS tied and gray structure better,
+RAE chroma error lower. UnchangedgrayLPIPS.288858 proves similarity alone is
+not colorization success. Custom frozen17frame transfer, no benchmark tuning,
+groundtruthanchor, officialSOTA or arbitrary-instruction generalization claim.
+All20 inspected at0/1/2s; selected cyclist/sunflower added to supplement with
+matchedfullFOV and originalRGB evaluation-only labels. Stage69/70 originals
+rehash unchanged;123-source system and32-source shared-generator controls stay
+the core evidence. Paper gets complete/domain tables, CIs, costs, caveats,
+source-hashed imports and notes/EVIDENCE_INDEX_20261114.md. Author's method
+PDF, fixed abstract and main examples preserved; no subjective ratings added.
+No runtime/training changes or new job. Further external-editor/general-edit
+evidence remains absent; do not repeat completed Stage70/71 runs by default.
+
 ## Stage71 public colorization transfer prepared (2026-11-13)
 
 Read docs/EDITING_PUBLIC_COLORIZATION_RUNBOOK.md. User requests a three-node
