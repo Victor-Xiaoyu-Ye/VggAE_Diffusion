@@ -1,5 +1,27 @@
 # Project Context
 
+## Stage72 readout strength and full-cohort extension (2026-11-14)
+
+Read docs/EDITING_READOUT_STRENGTH_RUNBOOK.md. User approved next3node job.
+scripts/scale/72_audit_edit_readout_strength.sh: READOUT_STAGE=smoke then all,
+namespace editing_readout_strength_v1, port31600. Frozen reference-SFT without
+bridge; no retraining/newanchors. First original32 at fixed alpha .15/.35/.55
+for RGB/smoothRGB/native full-video VAE/trained C256 RAE, then remaining91
+sources with the five original .35 operators incl no-feedbackSFT. Total871,
+normally160 verified Stage70 imports and711new outputs. Smoke6sources/54outputs.
+Parent Stage69/70 remote roots read-only; original123/32cohort, seeds, assets,
+weights, readout fitting and sampling protocol retained. Actual post-cap dose,
+future-only final edit strength/directional reference agreement, full quality/
+keep/track/motion metrics. No outcome-selected alpha; overlap interpolation is
+diagnostic only, exposes nonmonotonic/missing/no-overlap cases and denominators.
+No claim equal alpha means equal strength or VGGT geometry uniquely necessary.
+P0 summary persists before extension; independent failures continue with nonzero
+exit, valid cases reused, dual read/write/hash-reconcile, intermediates, DI,
+CPU isolation, idle guard and fresh-node durable config recovery included.
+Production parent contracts and123/32ids match local exports.29unique CPU/Bash
+tests,5Python compile and launcher syntax pass; no NPU/HCCL/OBS or quality claim.
+No new empirical paper numbers; readout method/Stage69/70 code remains unchanged.
+
 ## Stage71 complete public transfer and consolidated paper evidence (2026-11-14)
 
 Read docs/EDITING_PUBLIC_COLORIZATION_RESULTS_20261114.md. Export
